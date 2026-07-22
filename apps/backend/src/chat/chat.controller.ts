@@ -1,10 +1,13 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 
 import type { SendChatMessageInput } from '@delivery/shared';
 
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 import { ChatService } from './chat.service';
 
 @Controller('chat')
+@UseGuards(JwtAuthGuard)
 export class ChatController {
   constructor(private readonly service: ChatService) {}
 
@@ -14,7 +17,10 @@ export class ChatController {
   }
 
   @Post('messages')
-  send(@Body() input: SendChatMessageInput) {
-    return this.service.send(input);
+  send(
+    @Body() input: SendChatMessageInput,
+    @CurrentUser('id') senderId: string,
+  ) {
+    return this.service.send(input, senderId);
   }
 }

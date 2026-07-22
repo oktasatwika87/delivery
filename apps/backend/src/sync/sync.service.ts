@@ -25,12 +25,40 @@ export class SyncService {
     return { acks };
   }
 
-  async pullSince(deviceId: string, since: string | null): Promise<SyncPullResponse> {
+  async pullSince(deviceId: string, userId: string, since: string | null): Promise<SyncPullResponse> {
     const sinceDate = since ? new Date(since) : new Date(0);
+
+    // Dapatkan order IDs di mana user adalah customer ATAU driver
+    // roomId di chat_messages merujuk ke orderId
+    const userOrders = await this.prisma.order.findMany({
+      where: { OR: [{ customerId: userId }, { driverId: userId }] },
+      select: { id: true },
+    });
+    const userOrderIds = userOrders.map((o) => o.id);
+
+    // Pull orders (customer atau driver)
     const [orders, payments, chats] = await Promise.all([
-      this.prisma.order.findMany({ where: { updatedAt: { gt: sinceDate } } }),
-      this.prisma.payment.findMany({ where: { updatedAt: { gt: sinceDate } } }),
-      this.prisma.chatMessage.findMany({ where: { updatedAt: { gt: sinceDate } } }),
+      this.prisma.order.findMany({
+        where: {
+          updatedAt: { gt: sinceDate },
+          OR: [{ customerId: userId }, { driverId: userId }],
+        },
+      }),
+      // Payments visible oleh customer DAN driver (driver perlu tahu COD status sebelum antar)
+      this.prisma.payment.findMany({
+        where: {
+          updatedAt: { gt: sinceDate },
+          order: { OR: [{ customerId: userId }, { driverId: userId }] },
+        },
+      }),
+      // Chat messages: tampilkan semua pesan di room tempat user terlibat
+      // roomId = orderId, jadi filter berdasarkan userOrderIds
+      this.prisma.chatMessage.findMany({
+        where: {
+          updatedAt: { gt: sinceDate },
+          roomId: { in: userOrderIds },
+        },
+      }),
     ]);
 
     const records: SyncRecordPull[] = [
@@ -71,7 +99,7 @@ export class SyncService {
         where: { deviceId },
         create: {
           deviceId,
-          userId: 'unknown',
+          userId,
           cursor: lastUpdatedAt.toISOString(),
         },
         update: { cursor: lastUpdatedAt.toISOString() },

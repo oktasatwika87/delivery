@@ -1,8 +1,24 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
 import type { ChatMessage, SendChatMessageInput } from '@delivery/shared';
 
+/**
+ * Chat rooms dalam delivery app adalah order-specific.
+ *
+ * KONTRAK DESAIN: roomId selalu berisi orderId.
+ *
+ * Artinya:
+ *   - Setiap chat room = 1 order
+ *   - roomId = orderId (exact match, bukan prefix atau format lain)
+ *
+ * Validasi di method send() adalah penegakan kontrak ini secara eksplisit:
+ * backend tidak percaya client soal roomId — harus diverifikasi bahwa:
+ *   1. order dengan roomId tersebut ada
+ *   2. pengirim adalah customer ATAU driver dari order tersebut
+ *
+ * Jika salah satu tidak terpenuhi, chat tidak boleh dibuat (ForbiddenException).
+ */
 @Injectable()
 export class ChatService {
   constructor(private readonly prisma: PrismaClient) {}
@@ -15,12 +31,33 @@ export class ChatService {
     return rows.map(this.toDomain);
   }
 
-  async send(input: SendChatMessageInput): Promise<ChatMessage> {
+  /**
+   * Kirim chat message.
+   *
+   * Kontrak roomId = orderId ditegakkan di sini:
+   * - Cek order dengan roomId ada
+   * - Cek sender adalah customer atau driver dari order tersebut
+   */
+  async send(input: SendChatMessageInput, senderId: string): Promise<ChatMessage> {
+    // roomId contract enforcement: harus berupa orderId yang valid
+    const order = await this.prisma.order.findUnique({
+      where: { id: input.roomId },
+      select: { id: true, customerId: true, driverId: true },
+    });
+
+    if (!order) {
+      throw new ForbiddenException('Order not found');
+    }
+
+    if (order.customerId !== senderId && order.driverId !== senderId) {
+      throw new ForbiddenException('Not your order');
+    }
+
     const now = new Date();
     const row = await this.prisma.chatMessage.create({
       data: {
         roomId: input.roomId,
-        senderId: 'pending', // TODO: dari auth context
+        senderId,
         body: input.body,
         attachmentJson: input.attachment ?? undefined,
         status: 'SENT',

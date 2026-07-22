@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ForbiddenException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
 import type { CreatePaymentInput, Payment } from '@delivery/shared';
@@ -7,7 +7,13 @@ import type { CreatePaymentInput, Payment } from '@delivery/shared';
 export class PaymentsService {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async create(input: CreatePaymentInput): Promise<Payment> {
+  async create(input: CreatePaymentInput, userId: string): Promise<Payment> {
+    // Verify user owns the order
+    const order = await this.prisma.order.findUnique({ where: { id: input.orderId } });
+    if (!order || order.customerId !== userId) {
+      throw new ForbiddenException('Not your order');
+    }
+
     const row = await this.prisma.payment.create({
       data: {
         orderId: input.orderId,
@@ -21,7 +27,13 @@ export class PaymentsService {
     return this.toDomain(row);
   }
 
-  async capture(orderId: string): Promise<Payment> {
+  async capture(orderId: string, userId: string): Promise<Payment> {
+    // Verify user owns the order (customer)
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order || order.customerId !== userId) {
+      throw new ForbiddenException('Not your order');
+    }
+
     const row = await this.prisma.payment.findFirst({ where: { orderId } });
     if (!row) throw new Error(`No payment for order ${orderId}`);
     const updated = await this.prisma.payment.update({

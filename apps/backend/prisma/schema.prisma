@@ -25,6 +25,9 @@ model User {
   role      UserRole
   name      String
   phone     String   @unique
+  // bcrypt hash — null saat register pre-migrasi atau akun lama. Endpoint login
+  // treat null hash sebagai invalid (otomatis reject), jadi aman set optional.
+  passwordHash String? @map("password_hash")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

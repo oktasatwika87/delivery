@@ -331,3 +331,200 @@ describe('SyncService.applyOne', () => {
     expect(prisma.payment.upsert).not.toHaveBeenCalled();
   });
 });
+
+describe('SyncService.pullSince', () => {
+  let service: SyncService;
+  let prisma: PrismaClient;
+
+  // User IDs
+  const userA = 'user-a-uuid';
+  const userB = 'user-b-uuid';
+
+  // Full mock order objects (memiliki semua field yang dibutuhkan orderToDomain)
+  const orderA = {
+    id: 'order-a-uuid',
+    customerId: userA,
+    driverId: null,
+    status: 'PENDING',
+    itemsJson: [],
+    addressJson: { recipientName: 'A', phone: '0812', street: 'Jl A', city: 'Jakarta', postalCode: '12345' },
+    totalCents: 50000,
+    currency: 'IDR',
+    notes: null,
+    version: 1,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+  };
+  const orderB = {
+    id: 'order-b-uuid',
+    customerId: userB,
+    driverId: null,
+    status: 'PENDING',
+    itemsJson: [],
+    addressJson: { recipientName: 'B', phone: '0813', street: 'Jl B', city: 'Bandung', postalCode: '54321' },
+    totalCents: 60000,
+    currency: 'IDR',
+    notes: null,
+    version: 1,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+  };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        SyncService,
+        {
+          provide: PrismaClient,
+          useValue: {
+            order: {
+              findMany: jest.fn(),
+              findUnique: jest.fn(),
+              upsert: jest.fn(),
+              update: jest.fn(),
+            },
+            payment: {
+              findMany: jest.fn(),
+              findUnique: jest.fn(),
+              findFirst: jest.fn(),
+              upsert: jest.fn(),
+              update: jest.fn(),
+            },
+            chatMessage: {
+              findMany: jest.fn(),
+              findUnique: jest.fn(),
+              upsert: jest.fn(),
+              update: jest.fn(),
+            },
+            syncCursor: {
+              upsert: jest.fn(),
+            },
+          },
+        },
+      ],
+    }).compile();
+
+    service = module.get<SyncService>(SyncService);
+    prisma = module.get(PrismaClient);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('user isolation', () => {
+    test('user A tidak bisa pull order user B yang tidak melibatkan dirinya', async () => {
+      // user A punya order A, user B punya order B
+      (prisma.order.findMany as jest.Mock)
+        // Pertama query untuk dapat userOrderIds (orders di mana A adalah customer/driver)
+        .mockResolvedValueOnce([orderA])
+        // Kedua query untuk pull data dengan filter ownership
+        .mockResolvedValueOnce([orderA]);
+      (prisma.payment.findMany as jest.Mock).mockResolvedValueOnce([]);
+      (prisma.chatMessage.findMany as jest.Mock).mockResolvedValueOnce([]);
+
+      const result = await service.pullSince('device-a', userA, null);
+
+      // order B TIDAK boleh muncul
+      const orderIds = result.records
+        .filter((r) => r.entityType === 'order')
+        .map((r) => r.id);
+      expect(orderIds).toContain('order-a-uuid');
+      expect(orderIds).not.toContain('order-b-uuid');
+    });
+
+    test('user A tidak bisa pull payment user B yang tidak melibatkan dirinya', async () => {
+      const paymentA = {
+        id: 'payment-a-uuid',
+        orderId: 'order-a-uuid',
+        idempotencyKey: 'idem-a',
+        method: 'CASH',
+        status: 'PENDING',
+        amountCents: 50000,
+        currency: 'IDR',
+        kind: 'PAYMENT',
+        externalRef: null,
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      const paymentB = {
+        id: 'payment-b-uuid',
+        orderId: 'order-b-uuid',
+        idempotencyKey: 'idem-b',
+        method: 'CASH',
+        status: 'PENDING',
+        amountCents: 60000,
+        currency: 'IDR',
+        kind: 'PAYMENT',
+        externalRef: null,
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      // user A punya payment A (terkait order A)
+      (prisma.order.findMany as jest.Mock)
+        .mockResolvedValueOnce([orderA])
+        .mockResolvedValueOnce([orderA]);
+      (prisma.payment.findMany as jest.Mock).mockResolvedValueOnce([paymentA]);
+      (prisma.chatMessage.findMany as jest.Mock).mockResolvedValueOnce([]);
+
+      const result = await service.pullSince('device-a', userA, null);
+
+      // payment B TIDAK boleh muncul
+      const paymentIds = result.records
+        .filter((r) => r.entityType === 'payment')
+        .map((r) => r.id);
+      expect(paymentIds).toContain('payment-a-uuid');
+      expect(paymentIds).not.toContain('payment-b-uuid');
+    });
+
+    test('user A tidak bisa pull chat yang roomId-nya bukan order miliknya', async () => {
+      const chatA = {
+        id: 'chat-a-uuid',
+        roomId: 'order-a-uuid',
+        senderId: userA,
+        body: 'Halo dari A',
+        attachmentJson: null,
+        status: 'SENT',
+        clientCreatedAt: new Date(),
+        serverCreatedAt: new Date(),
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      const chatB = {
+        id: 'chat-b-uuid',
+        roomId: 'order-b-uuid',
+        senderId: userB,
+        body: 'Halo dari B',
+        attachmentJson: null,
+        status: 'SENT',
+        clientCreatedAt: new Date(),
+        serverCreatedAt: new Date(),
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      (prisma.order.findMany as jest.Mock)
+        .mockResolvedValueOnce([orderA])
+        .mockResolvedValueOnce([orderA]);
+      (prisma.payment.findMany as jest.Mock).mockResolvedValueOnce([]);
+      // chat A terkait order A (milik user A), chat B terkait order B (milik user B)
+      (prisma.chatMessage.findMany as jest.Mock).mockResolvedValueOnce([chatA]);
+
+      const result = await service.pullSince('device-a', userA, null);
+
+      // chat B TIDAK boleh muncul
+      const chatIds = result.records
+        .filter((r) => r.entityType === 'chat_message')
+        .map((r) => r.id);
+      expect(chatIds).toContain('chat-a-uuid');
+      expect(chatIds).not.toContain('chat-b-uuid');
+    });
+  });
+});
