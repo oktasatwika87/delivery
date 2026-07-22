@@ -1,0 +1,164 @@
+// Prisma schema untuk backend delivery.
+//
+// CATATAN: Field type menggunakan string/Int — salah satunya karena Prisma
+// belum punya direct mapping ke semua union literal dari @delivery/shared.
+// Mapping runtime dilakukan di service layer (lihat src/orders/orders.mapper.ts).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===== User =====
+
+enum UserRole {
+  CUSTOMER
+  DRIVER
+}
+
+model User {
+  id        String   @id @db.Uuid
+  role      UserRole
+  name      String
+  phone     String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  customerOrders Order[] @relation("CustomerOrders")
+  driverOrders   Order[] @relation("DriverOrders")
+
+  @@map("users")
+}
+
+// ===== Order =====
+
+enum OrderStatusDb {
+  PENDING
+  CONFIRMED
+  PREPARING
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+model Order {
+  id         String  @id @default(uuid()) @db.Uuid
+  customerId String  @map("customer_id") @db.Uuid
+  driverId   String? @map("driver_id") @db.Uuid
+
+  status      OrderStatusDb @default(PENDING)
+  // Items & address disimpan sebagai JSONB — schema fleksibel, validated di service.
+  itemsJson   Json          @map("items_json")
+  addressJson Json          @map("address_json")
+
+  totalCents Int     @map("total_cents")
+  currency   String  @db.Char(3)
+  notes      String?
+
+  version   Int       @default(1) @map("server_version")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  // Relations
+  customer User      @relation("CustomerOrders", fields: [customerId], references: [id])
+  driver   User?     @relation("DriverOrders", fields: [driverId], references: [id])
+  payments Payment[]
+
+  @@index([customerId])
+  @@index([driverId])
+  @@index([status])
+  @@index([updatedAt])
+  @@map("orders")
+}
+
+// ===== Payment =====
+
+enum PaymentMethodDb {
+  CASH
+  CARD
+  EWALLET
+  BANK_TRANSFER
+}
+
+enum PaymentStatusDb {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+  VOIDED
+}
+
+model Payment {
+  id      String @id @default(uuid()) @db.Uuid
+  orderId String @map("order_id") @db.Uuid
+
+  // Idempotency key — client wajib kirim saat create. Prevents double-charge on retry.
+  idempotencyKey String          @unique @map("idempotency_key")
+  method         PaymentMethodDb
+  status         PaymentStatusDb @default(PENDING)
+  amountCents    Int             @map("amount_cents")
+  currency       String          @db.Char(3)
+  kind           String // 'PAYMENT' | 'TIP' | 'REFUND'
+  externalRef    String?         @map("external_ref")
+
+  version   Int       @default(1) @map("server_version")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([status])
+  @@map("payments")
+}
+
+// ===== ChatMessage =====
+
+enum ChatMessageStatusDb {
+  PENDING_SEND
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+model ChatMessage {
+  id             String              @id @default(uuid()) @db.Uuid
+  roomId         String              @map("room_id")
+  senderId       String              @map("sender_id")
+  body           String              @db.Text
+  attachmentJson Json?               @map("attachment_json")
+  status         ChatMessageStatusDb @default(PENDING_SEND)
+
+  clientCreatedAt DateTime  @map("client_created_at")
+  serverCreatedAt DateTime? @map("server_created_at")
+
+  version   Int       @default(1) @map("server_version")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  @@index([roomId])
+  @@index([status])
+  @@index([updatedAt])
+  @@map("chat_messages")
+}
+
+// ===== Sync cursor =====
+
+model SyncCursor {
+  // PK = deviceId. Setiap device punya cursor sendiri.
+  deviceId  String   @id @map("device_id")
+  userId    String   @map("user_id")
+  cursor    String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("sync_cursors")
+}
