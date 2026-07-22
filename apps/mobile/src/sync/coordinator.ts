@@ -238,6 +238,7 @@ export class SyncCoordinator implements Coordinator {
   private async collectDirty(db: Database): Promise<SyncPushPayload> {
     const deviceId = await getDeviceId();
     const userId = await getCurrentUserId();
+    if (!userId) throw new Error('Not authenticated — cannot sync without login');
     const cursor = await loadCursor();
     const records: SyncRecordPush[] = [];
 

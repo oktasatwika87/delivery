@@ -1,17 +1,24 @@
 /**
  * User session holder.
  *
- * TODO: Ganti dengan userId dari auth session setelah auth module dibuat.
- * Saat ini stub untuk development tanpa auth.
+ * Baca token & userId dari secure storage (keychain).
+ * Diisi saat login, di-clear saat logout.
  */
+
+import { getToken, getUserId } from './token-storage';
 
 /**
- * TODO: Implementasi asli harus baca dari auth context/state.
- * Contoh: return authState.userId dari Context atau Zustand store.
+ * Get userId dari session.
+ * Return null kalau belum login.
  */
-export async function getCurrentUserId(): Promise<string> {
-  return DUMMY_USER_ID;
+export async function getCurrentUserId(): Promise<string | null> {
+  return getUserId();
 }
 
-/** Stub user ID untuk development tanpa auth module. */
-export const DUMMY_USER_ID = 'dev-user-001';
+/**
+ * Get JWT token dari session.
+ * Return null kalau belum login.
+ */
+export async function getCurrentToken(): Promise<string | null> {
+  return getToken();
+}

@@ -1,8 +1,8 @@
 import React from 'react';
 import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Q } from '@nozbe/watermelondb';
-import { useDatabase } from '@nozbe/watermelondb/hooks';
-import { withObservables } from '@nozbe/watermelondb/react';
+import { withDatabase, withObservables } from '@nozbe/watermelondb/react';
+import type { Database } from '@nozbe/watermelondb';
 
 import { OrderModel } from '../db/models/OrderModel';
 
@@ -33,13 +33,23 @@ function OrdersScreenBase({ orders }: Props): React.JSX.Element {
   );
 }
 
-const enhance = withObservables([], () => ({
-  orders: useDatabase()
-    .get<OrderModel>('orders')
-    .query(Q.where('deleted_at', Q.eq(null)), Q.sortBy('created_at', Q.desc)),
-}));
+// withObservables(triggerProps, getObservables) RETURNS a function that accepts a component
+// Then withDatabase wraps the resulting enhanced component
+const enhance = withDatabase(
+  withObservables<{ database: Database }, Props>([], ({ database }) => ({
+    // @ts-expect-error WatermelonDB HOC generic inference: withObservables expects
+    // Observable<T> in return but component prop type declares T[]
+    orders: database
+      .get<OrderModel>('orders')
+      .query(
+        Q.where('deleted_at', Q.eq(null)),
+        Q.sortBy('created_at', Q.desc)
+      )
+      .observe(),
+  }))(OrdersScreenBase)  // <-- Apply component HERE
+);
 
-export const OrdersScreen = enhance(OrdersScreenBase);
+export const OrdersScreen = enhance;
 
 const styles = StyleSheet.create({
   list: { padding: 16, gap: 12 },

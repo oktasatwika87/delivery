@@ -27,3 +27,46 @@ export async function pullBatch(deviceId: string, cursor: string | null): Promis
   if (!res.ok) throw new Error(`pullBatch failed: ${res.status}`);
   return res.json() as Promise<SyncPullResponse>;
 }
+
+// ─── Auth ───────────────────────────────────────────────────────────────────
+
+export interface LoginResponse {
+  token: string;
+  user: {
+    id: string;
+    role: string;
+    name: string;
+    phone: string;
+  };
+}
+
+/**
+ * Login ke backend.
+ *
+ * throws InvalidCredentialsError kalau phone/password salah.
+ */
+export async function login(phone: string, password: string): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone, password }),
+  });
+
+  if (res.status === 401) {
+    throw new InvalidCredentialsError('Nomor atau password salah');
+  }
+
+  if (!res.ok) {
+    throw new Error(`Login failed: ${res.status}`);
+  }
+
+  return res.json() as Promise<LoginResponse>;
+}
+
+/** Error yang dilempar saat login gagal karena credentials salah. */
+export class InvalidCredentialsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidCredentialsError';
+  }
+}
