@@ -40,3 +40,6 @@ pnpm-debug.log*
 
 # Prisma local DB
 apps/backend/prisma/dev.db*
+
+# Manual / debug scripts (not part of source)
+scripts/

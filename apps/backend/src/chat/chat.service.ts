@@ -23,6 +23,30 @@ import type { ChatMessage, SendChatMessageInput } from '@delivery/shared';
 export class ChatService {
   constructor(private readonly prisma: PrismaClient) {}
 
+  /**
+   * Validasi apakah user memiliki akses ke room (orderId).
+   *
+   * Dipakai oleh:
+   * - ChatService.send() — REST endpoint
+   * - ChatGateway join_room event — WebSocket
+   *
+   * throws ForbiddenException jika order tidak ada atau user bukan customer/driver.
+   */
+  async validateRoomAccess(roomId: string, userId: string): Promise<void> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: roomId },
+      select: { id: true, customerId: true, driverId: true },
+    });
+
+    if (!order) {
+      throw new ForbiddenException('Order not found');
+    }
+
+    if (order.customerId !== userId && order.driverId !== userId) {
+      throw new ForbiddenException('Not your order');
+    }
+  }
+
   async listByRoom(roomId: string): Promise<ChatMessage[]> {
     const rows = await this.prisma.chatMessage.findMany({
       where: { roomId, deletedAt: null },
@@ -39,19 +63,7 @@ export class ChatService {
    * - Cek sender adalah customer atau driver dari order tersebut
    */
   async send(input: SendChatMessageInput, senderId: string): Promise<ChatMessage> {
-    // roomId contract enforcement: harus berupa orderId yang valid
-    const order = await this.prisma.order.findUnique({
-      where: { id: input.roomId },
-      select: { id: true, customerId: true, driverId: true },
-    });
-
-    if (!order) {
-      throw new ForbiddenException('Order not found');
-    }
-
-    if (order.customerId !== senderId && order.driverId !== senderId) {
-      throw new ForbiddenException('Not your order');
-    }
+    await this.validateRoomAccess(input.roomId, senderId);
 
     const now = new Date();
     const row = await this.prisma.chatMessage.create({
