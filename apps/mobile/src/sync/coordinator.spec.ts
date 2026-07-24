@@ -111,7 +111,8 @@ function createCollection(name: string) {
     prepareCreate(fn: (row: MockRow) => void): MockModel {
       const row = createMockRow('temp', 'synced');
       fn(row); // Execute immediately for create
-      const id = row.id as string;
+      // Use _raw.id if set, otherwise fall back to the temp id
+      const id = (row._raw as any).id ?? row.id as string;
       collectionRecords.set(id, row);
       return attachModelMethods(row);
     },
@@ -136,19 +137,25 @@ function attachModelMethods(row: MockRow): MockModel {
   return row as MockModel;
 }
 
-// Database mock
+// Database mock — support WatermelonDB write pattern
 const mockDb = {
   get(name: string) {
     return createCollection(name);
   },
-  async batch(..._ops: unknown[]) {
-    // Execute all deferred operations
+  async write<T>(fn: () => Promise<T>): Promise<T> {
+    // WatermelonDB write() wraps a function that performs batch operations
+    // Execute all deferred operations when batch is called
     for (const op of state.batchOps) {
       if (op.type === 'update') {
         op.fn(op.row); // Apply the update to the row
       }
     }
-    state.batchOps = []; // Clear after execution
+    return fn();
+  },
+  async batch(..._ops: unknown[]) {
+    // Batch is called INSIDE write(), so deferred ops already executed above
+    // Clear after execution
+    state.batchOps = [];
   },
 };
 

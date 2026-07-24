@@ -1,9 +1,12 @@
 import React from 'react';
 import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Q } from '@nozbe/watermelondb';
 import { withDatabase, withObservables } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
 
+import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
 
 interface Props {
@@ -11,13 +14,18 @@ interface Props {
 }
 
 function OrdersScreenBase({ orders }: Props): React.JSX.Element {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Orders'>>();
+
   return (
     <FlatList
       data={orders}
       keyExtractor={(o) => o.id}
       contentContainerStyle={styles.list}
       renderItem={({ item }) => (
-        <TouchableOpacity style={styles.card}>
+        <TouchableOpacity
+          style={styles.card}
+          onPress={() => navigation.navigate('OrderDetail', { orderId: item.id })}
+        >
           <Text style={styles.cardTitle}>Order #{item.id.slice(0, 8)}</Text>
           <Text style={styles.cardMeta}>
             {item.status} · {item.totalCents} {item.currency}

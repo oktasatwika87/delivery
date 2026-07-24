@@ -5,27 +5,78 @@
 
 import Config from 'react-native-config';
 import type { SyncPushPayload, SyncPushResponse, SyncPullResponse } from '@delivery/shared';
+import { getCurrentToken } from './session';
 
 /** Base URL API dari .env (react-native-config) */
 const API_BASE = Config.API_BASE_URL;
 
+/** Build fetch options dengan Authorization header jika ada token */
+async function fetchWithAuth(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const token = await getCurrentToken();
+  console.log('[fetchWithAuth] Token:', token ? `Bearer ${token.substring(0, 20)}...` : 'NULL');
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers as Record<string, string>),
+  };
+  return fetch(url, { ...options, headers });
+}
+
 export async function pushBatch(payload: SyncPushPayload): Promise<SyncPushResponse> {
-  const res = await fetch(`${API_BASE}/sync/push`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`pushBatch failed: ${res.status}`);
-  return res.json() as Promise<SyncPushResponse>;
+  // AbortController: timeout 8 detik — fail fast kalau network unreachable
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await fetchWithAuth(`${API_BASE}/sync/push`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error(`pushBatch failed: ${res.status}`);
+    return res.json() as Promise<SyncPushResponse>;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      console.warn('[pushBatch] Request aborted due to 8s timeout — offline-first continues');
+      // Return empty response so sync can retry later
+      return { acks: [], pullDelta: undefined };
+    }
+    throw err;
+  }
 }
 
 export async function pullBatch(deviceId: string, cursor: string | null): Promise<SyncPullResponse> {
-  const url = new URL(`${API_BASE}/sync/pull`);
-  url.searchParams.set('deviceId', deviceId);
-  if (cursor) url.searchParams.set('since', cursor);
-  const res = await fetch(url.toString());
-  if (!res.ok) throw new Error(`pullBatch failed: ${res.status}`);
-  return res.json() as Promise<SyncPullResponse>;
+  // Build query string manually — URL/URLSearchParams not available in React Native
+  let queryString = `deviceId=${encodeURIComponent(deviceId)}`;
+  if (cursor) {
+    queryString += `&since=${encodeURIComponent(cursor)}`;
+  }
+  const url = `${API_BASE}/sync/pull?${queryString}`;
+
+  // AbortController: timeout 8 detik — fail fast kalau network unreachable.
+  // Offline-first UX: tidak ada spinner 2 menit, langsung continue tanpa data.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await fetchWithAuth(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error(`pullBatch failed: ${res.status}`);
+    return res.json() as Promise<SyncPullResponse>;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      console.warn('[pullBatch] Request aborted due to 8s timeout — offline-first continues');
+      // Return empty response so sync continues gracefully
+      return { nextCursor: null, records: [], serverTime: new Date().toISOString() };
+    }
+    throw err;
+  }
 }
 
 // ─── Auth ───────────────────────────────────────────────────────────────────
@@ -69,4 +120,49 @@ export class InvalidCredentialsError extends Error {
     super(message);
     this.name = 'InvalidCredentialsError';
   }
+}
+
+// ─── Chat ─────────────────────────────────────────────────────────────────
+
+export interface SendMessagePayload {
+  roomId: string;
+  body: string;
+  attachment?: Record<string, unknown>;
+  clientCreatedAt: string; // ISO string
+}
+
+export interface SendMessageResponse {
+  id: string;
+  roomId: string;
+  senderId: string;
+  body: string;
+  attachment?: Record<string, unknown>;
+  status: string;
+  clientCreatedAt: string;
+  serverCreatedAt: string;
+  version: number;
+}
+
+/**
+ * Kirim pesan chat via REST.
+ * Dipanggil setelah pesan dibuat lokal (offline-first — pesan sudah tampil di UI).
+ */
+export async function sendChatMessage(
+  payload: SendMessagePayload
+): Promise<SendMessageResponse> {
+  console.log('[sendChatMessage] Payload:', JSON.stringify(payload));
+  const res = await fetchWithAuth(`${API_BASE}/chat/messages`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`[sendChatMessage] Failed: status=${res.status}, body=${body}`);
+    throw new Error(`sendChatMessage failed: ${res.status} - ${body}`);
+  }
+
+  const response = await res.json();
+  console.log('[sendChatMessage] Success:', JSON.stringify(response));
+  return response as Promise<SendMessageResponse>;
 }

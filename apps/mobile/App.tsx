@@ -5,12 +5,14 @@
  *   - App mulai → cek token di keychain
  *   - Ada token → langsung ke Orders (user sudah login sebelumnya)
  *   - Tidak ada token → tampilkan LoginScreen
- *   - Setelah login → navigate ke Orders
+ *   - Setelah login → handleLoginSuccess() set authenticated=true
+ *     DAN trigger syncCoordinator.pullNow() supaya data server langsung
+ *     muncul, tidak perlu menunggu tick periodik berikutnya (~30s).
  *
  * Sync coordinator start() dipanggil di awal regardless of auth.
  * collectDirty() akan throw kalau belum login, tapi ditangkep oleh
  * try/catch di syncTick() sehingga aman. Setelah user login, sync
- * akan jalan efektif mulai tick berikutnya.
+ * akan jalan efektif mulai tick berikutnya (dan langsung via pullNow()).
  */
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
@@ -42,23 +44,68 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
+
+    // Fire-and-forget: syncCoordinator.start() jalan di background,
+    // tidak blocking auth-check atau render UI.
+    // collectDirty() akan throw kalau belum login → ditangkep di catch,
+    // aman untuk fresh install / offline-first.
+    syncCoordinator.start(database).catch((err) => {
+      if (!cancelled) {
+        console.warn('[App] Background sync start failed (non-blocking):', err);
+      }
+    });
+
+    // Auth-check jalan PARALEL dengan sync — tidak saling tunggu.
     (async () => {
       try {
-        await syncCoordinator.start(database);
-        // Cek apakah sudah pernah login sebelumnya
         const token = await getToken();
+        console.log('[App] Auth token check done:', token ? `Found` : 'NULL');
         if (!cancelled) setAuthenticated(!!token);
       } catch (err) {
-        console.error('[App] sync start failed', err);
+        console.error('[App] Auth token check failed', err);
       } finally {
         if (!cancelled) setReady(true);
       }
     })();
+
     return () => {
       cancelled = true;
       syncCoordinator.stop();
     };
   }, []);
+
+  // Debug: log when authenticated state changes
+  useEffect(() => {
+    console.log('[App] authenticated changed to:', authenticated);
+    if (authenticated) {
+      console.log(
+        '[App] User logged in - pullNow() already triggered, periodic sync continues every 30s',
+      );
+    }
+  }, [authenticated]);
+
+  /**
+   * Login success handler.
+   *
+   * Setelah token tersimpan di keychain (oleh LoginScreen SEBELUM callback ini
+   * dipanggil), kita:
+   *  1. Set authenticated=true → App re-render ke Orders screen
+   *  2. Trigger pullNow() secara manual — jangan tunggu 30s tick berikutnya.
+   *
+   * Karena token sudah ada di keychain saat handler ini jalan,
+   * `getCurrentToken()` di dalam pull → fetchWithAuth akan return token
+   * yang baru di-save, sehingga /sync/pull akan return data yang difilter
+   * per-user. Tidak perlu tunggu state update flush ke re-render.
+   */
+  const handleLoginSuccess = async (): Promise<void> => {
+    setAuthenticated(true);
+    try {
+      console.log('[App] Triggering immediate pull after login...');
+      await syncCoordinator.pullNow();
+    } catch (err) {
+      console.warn('[App] Post-login pullNow failed (will retry on next tick):', err);
+    }
+  };
 
   if (!ready) {
     return (
@@ -73,7 +120,7 @@ function App(): React.JSX.Element {
       <DatabaseProvider database={database}>
         <NavigationContainer>
           {!authenticated ? (
-            <LoginScreen onLoginSuccess={() => setAuthenticated(true)} />
+            <LoginScreen onLoginSuccess={handleLoginSuccess} />
           ) : (
             <Stack.Navigator screenOptions={{ headerShown: false }}>
               <Stack.Screen name="Orders" component={OrdersScreen} />

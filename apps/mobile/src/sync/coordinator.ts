@@ -29,6 +29,12 @@ interface Coordinator {
   stop(): void;
   /** Flush dirty records ke server (biasanya dipanggil manual dari UI). */
   flushNow(): Promise<SyncPushResponse | null>;
+  /**
+   * Pull data incremental dari server (reuse pull()+applyPull()).
+   * Dipanggil manual setelah login agar data langsung muncul,
+   * tanpa harus menunggu tick periodik berikutnya (~30s).
+   */
+  pullNow(): Promise<SyncPullResponse | null>;
 }
 
 export class SyncCoordinator implements Coordinator {
@@ -38,27 +44,37 @@ export class SyncCoordinator implements Coordinator {
 
   async start(db: Database): Promise<void> {
     if (this.stopped) return;
+    console.log('[SyncCoordinator] start() called');
     this.db = db;
     this.stopped = false;
 
     // First sync: full pull (cursor null)
-    const pull = await this.pull(null);
-    await this.applyPull(pull);
+    // Bungkus try/catch supaya kegagalan pull pertama tidak menghalangi periodic sync
+    try {
+      console.log('[SyncCoordinator] Performing initial pull...');
+      const pull = await this.pull(null);
+      await this.applyPull(pull);
+      console.log('[SyncCoordinator] Initial pull succeeded');
+    } catch (err) {
+      console.warn('[SyncCoordinator] Initial pull failed, will retry on next tick:', err);
+    }
 
     // Periodic sync setiap 30 detik
+    console.log('[SyncCoordinator] Starting periodic sync interval');
     this.syncInterval = setInterval(() => this.syncTick(), 30_000);
   }
 
   private async syncTick(): Promise<void> {
     if (this.stopped || !this.db) return;
+    console.log('[syncTick] Running periodic sync...');
     try {
       // Flush dirty records TERLEBIH DAHULU, baru pull
       await this.flushNow();
       const cursor = await loadCursor();
       const pull = await this.pull(cursor);
       await this.applyPull(pull);
-    } catch {
-      // Log error, skip — periodic sync tidak boleh crash app
+    } catch (err) {
+      console.warn('[syncTick] Error:', err);
     }
   }
 
@@ -78,7 +94,15 @@ export class SyncCoordinator implements Coordinator {
     const payload = await this.collectDirty(this.db);
     if (payload.records.length === 0) return null;
 
-    const resp = await pushBatch(payload);
+    let resp: SyncPushResponse;
+    try {
+      resp = await pushBatch(payload);
+    } catch (err) {
+      // Network gagal atau backend reject request — row lokal tetap dirty,
+      // akan di-retry di sync cycle berikutnya. Log warning.
+      console.warn('[flushNow] pushBatch failed, will retry next sync:', err);
+      return null;
+    }
 
     // Process acks: conflict = overwrite local row dengan data server
     await this.resolveAcks(resp.acks, this.db);
@@ -91,6 +115,30 @@ export class SyncCoordinator implements Coordinator {
   }
 
   // ============ pull ============
+
+  /**
+   * Manual pull — panggil setelah login (atau event lain yang butuh
+   * data server segera) supaya tidak harus menunggu tick periodik
+   * berikutnya. Reuse pull() dan applyPull() yang sudah ada; TIDAK
+   * menduplikasi logic.
+   */
+  async pullNow(): Promise<SyncPullResponse | null> {
+    if (this.stopped || !this.db) return null;
+    console.log('[SyncCoordinator] pullNow() called — manual pull');
+    try {
+      const cursor = await loadCursor();
+      const pull = await this.pull(cursor);
+      await this.applyPull(pull);
+      console.log(
+        '[SyncCoordinator] pullNow() succeeded, records:',
+        pull.records.length,
+      );
+      return pull;
+    } catch (err) {
+      console.warn('[SyncCoordinator] pullNow() failed:', err);
+      return null;
+    }
+  }
 
   private async pull(sinceCursor: string | null): Promise<SyncPullResponse> {
     if (this.stopped) {
@@ -150,7 +198,9 @@ export class SyncCoordinator implements Coordinator {
           }));
         } else {
           batch.push(collection.prepareCreate((r: any) => {
-            r.id = record.id;
+            // Set id via _raw because r.id is readonly in WatermelonDB Model
+            // Must use server's UUID so sync push back works correctly
+            r._raw.id = record.id;
             this.applyServerDataToLocalRow(r, record);
             // Mark as synced (prepareCreate dari pull server, bukan perubahan user)
             r._raw._status = 'synced';
@@ -160,7 +210,9 @@ export class SyncCoordinator implements Coordinator {
     }
 
     if (batch.length > 0) {
-      await database.batch(...batch);
+      await database.write(async () => {
+        await database.batch(...batch);
+      });
     }
 
     await saveCursor(pull.nextCursor);
@@ -172,14 +224,16 @@ export class SyncCoordinator implements Coordinator {
    * DATA MAPPING:
    * - snake_case DB columns -> camelCase domain types
    * - JSON string columns (items_json, address_json, attachment_json) -> parsed objects
+   *   NOTE: @json decorator di OrderModel auto-parses on read & auto-stringifies on write
+   *   DO NOT call JSON.stringify/JSON.parse manually — assign raw objects directly.
    *
    * MAPPING TABLE (WatermelonDB -> @delivery/shared):
    *
    * order:
    *   customer_id  -> customerId
    *   driver_id   -> driverId
-   *   items_json  -> items (JSON.parse)
-   *   address_json -> deliveryAddress (JSON.parse)
+   *   items_json  -> items (direct, @json handles serialization)
+   *   address_json -> deliveryAddress (direct, @json handles serialization)
    *   server_version -> version
    *
    * payment:
@@ -191,7 +245,7 @@ export class SyncCoordinator implements Coordinator {
    * chat_message:
    *   room_id -> roomId
    *   sender_id -> senderId
-   *   attachment_json -> attachment (JSON.parse)
+   *   attachment_json -> attachment (direct, @json handles serialization)
    *   client_created_at -> clientCreatedAt
    *   server_created_at -> serverCreatedAt
    *   server_version -> version
@@ -204,8 +258,9 @@ export class SyncCoordinator implements Coordinator {
       row.customerId = (d as any).customerId;
       row.driverId = (d as any).driverId ?? null;
       row.status = (d as any).status;
-      row.itemsJson = JSON.stringify((d as any).items);
-      row.addressJson = JSON.stringify((d as any).deliveryAddress);
+      // @json decorator auto-stringify on write — assign raw object
+      row.itemsJson = (d as any).items;
+      row.addressJson = (d as any).deliveryAddress;
       row.totalCents = (d as any).totalCents;
       row.currency = (d as any).currency;
       row.notes = (d as any).notes ?? null;
@@ -222,9 +277,8 @@ export class SyncCoordinator implements Coordinator {
       row.roomId = (d as any).roomId;
       row.senderId = (d as any).senderId;
       row.body = (d as any).body;
-      row.attachmentJson = (d as any).attachment
-        ? JSON.stringify((d as any).attachment)
-        : null;
+      // @json decorator auto-stringify on write — assign raw object
+      row.attachmentJson = (d as any).attachment ?? null;
       row.status = (d as any).status;
       row.clientCreatedAt = new Date((d as any).clientCreatedAt).getTime();
       row.serverCreatedAt = (d as any).serverCreatedAt
@@ -274,7 +328,7 @@ export class SyncCoordinator implements Coordinator {
    *
    * DATA MAPPING (inverse dari applyServerDataToLocalRow):
    * - camelCase domain types -> snake_case DB columns
-   * - JSON object -> JSON.stringify untuk string columns
+   *   NOTE: @json decorator auto-parses on read, so use fields directly without JSON.parse.
    *
    * _status mapping:
    * - 'created' -> op: 'create', baseVersion: null
@@ -300,8 +354,9 @@ export class SyncCoordinator implements Coordinator {
         customerId: row.customerId,
         driverId: row.driverId ?? undefined,
         status: row.status,
-        items: row.itemsJson ? JSON.parse(row.itemsJson) : [],
-        deliveryAddress: row.addressJson ? JSON.parse(row.addressJson) : {},
+        // @json decorator auto-parse on read — use directly
+        items: row.itemsJson ?? [],
+        deliveryAddress: row.addressJson ?? {},
         totalCents: row.totalCents,
         currency: row.currency,
         notes: row.notes ?? undefined,
@@ -330,7 +385,8 @@ export class SyncCoordinator implements Coordinator {
         roomId: row.roomId,
         senderId: row.senderId,
         body: row.body,
-        attachment: row.attachmentJson ? JSON.parse(row.attachmentJson) : undefined,
+        // @json decorator auto-parse on read — use directly
+        attachment: row.attachmentJson ?? undefined,
         status: row.status,
         clientCreatedAt: new Date(row.clientCreatedAt).toISOString(),
         serverCreatedAt: row.serverCreatedAt
@@ -360,6 +416,7 @@ export class SyncCoordinator implements Coordinator {
    * Process ack dari server push.
    * - Conflict: overwrite local row dengan serverData, mark synced
    * - Accepted: mark local row synced
+   * - Rejected: log warning (row tetap dirty, akan di-retry next sync cycle)
    */
   private async resolveAcks(
     acks: SyncPushResponse['acks'],
@@ -402,11 +459,23 @@ export class SyncCoordinator implements Coordinator {
             r._raw._status = 'synced';
           }));
         }
+      } else if (ack.status === 'rejected') {
+        // Rejected: row tetap dirty, akan di-retry next sync
+        console.warn(
+          `[resolveAcks] Record rejected by server: entityType=${ack.entityType}, id=${ack.id}`,
+          ack.reason ? `reason=${ack.reason}` : '',
+        );
       }
     }
 
     if (batch.length > 0) {
-      await db.batch(...batch);
+      try {
+        await db.write(async () => {
+          await db.batch(...batch);
+        });
+      } catch (err) {
+        console.error('[resolveAcks] Failed to write batch:', err);
+      }
     }
   }
 }
