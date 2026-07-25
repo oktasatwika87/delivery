@@ -6,14 +6,16 @@ const defaultConfig = getDefaultConfig(__dirname);
 
 const config = {
   resolver: {
-    // pnpm symlinks: Metro perlu opsi resmi unstable_enableSymlinks
-    unstable_enableSymlinks: true,
-
     // Force resolve react ke satu lokasi (prevent duplicate React instance)
     alias: {
       'react': path.resolve(__dirname, 'node_modules/react'),
       'react-native': path.resolve(__dirname, 'node_modules/react-native'),
     },
+    // Include monorepo root for workspace packages
+    nodeModulesPaths: [
+      path.resolve(__dirname, 'node_modules'),
+      path.resolve(__dirname, '../node_modules'),
+    ],
   },
   watchFolders: [
     // Watch entire monorepo root untuk resolve workspace packages

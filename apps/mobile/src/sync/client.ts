@@ -125,6 +125,8 @@ export class InvalidCredentialsError extends Error {
 // ─── Chat ─────────────────────────────────────────────────────────────────
 
 export interface SendMessagePayload {
+  /** Client-generated UUID — consistent ID across devices. */
+  id: string;
   roomId: string;
   body: string;
   attachment?: Record<string, unknown>;

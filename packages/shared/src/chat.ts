@@ -48,6 +48,8 @@ export type ChatAttachment =
   | { kind: 'file'; url: string; mimeType: string; sizeBytes: number };
 
 export interface SendChatMessageInput {
+  /** Optional client-generated UUID. Server uses this if provided (consistent ID across devices). */
+  id?: string;
   roomId: string;
   body: string;
   attachment?: ChatAttachment;

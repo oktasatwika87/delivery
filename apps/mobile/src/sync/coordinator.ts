@@ -91,7 +91,9 @@ export class SyncCoordinator implements Coordinator {
   async flushNow(): Promise<SyncPushResponse | null> {
     if (this.stopped || !this.db) return null;
 
+    console.log('[flushNow] Starting flush...');
     const payload = await this.collectDirty(this.db);
+    console.log(`[flushNow] Collected ${payload.records.length} dirty records`);
     if (payload.records.length === 0) return null;
 
     let resp: SyncPushResponse;
@@ -316,7 +318,10 @@ export class SyncCoordinator implements Coordinator {
       ).fetch();
 
       for (const row of dirty) {
-        records.push(this.localRowToSyncRecord(row, colName));
+        // DEBUG: Log all dirty records
+        const syncRecord = this.localRowToSyncRecord(row, colName);
+        console.log(`[collectDirty] ${colName}: id=${syncRecord.id}, _status=${(row as any)._status}, op=${syncRecord.op}, baseVersion=${syncRecord.baseVersion}`);
+        records.push(syncRecord);
       }
     }
 

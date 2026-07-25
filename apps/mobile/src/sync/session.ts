@@ -20,7 +20,5 @@ export async function getCurrentUserId(): Promise<string | null> {
  * Return null kalau belum login.
  */
 export async function getCurrentToken(): Promise<string | null> {
-  const token = await getToken();
-  console.log('[getCurrentToken] Returning token:', token ? `${token.substring(0, 20)}...` : 'NULL');
-  return token;
+  return getToken();
 }

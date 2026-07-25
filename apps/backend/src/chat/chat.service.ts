@@ -68,6 +68,8 @@ export class ChatService {
     const now = new Date();
     const row = await this.prisma.chatMessage.create({
       data: {
+        // Use client-generated ID if provided (consistent ID across devices)
+        id: input.id ?? undefined,
         roomId: input.roomId,
         senderId,
         body: input.body,

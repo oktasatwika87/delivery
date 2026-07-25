@@ -19,6 +19,8 @@ import type { RootStackParamList } from '../../App';
 import { ChatMessageModel } from '../db/models/ChatMessageModel';
 import { getCurrentUserId } from '../sync/session';
 import { sendChatMessage } from '../sync/client';
+import { chatSocket } from '../sync/socket';
+import type { ChatMessage } from '@delivery/shared';
 
 /** Generate UUID v4 for record IDs */
 function generateUUID(): string {
@@ -84,6 +86,102 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
     };
   }, [database, roomId]);
 
+  // Socket lifecycle — connect & join room, leave on cleanup
+  useEffect(() => {
+    let unsubNewMessage: (() => void) | null = null;
+    let joined = false;
+
+    const setupSocket = async () => {
+      // Connect if not already connected
+      if (!chatSocket.isConnected) {
+        try {
+          await chatSocket.connect();
+        } catch (err) {
+          console.warn('[Chat] socket connect failed:', err);
+          return;
+        }
+      }
+
+      // Join room
+      try {
+        const ack = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+          chatSocket.emitToServer('join_room', { roomId }, (response: { success: boolean; error?: string }) => {
+            resolve(response);
+          });
+        });
+        if (ack.success) {
+          joined = true;
+        } else {
+          console.warn('[Chat] join_room failed:', ack.error);
+        }
+      } catch (err) {
+        console.warn('[Chat] join_room error:', err);
+      }
+
+      // Subscribe to new_message events
+      unsubNewMessage = chatSocket.on<ChatMessage>('new_message', async (message) => {
+        // Only process if message belongs to this room
+        if (message.roomId !== roomId) return;
+
+        console.log(`[new_message] received: id=${message.id}, roomId=${message.roomId}, senderId=${message.senderId}`);
+
+        try {
+          const collection = database.get<ChatMessageModel>('chat_messages');
+
+          // Check if message already exists locally (could be echo from our own send)
+          const existing = await collection.find(message.id).catch(() => null);
+          console.log(`[new_message] find(${message.id}): ${existing ? 'FOUND, will update' : 'NOT FOUND, will create'}`);
+
+          if (existing) {
+            // Update status — message already inserted (from our own send or sync)
+            console.log(`[new_message] BEFORE update: id=${message.id}, _status=${(existing._raw as any)._status}, status=${existing.status}`);
+            await database.write(async () => {
+              await existing.update((m) => {
+                m.status = 'SENT';
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                m._raw._status = 'synced';
+              });
+            });
+            console.log(`[new_message] AFTER update: id=${message.id}, _status=synced`);
+          } else {
+            // Insert new message from other user
+            await database.write(async () => {
+              await collection.create((m) => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                (m._raw as any).id = message.id;
+                m.roomId = message.roomId;
+                m.senderId = message.senderId;
+                m.body = message.body;
+                m.status = 'SENT';
+                m.clientCreatedAt = new Date(message.clientCreatedAt).getTime();
+                m.serverCreatedAt = message.serverCreatedAt
+                  ? new Date(message.serverCreatedAt).getTime()
+                  : undefined;
+                m.serverVersion = message.version;
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                m._raw._status = 'synced';
+              });
+            });
+            console.log(`[new_message] created: id=${message.id}, _status=synced`);
+          }
+        } catch (err) {
+          console.error('[new_message] error:', err);
+        }
+      });
+    };
+
+    setupSocket();
+
+    // Cleanup: leave room & unsubscribe listener
+    return () => {
+      unsubNewMessage?.();
+
+      if (joined) {
+        chatSocket.emitToServer('leave_room', { roomId });
+      }
+    };
+  }, [database, roomId]);
+
   const handleSend = async (): Promise<void> => {
     const text = inputText.trim();
     if (!text || !currentUserId) return;
@@ -91,6 +189,7 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
     setInputText('');
 
     const clientCreatedAt = Date.now();
+    const tempId = generateUUID();
 
     // 1. Create local record (offline-first) — save reference directly
     let localRecord: ChatMessageModel | null = null;
@@ -100,7 +199,7 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
           // Set id via _raw because msg.id is readonly in WatermelonDB Model
           // UUID required for sync with Postgres
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (msg._raw as any).id = generateUUID();
+          (msg._raw as any).id = tempId;
           msg.roomId = roomId;
           msg.senderId = currentUserId;
           msg.body = text;
@@ -112,20 +211,64 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
         });
       });
 
+      console.log(`[handleSend] CREATED: id=${tempId}, _status=${(localRecord!._raw as any)._status}, status=${localRecord!.status}`);
+
       // Scroll to bottom after adding message
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
 
-      // 2. Try to send via REST
+      // 2. Try socket first (real-time)
+      if (chatSocket.isConnected) {
+        try {
+          const ack = await new Promise<{ success: boolean; message?: ChatMessage; error?: string }>((resolve) => {
+            chatSocket.emitToServer(
+              'send_message',
+              { id: tempId, roomId, body: text },
+              (response: { success: boolean; message?: ChatMessage; error?: string }) => {
+                resolve(response);
+              }
+            );
+          });
+
+          if (ack.success && ack.message) {
+            console.log(`[handleSend] SOCKET ACK SUCCESS: id=${tempId}, ack.message.id=${ack.message.id}`);
+            // Update local record with server response
+            if (localRecord) {
+              await database.write(async () => {
+                await localRecord!.update((m) => {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  m._raw._status = 'synced'; // Clear dirty flag
+                  m.status = 'SENT';
+                  m.serverVersion = ack.message!.version;
+                });
+              });
+              console.log(`[handleSend] SOCKET ACK: updated id=${tempId}, _status=synced`);
+            }
+            return; // Success via socket — no need for REST fallback
+          } else {
+            console.warn(`[handleSend] SOCKET ACK FAILED: id=${tempId}, error=${ack.error}`);
+            // Continue to REST fallback
+          }
+        } catch (err) {
+          console.warn(`[handleSend] SOCKET ERROR: id=${tempId}, err=${err}`);
+          // Continue to REST fallback
+        }
+      } else {
+        console.warn(`[handleSend] SOCKET NOT CONNECTED: id=${tempId}, falling back to REST`);
+      }
+
+      // 3. Fallback to REST (offline-first retry)
       try {
         const response = await sendChatMessage({
+          id: tempId,
           roomId,
           body: text,
           clientCreatedAt: new Date(clientCreatedAt).toISOString(),
         });
 
-        // 3. Update local record with server response — use saved reference
+        console.log(`[handleSend] REST SUCCESS: id=${tempId}, response.id=${response.id}`);
+        // Update local record with server response
         if (localRecord) {
           await database.write(async () => {
             await localRecord!.update((m) => {
@@ -135,13 +278,14 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
               m.serverVersion = response.version;
             });
           });
+          console.log(`[handleSend] REST: updated id=${tempId}, _status=synced`);
         }
       } catch (err) {
         // REST failed — message stays as PENDING_SEND, will be picked up by sync coordinator
-        console.warn('[Chat] sendChatMessage failed, will retry via sync:', err);
+        console.warn(`[handleSend] REST FAILED: id=${tempId}, err=${err}`);
       }
     } catch (err) {
-      console.error('[Chat] Failed to create local message:', err);
+      console.error(`[handleSend] CREATE FAILED: id=${tempId}, err=${err}`);
     }
   };
 

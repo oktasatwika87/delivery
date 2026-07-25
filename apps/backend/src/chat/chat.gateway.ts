@@ -121,7 +121,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('send_message')
   async handleSendMessage(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { roomId: string; body: string; attachment?: unknown },
+    @MessageBody() payload: { id?: string; roomId: string; body: string; attachment?: unknown },
   ): Promise<{ success: boolean; error?: string; message?: unknown }> {
     const userId = client.data['userId'] as string | undefined;
     if (!userId) {
@@ -130,8 +130,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     try {
       // ChatService.send() melakukan ownership validation + create
+      // Pass client-generated id if provided for consistent ID across devices
       const message = await this.chatService.send(
-        { roomId: payload.roomId, body: payload.body, attachment: payload.attachment as ChatAttachment | undefined },
+        { id: payload.id, roomId: payload.roomId, body: payload.body, attachment: payload.attachment as ChatAttachment | undefined },
         userId,
       );
 
