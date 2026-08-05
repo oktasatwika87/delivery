@@ -7,7 +7,7 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 export const schema = appSchema({
-  version: 3,
+  version: 5,
   tables: [
     tableSchema({
       name: 'users',
@@ -33,6 +33,7 @@ export const schema = appSchema({
         { name: 'notes', type: 'string', isOptional: true },
         { name: 'server_version', type: 'number' },
         { name: 'deleted_at', type: 'number', isOptional: true },
+        { name: 'failed_sync_attempts', type: 'number' },
         { name: 'created_at', type: 'number' },
         { name: 'updated_at', type: 'number' },
       ],
@@ -50,6 +51,7 @@ export const schema = appSchema({
         { name: 'external_ref', type: 'string', isOptional: true },
         { name: 'server_version', type: 'number' },
         { name: 'deleted_at', type: 'number', isOptional: true },
+        { name: 'failed_sync_attempts', type: 'number' },
         { name: 'created_at', type: 'number' },
         { name: 'updated_at', type: 'number' },
       ],
@@ -66,6 +68,22 @@ export const schema = appSchema({
         { name: 'server_created_at', type: 'number', isOptional: true },
         { name: 'server_version', type: 'number' },
         { name: 'deleted_at', type: 'number', isOptional: true },
+        { name: 'failed_sync_attempts', type: 'number' },
+        { name: 'created_at', type: 'number' },
+        { name: 'updated_at', type: 'number' },
+      ],
+    }),
+    // v4 — route_snapshots: cache rute terakhir untuk fallback offline-first
+    // ketika routing API tidak bisa di-fetch (offline).
+    tableSchema({
+      name: 'route_snapshots',
+      columns: [
+        { name: 'origin_lat', type: 'string' },
+        { name: 'origin_lng', type: 'string' },
+        { name: 'dest_lat', type: 'string' },
+        { name: 'dest_lng', type: 'string' },
+        { name: 'geometry_json', type: 'string' },
+        { name: 'fetched_at', type: 'number', isIndexed: true },
         { name: 'created_at', type: 'number' },
         { name: 'updated_at', type: 'number' },
       ],

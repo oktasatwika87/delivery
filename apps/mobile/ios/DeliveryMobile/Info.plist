@@ -33,7 +33,7 @@
 		<true/>
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
+	<string>Aplikasi kurir delivery membutuhkan akses lokasi Anda saat aplikasi terbuka untuk menampilkan posisi Anda di peta dan menghitung rute ke titik pickup serta pengiriman. Lokasi hanya digunakan saat aplikasi aktif dan tidak dikirim ke server saat tidak ada pesanan aktif.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>
