@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { PrismaClient, OrderStatusDb } from '@prisma/client';
 
 import {
@@ -8,9 +8,14 @@ import {
   type Order,
 } from '@delivery/shared';
 
+import { OrdersGateway } from './orders.gateway';
+
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly ordersGateway: OrdersGateway,
+  ) {}
 
   async findById(id: string, userId: string): Promise<Order> {
     const row = await this.prisma.order.findUnique({ where: { id } });
@@ -71,6 +76,108 @@ export class OrdersService {
       },
     });
     return this.toDomain(updated);
+  }
+
+  /**
+   * Driver accept order yang sudah di-assign.
+   * Validasi: DRIVER role, status ASSIGNED, belum ada driver yang accept.
+   * Pakai OCC untuk handle race condition (2 driver accept bersamaan).
+   */
+  async acceptOrder(
+    id: string,
+    expectedVersion: number,
+    driverId: string,
+  ): Promise<Order> {
+    const current = await this.prisma.order.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException(`Order ${id} not found`);
+
+    // Role check: harus DRIVER (dipastikan di controller via @CurrentUser('role'))
+    // Status check: harus ASSIGNED baru bisa di-accept
+    if (current.status !== OrderStatusDb.ASSIGNED) {
+      throw new BadRequestException(
+        `Cannot accept order in status ${current.status}. Expected ASSIGNED.`,
+      );
+    }
+
+    // Ownership: order harus belum di-accept driver lain (driverId === null berarti belum ada yang accept)
+    // Kalau driverId === driverId (driver yang sama), bisa jadi retry — OCC akan handle
+    if (current.driverId !== null && current.driverId !== driverId) {
+      throw new ConflictException('Order already accepted by another driver');
+    }
+
+    try {
+      const updated = await this.prisma.order.update({
+        where: { id, version: expectedVersion },
+        data: {
+          status: OrderStatusDb.PREPARING,
+          driverId, // assign driver saat accept
+          version: { increment: 1 },
+        },
+      });
+
+      // Emit event ke customer via WebSocket
+      this.ordersGateway.emitOrderAccepted(
+        current.customerId,
+        id,
+        driverId,
+        updated.version,
+      );
+
+      return this.toDomain(updated);
+    } catch (err) {
+      // OCC conflict: version mismatch → 409 Conflict
+      // Check code directly since instanceof may fail with mocks
+      const error = err as { code?: string };
+      if (error.code === 'P2025') {
+        throw new ConflictException('Order was modified by another request. Please refresh and try again.');
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Driver reject order yang sudah di-assign.
+   * Validasi: DRIVER role, status ASSIGNED.
+   * Setelah reject, order bisa di-assign ke driver lain.
+   */
+  async rejectOrder(
+    id: string,
+    expectedVersion: number,
+  ): Promise<Order> {
+    const current = await this.prisma.order.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException(`Order ${id} not found`);
+
+    // Status check: harus ASSIGNED baru bisa di-reject
+    if (current.status !== OrderStatusDb.ASSIGNED) {
+      throw new BadRequestException(
+        `Cannot reject order in status ${current.status}. Expected ASSIGNED.`,
+      );
+    }
+
+    try {
+      const updated = await this.prisma.order.update({
+        where: { id, version: expectedVersion },
+        data: {
+          status: OrderStatusDb.CANCELLED,
+          version: { increment: 1 },
+        },
+      });
+
+      // Emit event ke customer via WebSocket
+      this.ordersGateway.emitOrderRejected(
+        current.customerId,
+        id,
+        updated.version,
+      );
+
+      return this.toDomain(updated);
+    } catch (err) {
+      const error = err as { code?: string };
+      if (error.code === 'P2025') {
+        throw new ConflictException('Order was modified by another request. Please refresh and try again.');
+      }
+      throw err;
+    }
   }
 
   private toDomain(row: {

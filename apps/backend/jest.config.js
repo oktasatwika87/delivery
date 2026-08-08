@@ -2,10 +2,10 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/src'],
-  testMatch: ['**/*.spec.ts'],
+  roots: ['<rootDir>/src', '<rootDir>/test'],
+  testMatch: ['**/*.spec.ts', '**/*.e2e-spec.ts'],
   moduleNameMapper: {
-    '^@delivery/shared$': '<rootDir>/../../packages/shared/src',
+    '^@delivery/shared$': '<rootDir>/src/__mocks__/@delivery/shared.ts',
   },
   transform: {
     '^.+\\.tsx?$': [

@@ -41,6 +41,7 @@ model User {
 
 enum OrderStatusDb {
   PENDING
+  ASSIGNED
   CONFIRMED
   PREPARING
   OUT_FOR_DELIVERY
