@@ -22,6 +22,6 @@
     "types": ["node"]
   },
   "include": ["src/**/*", "prisma/seed.ts"],
-  "exclude": ["node_modules", "dist", "**/*.spec.ts"],
+  "exclude": ["node_modules", "dist", "**/*.spec.ts", "src/__mocks__/**/*"],
   "references": [{ "path": "../../packages/shared" }]
 }

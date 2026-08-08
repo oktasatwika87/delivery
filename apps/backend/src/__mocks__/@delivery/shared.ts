@@ -3,6 +3,16 @@
  *
  * Exports minimal set yang dipakai oleh OrdersService dan tests.
  * Kontrak: @delivery/shared/export-order.ts
+ *
+ * NOTE:
+ * - Stale dist: sudah difix via prebuild hook di apps/backend/package.json.
+ *   `pnpm build` di backend auto-build @delivery/shared duluan.
+ * - Mock drift: MASIH OPEN. ESM/CJS interop issue menyebabkan jest tidak bisa
+ *   resolve @delivery/shared (ESM) langsung dari CommonJS test context.
+ *   Selama mock ini ada, setiap field baru di shared/src HARUS di-sync manual ke
+ *   mock ini atau test akan fail saat mock tidak match real source.
+ *   Fix total: investigasi apakah jest bisa dikonfigurasi untuk ESM shared tanpa
+ *   mock, atau align module format antara backend (CJS) dan shared (ESM).
  */
 
 export const OrderStatus = {
@@ -66,6 +76,10 @@ export interface Order {
   createdAt: string;
   updatedAt: string;
   version: number;
+  /** Driver yang cancel order ini (via cancel mid-delivery). */
+  cancelledBy?: string;
+  /** Alasan cancel yang diberikan driver. */
+  cancelReason?: string;
 }
 
 export interface CreateOrderInput {
