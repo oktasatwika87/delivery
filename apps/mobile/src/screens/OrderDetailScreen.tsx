@@ -217,6 +217,14 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         <Text style={styles.chatButtonText}>Chat dengan Kurir / Customer</Text>
       </TouchableOpacity>
 
+      {/* Map Button */}
+      <TouchableOpacity
+        style={styles.mapButton}
+        onPress={() => navigation.navigate('Map', { orderId: order.id })}
+      >
+        <Text style={styles.mapButtonText}>Lihat Rute Pengiriman</Text>
+      </TouchableOpacity>
+
       <View style={styles.bottomSpacer} />
     </ScrollView>
   );
@@ -328,6 +336,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   chatButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  mapButton: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    backgroundColor: '#059669',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  mapButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',

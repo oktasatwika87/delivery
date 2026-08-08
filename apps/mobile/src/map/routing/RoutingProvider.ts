@@ -49,6 +49,20 @@ export interface RoutingProvider {
    * Fetch rute live dari provider.
    * HARUS throw Error kalau offline atau provider error — caller akan fallback
    * ke snapshot. Jangan return null/undefined — gunakan throw saja.
+   *
+   * Catatan: untuk error konfigurasi (API key missing/invalid, 401/403),
+   * throws InvalidConfigError supaya caller bisa bedakan dari transient error.
    */
   getRoute(request: RouteRequest): Promise<Route>;
+}
+
+/**
+ * Error untuk masalah konfigurasi provider (missing API key, unauthorized, dll).
+ * Caller bisa instanceof-check untuk bedakan dari transient error (network/timeout).
+ */
+export class InvalidConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidConfigError';
+  }
 }

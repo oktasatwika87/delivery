@@ -28,12 +28,18 @@ import { LoginScreen } from './src/screens/LoginScreen';
 import { OrdersScreen } from './src/screens/OrdersScreen';
 import { OrderDetailScreen } from './src/screens/OrderDetailScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
+import { MapScreen } from './src/screens/MapScreen';
+import { MapSettingsScreen } from './src/screens/MapSettingsScreen';
+import { routeSnapshotService } from './src/map/routeSnapshot';
+import { networkMonitor } from './src/map/networkMonitor';
 
 export type RootStackParamList = {
   Login: undefined;
   Orders: undefined;
   OrderDetail: { orderId: string };
   Chat: { roomId: string };
+  Map: { orderId: string };
+  MapSettings: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -55,6 +61,22 @@ function App(): React.JSX.Element {
       }
     });
 
+    // Route snapshot retention cleanup — sekali per boot per session
+    // (lihat keputusan #8). LRU max 20 snapshot — lihat routeSnapshot.ts.
+    // Tidak dipicu interval — hemat baterai.
+    routeSnapshotService
+      .runRetentionCleanup(database)
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn('[App] route snapshot retention cleanup failed:', err);
+        }
+      });
+
+    // Network monitor — start periodic ping ke backend supaya UI map
+    // bisa tampil indikator online/offline real-time. Tidak blocking —
+    // optimistic default 'online' sampai ada bukti sebaliknya.
+    networkMonitor.start();
+
     // Auth-check jalan PARALEL dengan sync — tidak saling tunggu.
     (async () => {
       try {
@@ -71,6 +93,7 @@ function App(): React.JSX.Element {
     return () => {
       cancelled = true;
       syncCoordinator.stop();
+      networkMonitor.stop();
     };
   }, []);
 
@@ -126,6 +149,8 @@ function App(): React.JSX.Element {
               <Stack.Screen name="Orders" component={OrdersScreen} />
               <Stack.Screen name="OrderDetail" component={OrderDetailScreen} />
               <Stack.Screen name="Chat" component={ChatScreen} />
+              <Stack.Screen name="Map" component={MapScreen} />
+              <Stack.Screen name="MapSettings" component={MapSettingsScreen} />
             </Stack.Navigator>
           )}
         </NavigationContainer>

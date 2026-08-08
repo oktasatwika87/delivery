@@ -1,26 +1,33 @@
 /**
  * MapScreen — render MapLibre dengan map style lokal, GPS kurir, dan
- * status koneksi. Offline-first: ketika area belum ter-download sebagai
- * offline region, tampilkan placeholder (jangan blank screen).
+ * routing rute dari origin (GPS kurir) ke destination (alamat pengiriman).
+ *
+ * Offline-first: ketika area belum ter-download sebagai offline region,
+ * tampilkan placeholder (jangan blank screen).
+ *
+ * Routing flow:
+ *   1. Terima orderId dari navigation params
+ *   2. Lookup order dari WatermelonDB
+ *   3. Extract destination dari order.addressJson.coordinates
+ *   4. Origin = GPS location kurir (currentLocation)
+ *   5. Kalau keduanya tersedia → call routeService.getRoute()
+ *   6. Render polyline di atas peta
+ *   7. Tampilkan indikator cache/error/loading
  *
  * Pola: functional component + withDatabase HOC, sama dengan chat/Login screen.
- *
- * Status badge online/offline (kiri atas).
- * Indikator GPS aktif/nonaktif (kanan atas).
- * Kalau tidak ada region offline yang downloaded → tampil empty state yang
- * mengajak user ke Settings (MapSettingsScreen).
  */
 
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Linking,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 import MapLibreGL from '@maplibre/maplibre-react-native';
 import { withDatabase } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
@@ -30,33 +37,64 @@ import { TILE_STYLE } from '../map/assets/style';
 import { offlineStorage } from '../map/offlineStorage';
 import { locationService } from '../map/location';
 import { networkMonitor } from '../map/networkMonitor';
+import { RouteService } from '../map/routeService';
+import { GraphHopperRoutingProvider } from '../map/routing';
+import { OrderModel } from '../db/models/OrderModel';
 
-interface Props {
+type Props = NativeStackScreenProps<RootStackParamList, 'Map'> & {
   database: Database;
-}
+};
 
-function MapScreenBase({ database: _database }: Props): React.JSX.Element {
+type LngLat = { lng: number; lat: number };
+
+function MapScreenBase({ database }: Props): React.JSX.Element {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const [isOnline, setIsOnline] = useState<boolean>(networkMonitor.getStatus() === 'online');
-  const [hasOfflineRegion, setHasOfflineRegion] = useState<boolean>(false); // false by default — tunggu load
-  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const route = useRoute<NativeStackScreenProps<RootStackParamList, 'Map'>['route']>();
+  const { orderId } = route.params;
+
+  // Refs
   const cameraRef = useRef<MapLibreGL.CameraRef | null>(null);
 
   // Memoize style object agar MapLibre tidak re-init tiap render.
-  // TILE_STYLE adalah string JSON — parse sekali di module.
   const mapStyle = useMemo(() => JSON.parse(TILE_STYLE), []);
 
-  // Subscribe ke network status.
+  // Memoize RouteService instance (sekali, jangan re-create tiap render)
+  const routeService = useMemo(() => {
+    const provider = new GraphHopperRoutingProvider();
+    return new RouteService({ routingProvider: provider, database });
+  }, [database]);
+
+  // Network state
+  const [isOnline, setIsOnline] = useState<boolean>(networkMonitor.getStatus() === 'online');
+
+  // Offline region state
+  const [hasOfflineRegion, setHasOfflineRegion] = useState<boolean>(false);
+
+  // GPS state
+  const [currentLocation, setCurrentLocation] = useState<LngLat | null>(null);
+
+  // Order state
+  const [orderDestination, setOrderDestination] = useState<LngLat | null>(null);
+  const [orderError, setOrderError] = useState<string | null>(null);
+
+  // Routing state
+  const [routeGeometry, setRouteGeometry] = useState<Array<[number, number]> | null>(null);
+  const [isRoutingLoading, setIsRoutingLoading] = useState<boolean>(false);
+  const [isFromCache, setIsFromCache] = useState<boolean>(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
+
+  // ─── Network monitor subscription ─────────────────────────────────────────
+
   useEffect(() => {
     const unsubscribe = networkMonitor.subscribe((status) => {
       setIsOnline(status === 'online');
     });
-    // Probe langsung saat mount.
     networkMonitor.check().catch(() => {});
     return unsubscribe;
   }, []);
 
-  // Subscribe GPS update — independent dari socket.io chat, isolated.
+  // ─── GPS subscription ────────────────────────────────────────────────────
+
   useEffect(() => {
     const unsubscribe = locationService.subscribe((loc: { coords: { latitude: number; longitude: number } }) => {
       setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
@@ -64,7 +102,8 @@ function MapScreenBase({ database: _database }: Props): React.JSX.Element {
     return unsubscribe;
   }, []);
 
-  // Load daftar pack region offline — kalau kosong, tampil empty state.
+  // ─── Load offline regions ──────────────────────────────────────────────────
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -84,11 +123,106 @@ function MapScreenBase({ database: _database }: Props): React.JSX.Element {
     };
   }, []);
 
+  // ─── Lookup order & extract destination ────────────────────────────────────
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const collection = database.get<OrderModel>('orders');
+        const order = await collection.find(orderId);
+
+        if (cancelled) return;
+
+        // addressJson adalah JSON dengan format DeliveryAddress:
+        // { recipientName, phone, street, city, postalCode, coordinates?: [lng, lat] }
+        // Koordinat di DeliveryAddress mengikuti GeoJSON convention: [lng, lat]
+        const addressJson = order.addressJson as { coordinates?: [number, number] } | null;
+
+        if (addressJson?.coordinates && addressJson.coordinates.length === 2) {
+          // Konversi dari [lng, lat] array ke { lng, lat } object
+          const [lng, lat] = addressJson.coordinates;
+          setOrderDestination({ lng, lat });
+        } else {
+          setOrderError('Alamat pengiriman tidak memiliki koordinat yang valid.');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error('[MapScreen] gagal lookup order:', err);
+          setOrderError('Order tidak ditemukan.');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [database, orderId]);
+
+  // ─── Trigger route fetch saat origin & destination tersedia ─────────────────
+
+  useEffect(() => {
+    if (!currentLocation || !orderDestination) {
+      // Belum punya keduanya — reset state routing
+      setRouteGeometry(null);
+      setRouteError(null);
+      setIsFromCache(false);
+      return;
+    }
+
+    // Origin = currentLocation (GPS kurir)
+    // Konversi dari { lat, lng } ke { lng, lat } untuk RoutingProvider
+    const origin = { lng: currentLocation.lng, lat: currentLocation.lat };
+    const destination = orderDestination; // Sudah { lng, lat }
+
+    let cancelled = false;
+
+    (async () => {
+      setIsRoutingLoading(true);
+      setRouteError(null);
+
+      try {
+        const result = await routeService.getRoute({ origin, destination });
+
+        if (!cancelled) {
+          setRouteGeometry(result.route.geometry);
+          setIsFromCache(result.isFromCache);
+          setRouteError(null);
+
+          // Zoom to fit route
+          if (result.route.geometry.length > 0 && cameraRef.current) {
+            cameraRef.current.fitBounds(
+              [origin.lng, origin.lat],
+              [destination.lng, destination.lat],
+              50, // padding pixels
+              500, // max zoom
+            );
+          }
+        }
+      } catch (err) {
+        if (!cancelled) {
+          const message = err instanceof Error ? err.message : 'Gagal memuat rute.';
+          setRouteError(message);
+          setRouteGeometry(null);
+          setIsFromCache(false);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsRoutingLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentLocation, orderDestination, routeService]);
+
+  // ─── Render ────────────────────────────────────────────────────────────────
+
   return (
     <View style={styles.container}>
-      {/* MapView hanya dirender kalau ada offline region — kalau tidak, empty state overlay
-          di bawah sudah cukup. Ini mencegah MapLibre spam retry fetch saat offline. */}
-      {hasOfflineRegion ? (
+      {/* MapView — hanya render kalau ada offline region */}
+      {hasOfflineRegion && (
         <MapLibreGL.MapView
           style={styles.map}
           mapStyle={mapStyle}
@@ -100,10 +234,51 @@ function MapScreenBase({ database: _database }: Props): React.JSX.Element {
             zoomLevel={13}
             centerCoordinate={currentLocation ? [currentLocation.lng, currentLocation.lat] : [106.827, -6.175]}
           />
-        </MapLibreGL.MapView>
-      ) : null}
 
-      {/* Status indikator online/offline (kiri atas) */}
+          {/* Route polyline */}
+          {routeGeometry && routeGeometry.length > 0 && (
+            <MapLibreGL.ShapeSource
+              id="route"
+              shape={{
+                type: 'Feature',
+                geometry: {
+                  type: 'LineString',
+                  coordinates: routeGeometry,
+                },
+              }}
+            >
+              <MapLibreGL.LineLayer
+                id="route-line"
+                style={{
+                  lineColor: '#2563eb',
+                  lineWidth: 4,
+                  lineOpacity: 0.8,
+                }}
+              />
+            </MapLibreGL.ShapeSource>
+          )}
+
+          {/* Origin marker (kurir) */}
+          {currentLocation && (
+            <MapLibreGL.MarkerView coordinate={[currentLocation.lng, currentLocation.lat]}>
+              <View style={styles.originMarker}>
+                <Text style={styles.originMarkerText}>📍</Text>
+              </View>
+            </MapLibreGL.MarkerView>
+          )}
+
+          {/* Destination marker (alamat pengiriman) */}
+          {orderDestination && (
+            <MapLibreGL.MarkerView coordinate={[orderDestination.lng, orderDestination.lat]}>
+              <View style={styles.destMarker}>
+                <Text style={styles.destMarkerText}>🏁</Text>
+              </View>
+            </MapLibreGL.MarkerView>
+          )}
+        </MapLibreGL.MapView>
+      )}
+
+      {/* Status indikator online/offline */}
       <View style={styles.statusBar}>
         <View
           style={[
@@ -114,7 +289,7 @@ function MapScreenBase({ database: _database }: Props): React.JSX.Element {
         <Text style={styles.statusText}>{isOnline ? 'Online' : 'Offline'}</Text>
       </View>
 
-      {/* GPS indicator (kanan atas) */}
+      {/* GPS indicator */}
       <View style={styles.gpsBar}>
         <View
           style={[
@@ -125,7 +300,36 @@ function MapScreenBase({ database: _database }: Props): React.JSX.Element {
         <Text style={styles.statusText}>{currentLocation ? 'GPS aktif' : 'GPS mencari'}</Text>
       </View>
 
-      {/* Settings button (pojok kanan bawah) */}
+      {/* Routing loading indicator */}
+      {isRoutingLoading && (
+        <View style={styles.routingBar}>
+          <ActivityIndicator size="small" color="#2563eb" />
+          <Text style={styles.routingText}>Memuat rute...</Text>
+        </View>
+      )}
+
+      {/* Cache indicator */}
+      {isFromCache && !isRoutingLoading && !routeError && (
+        <View style={styles.cacheBar}>
+          <Text style={styles.cacheText}>📦 Rute dari cache (data mungkin tidak terbaru)</Text>
+        </View>
+      )}
+
+      {/* Route error */}
+      {routeError && !isRoutingLoading && (
+        <View style={styles.errorBar}>
+          <Text style={styles.errorText}>{routeError}</Text>
+        </View>
+      )}
+
+      {/* Order error */}
+      {orderError && (
+        <View style={styles.errorBar}>
+          <Text style={styles.errorText}>{orderError}</Text>
+        </View>
+      )}
+
+      {/* Settings button */}
       <TouchableOpacity
         style={styles.settingsButton}
         onPress={() => navigation.navigate('MapSettings')}
@@ -133,7 +337,7 @@ function MapScreenBase({ database: _database }: Props): React.JSX.Element {
         <Text style={styles.settingsButtonText}>⚙</Text>
       </TouchableOpacity>
 
-      {/* Empty state overlay — area belum pernah didownload */}
+      {/* Empty state overlay */}
       {!hasOfflineRegion && (
         <View style={styles.emptyOverlay}>
           <Text style={styles.emptyTitle}>Peta offline belum tersedia</Text>
@@ -149,7 +353,6 @@ function MapScreenBase({ database: _database }: Props): React.JSX.Element {
           <TouchableOpacity
             style={styles.openSettingsTextButton}
             onPress={() => {
-              // Trigger native settings so user can grant location if denied.
               Linking.openSettings().catch(() => {});
             }}
           >
@@ -164,6 +367,8 @@ function MapScreenBase({ database: _database }: Props): React.JSX.Element {
 const enhance = withDatabase(MapScreenBase);
 
 export { enhance as MapScreen };
+
+// ─── Styles ─────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
@@ -186,7 +391,7 @@ const styles = StyleSheet.create({
   },
   gpsBar: {
     position: 'absolute',
-    top: 16,
+    top: 56,
     right: 16,
     flexDirection: 'row',
     alignItems: 'center',
@@ -200,6 +405,57 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
   },
+  routingBar: {
+    position: 'absolute',
+    top: 16,
+    left: '50%',
+    transform: [{ translateX: -50 }],
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  routingText: { fontSize: 13, fontWeight: '600', color: '#374151', marginLeft: 8 },
+  cacheBar: {
+    position: 'absolute',
+    top: 16,
+    left: '50%',
+    transform: [{ translateX: -50 }],
+    backgroundColor: 'rgba(254, 243, 199, 0.95)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  cacheText: { fontSize: 12, fontWeight: '500', color: '#92400e' },
+  errorBar: {
+    position: 'absolute',
+    top: 16,
+    left: '50%',
+    transform: [{ translateX: -50 }],
+    backgroundColor: 'rgba(254, 226, 226, 0.95)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    maxWidth: '80%',
+  },
+  errorText: { fontSize: 12, fontWeight: '500', color: '#991b1b', textAlign: 'center' },
   statusDot: {
     width: 8,
     height: 8,
@@ -207,6 +463,16 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   statusText: { fontSize: 12, fontWeight: '600', color: '#374151' },
+  originMarker: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  originMarkerText: { fontSize: 24 },
+  destMarker: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  destMarkerText: { fontSize: 24 },
   emptyOverlay: {
     position: 'absolute',
     bottom: 0,
