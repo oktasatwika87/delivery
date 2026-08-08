@@ -59,6 +59,11 @@ export interface Order {
   updatedAt: string;
   /** Optimistic concurrency control — backend reject update kalau client kirim value lama. */
   version: number;
+
+  /** Driver yang cancel order ini (via cancel mid-delivery). */
+  cancelledBy?: string;
+  /** Alasan cancel yang diberikan driver. */
+  cancelReason?: string;
 }
 
 /** Request body untuk create order dari mobile. */

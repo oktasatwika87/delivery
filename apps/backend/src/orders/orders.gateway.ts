@@ -41,4 +41,17 @@ export class OrdersGateway {
       version: newVersion,
     });
   }
+
+  /**
+   * Emit event ke customer saat driver cancel mid-delivery.
+   * Payload: { orderId, status, version, reason? }
+   */
+  emitOrderCancelled(customerId: string, orderId: string, newVersion: number, reason?: string): void {
+    this.server.to(customerId).emit('order:cancelled', {
+      orderId,
+      status: 'CONFIRMED',
+      version: newVersion,
+      reason,
+    });
+  }
 }

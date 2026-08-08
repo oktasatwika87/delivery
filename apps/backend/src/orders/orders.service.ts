@@ -180,6 +180,70 @@ export class OrdersService {
     }
   }
 
+  /**
+   * Driver cancel order yang sudah di-assign.
+   * Validasi: DRIVER role, status ASSIGNED/PREPARING/OUT_FOR_DELIVERY,
+   * driver adalah owner dari order ini.
+   * Setelah cancel, order kembali ke CONFIRMED dan bisa di-assign ulang.
+   */
+  async cancelOrder(
+    id: string,
+    expectedVersion: number,
+    driverId: string,
+    reason?: string,
+  ): Promise<Order> {
+    const current = await this.prisma.order.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException(`Order ${id} not found`);
+
+    // Driver ownership: hanya driver yang sedang assigned yang boleh cancel
+    if (current.driverId !== driverId) {
+      throw new ForbiddenException('You are not assigned to this order');
+    }
+
+    // Status check: harus ASSIGNED, PREPARING, atau OUT_FOR_DELIVERY
+    const isCancellable = (
+      status: OrderStatusDb,
+    ): status is 'ASSIGNED' | 'PREPARING' | 'OUT_FOR_DELIVERY' =>
+      status === OrderStatusDb.ASSIGNED ||
+      status === OrderStatusDb.PREPARING ||
+      status === OrderStatusDb.OUT_FOR_DELIVERY;
+
+    if (!isCancellable(current.status)) {
+      throw new BadRequestException(
+        `Cannot cancel order in status ${current.status}. Must be ASSIGNED, PREPARING, or OUT_FOR_DELIVERY.`,
+      );
+    }
+
+    try {
+      const updated = await this.prisma.order.update({
+        where: { id, version: expectedVersion },
+        data: {
+          status: OrderStatusDb.CONFIRMED,
+          driverId: null,
+          cancelledBy: driverId,
+          cancelReason: reason,
+          version: { increment: 1 },
+        },
+      });
+
+      // Emit event ke customer via WebSocket
+      this.ordersGateway.emitOrderCancelled(
+        current.customerId,
+        id,
+        updated.version,
+        reason,
+      );
+
+      return this.toDomain(updated);
+    } catch (err) {
+      const error = err as { code?: string };
+      if (error.code === 'P2025') {
+        throw new ConflictException('Order was modified by another request. Please refresh and try again.');
+      }
+      throw err;
+    }
+  }
+
   private toDomain(row: {
     id: string;
     customerId: string;
@@ -193,6 +257,8 @@ export class OrdersService {
     version: number;
     createdAt: Date;
     updatedAt: Date;
+    cancelledBy: string | null;
+    cancelReason: string | null;
   }): Order {
     return {
       id: row.id,
@@ -204,6 +270,8 @@ export class OrdersService {
       totalCents: row.totalCents,
       currency: row.currency,
       notes: row.notes ?? undefined,
+      cancelledBy: row.cancelledBy ?? undefined,
+      cancelReason: row.cancelReason ?? undefined,
       version: row.version,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),

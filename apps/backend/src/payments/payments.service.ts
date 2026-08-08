@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
 import type { CreatePaymentInput, Payment } from '@delivery/shared';
@@ -41,6 +41,57 @@ export class PaymentsService {
       data: { status: 'CAPTURED', version: { increment: 1 } },
     });
     return this.toDomain(updated);
+  }
+
+  /**
+   * Driver collects COD (cash on delivery) for an order.
+   * Reuses the existing idempotency key pattern to prevent double-collection.
+   * Creates payment with method: CASH and status: CAPTURED directly.
+   */
+  async collectCod(
+    orderId: string,
+    driverId: string,
+    amountCents: number,
+    idempotencyKey: string,
+  ): Promise<Payment> {
+    // Verify driver is assigned to this order
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) {
+      throw new NotFoundException(`Order ${orderId} not found`);
+    }
+    if (order.driverId !== driverId) {
+      throw new ForbiddenException('You are not assigned to this order');
+    }
+
+    // Use upsert with idempotency key to prevent double-collection
+    // If idempotencyKey already exists, return the existing record
+    let row: Awaited<ReturnType<PrismaClient['payment']['create']>>;
+    try {
+      row = await this.prisma.payment.create({
+        data: {
+          orderId,
+          idempotencyKey,
+          method: 'CASH',
+          status: 'CAPTURED',
+          amountCents,
+          currency: order.currency,
+          kind: 'PAYMENT',
+        },
+      });
+    } catch (err) {
+      // Unique constraint violation on idempotencyKey → record already exists
+      const error = err as { code?: string };
+      if (error.code === 'P2002') {
+        const existing = await this.prisma.payment.findUnique({
+          where: { idempotencyKey },
+        });
+        if (existing) {
+          return this.toDomain(existing);
+        }
+      }
+      throw err;
+    }
+    return this.toDomain(row);
   }
 
   private toDomain(row: {

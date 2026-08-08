@@ -241,4 +241,227 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
   });
+
+  describe('cancel mid-delivery: driver cancel order', () => {
+    test('driver cancel dari ASSIGNED - order CONFIRMED, driverId null, bisa di-assign ulang', async () => {
+      // Setup: buat order di ASSIGNED (tanpa driver), assign ke driver, lalu cancel
+      const orderId = 'e2e00000-0000-0000-0000-000000000d01';
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: null,
+          status: 'ASSIGNED',
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+        },
+        update: {},
+      });
+
+      try {
+        // Driver accept dulu (ini set driverId)
+        const acceptResp = await request(app.getHttpServer())
+          .post(`/orders/${orderId}/accept`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ version: 1 })
+          .expect(200);
+        expect(acceptResp.body.status).toBe('PREPARING');
+        expect(acceptResp.body.driverId).toBe(driverUserId);
+
+        // Driver cancel - order goes back to CONFIRMED, driver cleared
+        const cancelResp = await request(app.getHttpServer())
+          .post(`/orders/${orderId}/cancel`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ version: 2, reason: 'Kendaraan mogok' })
+          .expect(200);
+        expect(cancelResp.body.status).toBe('CONFIRMED');
+        // driverId cleared so order can be re-assigned by dispatcher
+        expect(cancelResp.body.driverId).toBeFalsy();
+        // Note: reassignment from CONFIRMED -> ASSIGNED is handled externally
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('driver cancel PREPARING - 403 jika bukan owner', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000d02';
+      const driver2Token = generateToken(driver2UserId, UserRole.DRIVER);
+
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId, // assigned to driver1
+          status: 'PREPARING',
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+        },
+        update: {},
+      });
+
+      try {
+        // driver2 coba cancel order driver1 → harus 403
+        await request(app.getHttpServer())
+          .post(`/orders/${orderId}/cancel`)
+          .set('Authorization', `Bearer ${driver2Token}`)
+          .send({ version: 1 })
+          .expect(403);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('400 jika order tidak dalam status cancellable (PENDING)', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000d03';
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: 'PENDING',
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+        },
+        update: {},
+      });
+
+      try {
+        await request(app.getHttpServer())
+          .post(`/orders/${orderId}/cancel`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ version: 1 })
+          .expect(400);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+  });
+
+  describe('COD collection', () => {
+    test('driver collect COD - payment CASH CAPTURED', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000e01';
+      const idempotencyKey = 'cod-idem-e2e-001';
+
+      // Buat order PREPARING dengan driver assigned
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: 'PREPARING',
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+        },
+        update: {},
+      });
+
+      try {
+        const resp = await request(app.getHttpServer())
+          .post(`/payments/${orderId}/collect-cod`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ amountCents: 50000, idempotencyKey })
+          .expect(201);
+
+        expect(resp.body.method).toBe('CASH');
+        expect(resp.body.status).toBe('CAPTURED');
+        expect(resp.body.amountCents).toBe(50000);
+        expect(resp.body.orderId).toBe(orderId);
+      } finally {
+        await prisma.payment.deleteMany({ where: { orderId } }).catch(() => {});
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('idempotency key replay - no double-create', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000e02';
+      const idempotencyKey = 'cod-idem-e2e-002';
+
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: 'PREPARING',
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+        },
+        update: {},
+      });
+
+      try {
+        // Request pertama
+        await request(app.getHttpServer())
+          .post(`/payments/${orderId}/collect-cod`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ amountCents: 50000, idempotencyKey })
+          .expect(201);
+
+        // Request kedua dengan idempotency key yang sama - harus berhasil tapi tidak double-create
+        const resp2 = await request(app.getHttpServer())
+          .post(`/payments/${orderId}/collect-cod`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ amountCents: 50000, idempotencyKey })
+          .expect(201);
+
+        // Cek hanya ada 1 payment record
+        const payments = await prisma.payment.findMany({ where: { orderId } });
+        expect(payments.length).toBe(1);
+      } finally {
+        await prisma.payment.deleteMany({ where: { orderId } }).catch(() => {});
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('403 jika bukan assigned driver', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000e03';
+      const driver2Token = generateToken(driver2UserId, UserRole.DRIVER);
+
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: 'PREPARING',
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+        },
+        update: {},
+      });
+
+      try {
+        await request(app.getHttpServer())
+          .post(`/payments/${orderId}/collect-cod`)
+          .set('Authorization', `Bearer ${driver2Token}`)
+          .send({ amountCents: 50000, idempotencyKey: 'cod-idem-e2e-003' })
+          .expect(403);
+      } finally {
+        await prisma.payment.deleteMany({ where: { orderId } }).catch(() => {});
+        await cleanupOrder(orderId);
+      }
+    });
+  });
 });

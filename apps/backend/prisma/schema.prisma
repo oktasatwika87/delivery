@@ -68,6 +68,10 @@ model Order {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
+  // Cancel tracking — filled when driver cancels (not customer cancellation via PATCH /status)
+  cancelledBy  String?  @map("cancelled_by")
+  cancelReason String?  @map("cancel_reason")
+
   // Relations
   customer User      @relation("CustomerOrders", fields: [customerId], references: [id])
   driver   User?     @relation("DriverOrders", fields: [driverId], references: [id])
