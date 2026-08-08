@@ -43,6 +43,8 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [isSocketConnected, setIsSocketConnected] = useState(false);
+  const [renderKey, setRenderKey] = useState(0); // increments to force FlatList re-render on observe emit
   const flatListRef = useRef<FlatList>(null);
 
   // Load current user ID
@@ -66,6 +68,9 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
           .subscribe({
             next: (records) => {
               setMessages(records);
+              // Increment renderKey so FlatList re-renders even if the array
+              // reference is unchanged (WatermelonDB observe mutates in-place).
+              setRenderKey((k) => k + 1);
               setIsLoading(false);
             },
             error: (err) => {
@@ -89,9 +94,28 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
   // Socket lifecycle — connect & join room, leave on cleanup
   useEffect(() => {
     let unsubNewMessage: (() => void) | null = null;
+    let unsubConnect: (() => void) | null = null;
+    let unsubDisconnect: (() => void) | null = null;
+    let unsubConnectError: (() => void) | null = null;
     let joined = false;
 
     const setupSocket = async () => {
+      // Subscribe to connection status changes
+      unsubConnect = chatSocket.on('connect', () => {
+        console.info('[Chat] socket connected');
+        setIsSocketConnected(true);
+      });
+
+      unsubDisconnect = chatSocket.on('disconnect', (reason) => {
+        console.warn('[Chat] socket disconnected:', reason);
+        setIsSocketConnected(false);
+      });
+
+      unsubConnectError = chatSocket.on('connect_error', (error) => {
+        console.error('[Chat] socket connect_error:', error);
+        setIsSocketConnected(false);
+      });
+
       // Connect if not already connected
       if (!chatSocket.isConnected) {
         try {
@@ -172,9 +196,12 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
 
     setupSocket();
 
-    // Cleanup: leave room & unsubscribe listener
+    // Cleanup: leave room & unsubscribe all listeners
     return () => {
       unsubNewMessage?.();
+      unsubConnect?.();
+      unsubDisconnect?.();
+      unsubConnectError?.();
 
       if (joined) {
         chatSocket.emitToServer('leave_room', { roomId });
@@ -332,6 +359,15 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
+      {/* Socket connection status indicator */}
+      {!isSocketConnected && (
+        <View style={styles.connectionBanner}>
+          <Text style={styles.connectionBannerText}>
+            Koneksi real-time terputus — pesan akan dikirim saat koneksi pulih
+          </Text>
+        </View>
+      )}
+
       <FlatList
         ref={flatListRef}
         data={messages}
@@ -339,6 +375,11 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
         renderItem={renderMessage}
         contentContainerStyle={styles.messageList}
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+        // extraData forces FlatList to re-render when observer emits new records.
+        // Without it, React may skip re-render when the array reference is unchanged
+        // (WatermelonDB observe() mutates Model instances in-place, so the same
+        // array + Model references can be returned — shallow compare sees "no change").
+        extraData={renderKey}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>Belum ada pesan.</Text>
@@ -379,6 +420,18 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f3f4f6',
+  },
+  connectionBanner: {
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#fcd34d',
+  },
+  connectionBannerText: {
+    fontSize: 12,
+    color: '#92400e',
+    textAlign: 'center',
   },
   center: {
     flex: 1,
