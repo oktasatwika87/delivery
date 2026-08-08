@@ -8,6 +8,7 @@
 
 export const OrderStatus = {
   PENDING: 'PENDING',
+  ASSIGNED: 'ASSIGNED',
   CONFIRMED: 'CONFIRMED',
   PREPARING: 'PREPARING',
   OUT_FOR_DELIVERY: 'OUT_FOR_DELIVERY',
@@ -70,7 +71,8 @@ export interface CreateOrderInput {
 /** Valid state transitions — dipakai oleh backend validator. */
 export const ORDER_ALLOWED_TRANSITIONS: Readonly<Record<OrderStatus, readonly OrderStatus[]>> = {
   PENDING: [OrderStatus.CONFIRMED, OrderStatus.CANCELLED],
-  CONFIRMED: [OrderStatus.PREPARING, OrderStatus.CANCELLED],
+  CONFIRMED: [OrderStatus.ASSIGNED, OrderStatus.CANCELLED],
+  ASSIGNED: [OrderStatus.PREPARING, OrderStatus.CANCELLED],
   PREPARING: [OrderStatus.OUT_FOR_DELIVERY, OrderStatus.CANCELLED],
   OUT_FOR_DELIVERY: [OrderStatus.DELIVERED, OrderStatus.CANCELLED],
   DELIVERED: [],
