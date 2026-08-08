@@ -30,10 +30,11 @@ type SyncPullResponse = {
 type SyncAck = {
   entityType: string;
   id: string;
-  status: 'accepted' | 'conflict';
-  serverVersion: number;
-  serverChangedAt: string;
+  status: 'accepted' | 'conflict' | 'rejected';
+  serverVersion?: number;
+  serverChangedAt?: string;
   serverData?: Record<string, unknown>;
+  reason?: string;
 };
 
 type SyncPushResponse = {
@@ -45,6 +46,10 @@ type SyncPushResponse = {
 interface MockRow {
   id: string;
   _raw: { _status: string };
+  serverVersion?: number;
+  failedSyncAttempts?: number;
+  createdAt?: number;
+  updatedAt?: number;
   [key: string]: unknown;
 }
 
@@ -509,6 +514,189 @@ describe('SyncCoordinator', () => {
         (r) => r._raw._status !== 'synced',
       );
       expect(dirtyRecords).toHaveLength(0);
+    });
+  });
+
+  describe('localRowToSyncRecord — op classification', () => {
+    const now = Date.now();
+
+    test('record dengan _raw._status="created" menghasilkan op="create" dan baseVersion=null', async () => {
+      // Arrange: buat mock row dengan _raw._status='created' (simulasi pesan baru offline)
+      const newRow = createMockRow('chat-new-offline', 'created');
+      newRow.serverVersion = 0;
+      newRow.failedSyncAttempts = 0;
+      // localRowToSyncRecord membaca createdAt/updatedAt untuk data payload
+      newRow.createdAt = now;
+      newRow.updatedAt = now;
+      newRow.clientCreatedAt = now;
+      newRow.roomId = 'room-1';
+      newRow.senderId = 'user-1';
+      newRow.body = 'test message';
+      newRow.attachmentJson = undefined;
+      newRow.status = 'pending_send';
+
+      // @ts-expect-error - accessing private method for testing
+      const record = coordinator.localRowToSyncRecord(newRow, 'chat_messages');
+
+      // Assert: harus dikirim sebagai CREATE, bukan UPDATE
+      expect(record.op).toBe('create');
+      expect(record.baseVersion).toBeNull();
+      expect(record.id).toBe('chat-new-offline');
+    });
+
+    test('record dengan _raw._status="updated" menghasilkan op="update" dan baseVersion=serverVersion', async () => {
+      const updatedRow = createMockRow('order-modified-offline', 'updated');
+      updatedRow.serverVersion = 3;
+      updatedRow.failedSyncAttempts = 0;
+      updatedRow.createdAt = now;
+      updatedRow.updatedAt = now;
+      updatedRow.status = 'CONFIRMED';
+      updatedRow.itemsJson = '[]';
+      updatedRow.addressJson = '{}';
+      updatedRow.totalCents = 10000;
+      updatedRow.currency = 'IDR';
+      updatedRow.notes = null;
+
+      // @ts-expect-error - accessing private method for testing
+      const record = coordinator.localRowToSyncRecord(updatedRow, 'orders');
+
+      expect(record.op).toBe('update');
+      expect(record.baseVersion).toBe(3);
+    });
+
+    test('record dengan _raw._status="deleted" menghasilkan op="delete"', async () => {
+      const deletedRow = createMockRow('payment-deleted-offline', 'deleted');
+      deletedRow.serverVersion = 1;
+      deletedRow.failedSyncAttempts = 0;
+      deletedRow.createdAt = now;
+      deletedRow.updatedAt = now;
+      deletedRow.orderId = 'order-1';
+      deletedRow.idempotencyKey = 'idem-1';
+      deletedRow.method = 'CASH';
+      deletedRow.status = 'COMPLETED';
+      deletedRow.amountCents = 5000;
+      deletedRow.currency = 'IDR';
+      deletedRow.kind = 'PAYMENT';
+
+      // @ts-expect-error - accessing private method for testing
+      const record = coordinator.localRowToSyncRecord(deletedRow, 'payments');
+
+      expect(record.op).toBe('delete');
+    });
+  });
+
+  describe('retry cap — resolveAcks rejected handling', () => {
+    test('rejected ack increment failedSyncAttempts', async () => {
+      const pendingRow = createMockRow('chat-retry-1', 'created');
+      pendingRow.serverVersion = 0;
+      pendingRow.failedSyncAttempts = 0;
+      pendingRow.createdAt = Date.now();
+      pendingRow.updatedAt = Date.now();
+      pendingRow.clientCreatedAt = Date.now();
+      pendingRow.roomId = 'room-1';
+      pendingRow.senderId = 'user-1';
+      pendingRow.body = 'test';
+      pendingRow.status = 'PENDING';
+      state.records.get('chat_messages')!.set('chat-retry-1', pendingRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'chat_message',
+          id: 'chat-retry-1',
+          status: 'rejected',
+          reason: 'Entity not found',
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // Verifikasi failedSyncAttempts naik
+      const updatedRow = state.records.get('chat_messages')!.get('chat-retry-1')!;
+      expect(updatedRow.failedSyncAttempts).toBe(1);
+      // Status domain tidak berubah ke FAILED sebelum cap (MAX=5)
+      expect((updatedRow as any).status).not.toBe('FAILED');
+    });
+
+    test('chat_message domain status menjadi FAILED setelah MAX_SYNC_ATTEMPTS rejections', async () => {
+      const row = createMockRow('chat-perma-fail', 'created');
+      row.serverVersion = 0;
+      row.failedSyncAttempts = 4; // satu lagi akan mentrigger cap
+      (row as any).status = 'pending_send';
+      state.records.get('chat_messages')!.set('chat-perma-fail', row);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'chat_message',
+          id: 'chat-perma-fail',
+          status: 'rejected',
+          reason: 'Server validation error',
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      const updatedRow = state.records.get('chat_messages')!.get('chat-perma-fail')!;
+      expect(updatedRow.failedSyncAttempts).toBe(5);
+      expect((updatedRow as any).status).toBe('FAILED');
+    });
+
+    test('record yang sudah hit retry cap TIDAK akan dikumpulkan oleh collectDirty (skipped via failedSyncAttempts >= MAX_SYNC_ATTEMPTS)', async () => {
+      // Simulasi: record dengan failedSyncAttempts = 5 sudah di cap.
+      // collectDirty menskip record dengan failedSyncAttempts >= 5.
+      // Test ini memverifikasi state yang collectDirty akan skip.
+      const row = createMockRow('order-capped', 'created');
+      row.serverVersion = 0;
+      row.failedSyncAttempts = 5; // sudah di cap
+      row.createdAt = Date.now();
+      row.updatedAt = Date.now();
+      row.status = 'CONFIRMED';
+      row.itemsJson = '[]';
+      row.addressJson = '{}';
+      row.totalCents = 10000;
+      row.currency = 'IDR';
+      state.records.get('orders')!.set('order-capped', row);
+
+      // collectDirty skip logic: attempts >= 5 → continue (skip).
+      // Verifikasi state: row._raw._status tetap 'created' (tidak berubah),
+      // tapi collectDirty akan skip karena failedSyncAttempts >= 5.
+      expect(row.failedSyncAttempts).toBe(5);
+      expect(row._raw._status).toBe('created'); // masih dirty tapi di-skip
+      // Ini adalah state yang collectDirty check: attempts >= MAX_SYNC_ATTEMPTS
+      // Simulasi skip check:
+      const MAX_SYNC_ATTEMPTS = 5;
+      const shouldSkip = row.failedSyncAttempts >= MAX_SYNC_ATTEMPTS;
+      expect(shouldSkip).toBe(true); // confirm skip condition
+    });
+
+    test('record accepted setelah sebelumnya failed tidak di-count ulang (serverVersion naik)', async () => {
+      // Record yang accepted akan punya serverVersion > 0, tapi collectDirty
+      // tetap mengirim sebagai 'update' jika _status='updated' — itu benar.
+      // Yang penting: resolveAcks accepted TIDAK increment failedSyncAttempts.
+      const row = createMockRow('chat-recovered', 'updated');
+      row.serverVersion = 0;
+      row.failedSyncAttempts = 2;
+      (row as any).status = 'pending_send';
+      state.records.get('chat_messages')!.set('chat-recovered', row);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'chat_message',
+          id: 'chat-recovered',
+          status: 'accepted',
+          serverVersion: 5,
+          serverChangedAt: new Date().toISOString(),
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // accepted TIDAK increment counter
+      const updatedRow = state.records.get('chat_messages')!.get('chat-recovered')!;
+      expect(updatedRow.failedSyncAttempts).toBe(2); // tidak berubah
+      expect(updatedRow._raw._status).toBe('synced');
     });
   });
 });

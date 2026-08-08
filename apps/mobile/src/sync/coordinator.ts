@@ -24,6 +24,19 @@ import { loadCursor, saveCursor } from './cursor';
 import { getDeviceId } from './device';
 import { getCurrentUserId } from './session';
 
+/**
+ * Maximum consecutive failed sync attempts per record. After this many
+ * `rejected` acks for the same row, sync coordinator stops collecting it
+ * and flips the row to `FAILED_SYNC` status (where the model supports a
+ * domain status field; otherwise stops silently). Prevents infinite
+ * silent retry storms when the server consistently rejects a record.
+ *
+ * Sync tick adalah 30 detik, jadi 5 attempts ≈ 2.5 menit. Cukup untuk
+ * ride out window offline pendek, cukup pendek agar kegagalan
+ * permanen surfaced ke user.
+ */
+const MAX_SYNC_ATTEMPTS = 5;
+
 interface Coordinator {
   start(db: Database): Promise<void>;
   stop(): void;
@@ -304,7 +317,7 @@ export class SyncCoordinator implements Coordinator {
     for (const colName of collections) {
       const collection = db.get(colName);
 
-      // WatermelonDB internal _status:
+      // WatermelonDB internal _status (pada row._raw._status, BUKAN row._status):
       // 'created' = baru dibuat lokal, blm pernah sync
       // 'updated' = dimodifikasi lokal, blm sync
       // 'deleted' = ditandai hapus lokal
@@ -318,9 +331,22 @@ export class SyncCoordinator implements Coordinator {
       ).fetch();
 
       for (const row of dirty) {
+        // Skip rows yang sudah melewati retry cap — resolveAcks() sudah
+        // tandai mereka FAILED_SYNC dan increment failedSyncAttempts.
+        // Mereka tidak akan pernah disinkronkan ulang, menghindari
+        // silent retry storm.
+        const raw = (row as any)._raw;
+        const attempts = (row as any).failedSyncAttempts ?? 0;
+        if (attempts >= MAX_SYNC_ATTEMPTS) {
+          console.warn(
+            `[collectDirty] Skipping ${colName}: id=${row.id} — hit retry cap (${attempts}/${MAX_SYNC_ATTEMPTS})`,
+          );
+          continue;
+        }
+
         // DEBUG: Log all dirty records
         const syncRecord = this.localRowToSyncRecord(row, colName);
-        console.log(`[collectDirty] ${colName}: id=${syncRecord.id}, _status=${(row as any)._status}, op=${syncRecord.op}, baseVersion=${syncRecord.baseVersion}`);
+        console.log(`[collectDirty] ${colName}: id=${syncRecord.id}, _status=${raw._status}, op=${syncRecord.op}, baseVersion=${syncRecord.baseVersion}, attempts=${attempts}`);
         records.push(syncRecord);
       }
     }
@@ -335,13 +361,19 @@ export class SyncCoordinator implements Coordinator {
    * - camelCase domain types -> snake_case DB columns
    *   NOTE: @json decorator auto-parses on read, so use fields directly without JSON.parse.
    *
-   * _status mapping:
+   * _raw._status mapping:
    * - 'created' -> op: 'create', baseVersion: null
    * - 'updated' -> op: 'update', baseVersion: row.serverVersion
    * - 'deleted' -> op: 'delete', baseVersion: row.serverVersion
+   *
+   * PENTING: baca dari row._raw._status, BUKAN row._status. Model-model
+   * WatermelonDB tidak expose `_status` sebagai getter, jadi
+   * `row._status` selalu undefined dan akan selalu jatuh ke `op='update'`,
+   * yang menyebabkan server reject "Entity not found" terus-menerus.
    */
   private localRowToSyncRecord(row: any, colName: string): SyncRecordPush {
-    const status = row._status as string;
+    const raw = row._raw as { _status?: string };
+    const status = raw._status as string;
     const baseVersion = status === 'created' ? null : (row.serverVersion as number);
 
     // Determine op
@@ -465,11 +497,44 @@ export class SyncCoordinator implements Coordinator {
           }));
         }
       } else if (ack.status === 'rejected') {
-        // Rejected: row tetap dirty, akan di-retry next sync
-        console.warn(
-          `[resolveAcks] Record rejected by server: entityType=${ack.entityType}, id=${ack.id}`,
-          ack.reason ? `reason=${ack.reason}` : '',
-        );
+        // Rejected: increment retry counter, cap at MAX_SYNC_ATTEMPTS.
+        // After hitting the cap, stop collecting — avoids infinite retry storms.
+        const collection = this.collectionFor(ack.entityType, db);
+        if (!collection) continue;
+
+        const existing = await collection.find(ack.id).catch(() => null);
+        if (existing) {
+          const currentAttempts = (existing as any).failedSyncAttempts ?? 0;
+          const nextAttempts = currentAttempts + 1;
+
+          batch.push(existing.prepareUpdate((r: any) => {
+            r.failedSyncAttempts = nextAttempts;
+            // For chat messages, flip domain status to FAILED so UI can surface it
+            if (ack.entityType === 'chat_message' && nextAttempts >= MAX_SYNC_ATTEMPTS) {
+              (r as any).status = 'FAILED';
+              console.error(
+                `[resolveAcks] Record permanently rejected after ${MAX_SYNC_ATTEMPTS} attempts — chat_message id=${ack.id} marked FAILED. ` +
+                `User should be notified. Server reason: ${ack.reason ?? 'unknown'}`,
+              );
+            } else if (nextAttempts >= MAX_SYNC_ATTEMPTS) {
+              console.error(
+                `[resolveAcks] Record permanently rejected after ${MAX_SYNC_ATTEMPTS} attempts — ${ack.entityType} id=${ack.id}. ` +
+                `Sync coordinator will stop retrying. Server reason: ${ack.reason ?? 'unknown'}`,
+              );
+            }
+          }));
+
+          console.warn(
+            `[resolveAcks] Record rejected by server: entityType=${ack.entityType}, id=${ack.id}`,
+            ack.reason ? `reason=${ack.reason}` : '',
+            `attempt ${nextAttempts}/${MAX_SYNC_ATTEMPTS}`,
+          );
+        } else {
+          console.warn(
+            `[resolveAcks] Record rejected but not found locally: entityType=${ack.entityType}, id=${ack.id}`,
+            ack.reason ? `reason=${ack.reason}` : '',
+          );
+        }
       }
     }
 

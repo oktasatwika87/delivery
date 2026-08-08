@@ -16,6 +16,7 @@ export class PaymentModel extends Model {
   @text('external_ref') externalRef?: string;
   @field('server_version') serverVersion!: number;
   @date('deleted_at') deletedAt?: Date;
+  @field('failed_sync_attempts') failedSyncAttempts!: number;
 
   @readonly @date('created_at') createdAt!: Date;
   @readonly @date('updated_at') updatedAt!: Date;
