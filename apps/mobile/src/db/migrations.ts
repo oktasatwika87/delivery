@@ -8,6 +8,7 @@ import { schemaMigrations, createTable, addColumns } from '@nozbe/watermelondb/S
  * v3 -> v4: Tambah tabel route_snapshots (offline-first route cache)
  * v4 -> v5: Tambah failed_sync_attempts ke orders/payments/chat_messages
  *           (cap retry agar record yang gagal sync tidak stuck retry forever)
+ * v5 -> v6: Tambah cancelled_by & cancel_reason ke orders (cancel offline)
  */
 export const watermelonMigrations = schemaMigrations({
   migrations: [
@@ -102,6 +103,20 @@ export const watermelonMigrations = schemaMigrations({
         addColumns({
           table: 'chat_messages',
           columns: [{ name: 'failed_sync_attempts', type: 'number' }],
+        }),
+      ],
+    },
+    // v5 -> v6: cancelled_by & cancel_reason — track siapa yang cancel
+    // dan alasannya. Dipakai untuk offline cancel order flow.
+    {
+      toVersion: 6,
+      steps: [
+        addColumns({
+          table: 'orders',
+          columns: [
+            { name: 'cancelled_by', type: 'string', isOptional: true },
+            { name: 'cancel_reason', type: 'string', isOptional: true },
+          ],
         }),
       ],
     },

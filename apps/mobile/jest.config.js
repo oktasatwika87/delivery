@@ -7,7 +7,7 @@ module.exports = {
   // tidak silently skip. .ts tetap included.
   testMatch: ['**/*.spec.ts', '**/*.spec.tsx'],
   moduleNameMapper: {
-    '^@delivery/shared$': '<rootDir>/../../packages/shared/src',
+    '^@delivery/shared$': '<rootDir>/../../packages/shared/dist',
     '^react-native-config$': '<rootDir>/src/__mocks__/react-native-config.ts',
     '^react-native-keychain$': '<rootDir>/src/__mocks__/react-native-keychain.ts',
     '^@react-native-async-storage/async-storage$': '<rootDir>/src/__mocks__/@react-native-async-storage/async-storage.ts',

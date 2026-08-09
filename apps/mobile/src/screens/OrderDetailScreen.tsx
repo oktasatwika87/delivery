@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,6 +14,8 @@ import type { Database } from '@nozbe/watermelondb';
 
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
+import { getCurrentUserId } from '../sync/session';
+import { OrderStatus } from '@delivery/shared';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -104,6 +107,11 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [order, setOrder] = useState<OrderModel | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    getCurrentUserId().then(setCurrentUserId);
+  }, []);
 
   useEffect(() => {
     let subscription: { unsubscribe: () => void } | null = null;
@@ -136,6 +144,55 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
       subscription?.unsubscribe();
     };
   }, [database, orderId]);
+
+  /**
+   * Check if the current driver can cancel this order.
+   * Driver can cancel if:
+   * - Status is ASSIGNED, PREPARING, or OUT_FOR_DELIVERY
+   * - Driver is assigned to this order (driverId matches current user)
+   */
+  const canDriverCancel = (order: OrderModel): boolean => {
+    const cancellableStatuses = [
+      OrderStatus.ASSIGNED,
+      OrderStatus.PREPARING,
+      OrderStatus.OUT_FOR_DELIVERY,
+    ];
+    if (!cancellableStatuses.includes(order.status as any)) return false;
+    if (!currentUserId || order.driverId !== currentUserId) return false;
+    return true;
+  };
+
+  /**
+   * Handle cancel order action.
+   * Writes CANCELLED status locally to WatermelonDB.
+   * SyncCoordinator will pick up the dirty record and push to server.
+   */
+  const handleCancelOrder = async (orderToCancel: OrderModel) => {
+    Alert.alert(
+      'Batalkan Order',
+      'Apakah Anda yakin ingin membatalkan order ini?',
+      [
+        { text: 'Tidak', style: 'cancel' },
+        {
+          text: 'Ya, Batalkan',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await database.write(async () => {
+                await orderToCancel.update((record) => {
+                  record.status = OrderStatus.CANCELLED;
+                  record.cancelledBy = currentUserId ?? undefined;
+                });
+              });
+            } catch (err) {
+              console.error('[OrderDetail] failed to cancel order:', err);
+              Alert.alert('Gagal', 'Tidak bisa membatalkan order. Coba lagi.');
+            }
+          },
+        },
+      ],
+    );
+  };
 
   if (isLoading) {
     return (
@@ -224,6 +281,16 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
       >
         <Text style={styles.mapButtonText}>Lihat Rute Pengiriman</Text>
       </TouchableOpacity>
+
+      {/* Cancel Button — only visible if driver can cancel this order */}
+      {order && currentUserId && canDriverCancel(order) && (
+        <TouchableOpacity
+          style={styles.cancelButton}
+          onPress={() => handleCancelOrder(order)}
+        >
+          <Text style={styles.cancelButtonText}>Batalkan Order</Text>
+        </TouchableOpacity>
+      )}
 
       <View style={styles.bottomSpacer} />
     </ScrollView>
@@ -349,6 +416,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   mapButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  cancelButton: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    backgroundColor: '#dc2626',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',

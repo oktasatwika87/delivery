@@ -17,6 +17,8 @@ export class OrderModel extends Model {
   @field('server_version') serverVersion!: number;
   @date('deleted_at') deletedAt?: Date;
   @field('failed_sync_attempts') failedSyncAttempts!: number;
+  @text('cancelled_by') cancelledBy?: string;
+  @text('cancel_reason') cancelReason?: string;
 
   @readonly @date('created_at') createdAt!: Date;
   @readonly @date('updated_at') updatedAt!: Date;

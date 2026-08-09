@@ -279,6 +279,8 @@ export class SyncCoordinator implements Coordinator {
       row.totalCents = (d as any).totalCents;
       row.currency = (d as any).currency;
       row.notes = (d as any).notes ?? null;
+      row.cancelledBy = (d as any).cancelledBy ?? null;
+      row.cancelReason = (d as any).cancelReason ?? null;
     } else if (record.entityType === 'payment') {
       row.orderId = (d as any).orderId;
       row.idempotencyKey = (d as any).idempotencyKey;
@@ -397,6 +399,8 @@ export class SyncCoordinator implements Coordinator {
         totalCents: row.totalCents,
         currency: row.currency,
         notes: row.notes ?? undefined,
+        cancelledBy: row.cancelledBy ?? undefined,
+        cancelReason: row.cancelReason ?? undefined,
         version: row.serverVersion,
         createdAt: new Date(row.createdAt).toISOString(),
         updatedAt: new Date(row.updatedAt).toISOString(),

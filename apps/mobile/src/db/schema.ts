@@ -7,7 +7,7 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 export const schema = appSchema({
-  version: 5,
+  version: 6,
   tables: [
     tableSchema({
       name: 'users',
@@ -34,6 +34,8 @@ export const schema = appSchema({
         { name: 'server_version', type: 'number' },
         { name: 'deleted_at', type: 'number', isOptional: true },
         { name: 'failed_sync_attempts', type: 'number' },
+        { name: 'cancelled_by', type: 'string', isOptional: true },
+        { name: 'cancel_reason', type: 'string', isOptional: true },
         { name: 'created_at', type: 'number' },
         { name: 'updated_at', type: 'number' },
       ],
