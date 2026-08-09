@@ -7,7 +7,7 @@ import { Alert } from 'react-native';
 import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 
 import { OrderDetailScreen } from './OrderDetailScreen';
-import { OrderStatus } from '@delivery/shared';
+import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
 
 jest.mock('react-native', () => {
   const actual = jest.requireActual('react-native');
@@ -27,6 +27,12 @@ jest.mock('@react-navigation/native', () => ({
 const mockGetCurrentUserId = jest.fn();
 jest.mock('../sync/session', () => ({
   getCurrentUserId: () => mockGetCurrentUserId(),
+}));
+
+// generateCodIdempotencyKey mock
+const mockGenerateCodIdempotencyKey = jest.fn();
+jest.mock('../sync/idempotency', () => ({
+  generateCodIdempotencyKey: (...args: any[]) => mockGenerateCodIdempotencyKey(...args),
 }));
 
 // WatermelonDB mock
@@ -54,8 +60,25 @@ const mockFindAndObserve = jest.fn(() => ({
   },
 }));
 
+// Mock payments for COD existence check
+const mockPayments: any[] = [];
+const mockPaymentsCollection: any = {
+  query: () => ({
+    fetch: jest.fn().mockResolvedValue(mockPayments),
+  }),
+  create: jest.fn().mockImplementation((fn: (r: any) => void) => {
+    const newPayment: any = { id: 'new-payment-id', failedSyncAttempts: 0 };
+    fn(newPayment);
+    mockPayments.push(newPayment);
+    return Promise.resolve(newPayment);
+  }),
+};
+
 const mockDatabase: any = {
-  get: () => ({ findAndObserve: mockFindAndObserve }),
+  get: (name: string) => {
+    if (name === 'payments') return mockPaymentsCollection;
+    return { findAndObserve: mockFindAndObserve };
+  },
   write: async (fn: () => Promise<void>) => { await fn(); },
 };
 
@@ -237,5 +260,185 @@ describe('cancel button behavior', () => {
     const updater = mockOrderUpdate.mock.calls[0][0];
     updater(mockOrder);
     expect(mockOrder.cancelledBy).toBe('driver-456');
+  });
+});
+
+// ─── Tests: COD Button Visibility ─────────────────────────────────
+
+describe('COD button visibility', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0; // reset payments
+    mockGenerateCodIdempotencyKey.mockResolvedValue('cod:order-123:device-abc:1234567890');
+  });
+
+  test('appears for OUT_FOR_DELIVERY status with matching driver when no COD exists', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+    });
+  });
+
+  test('NOT shown for ASSIGNED status even with matching driver', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Terima Cash (COD)')).toBeNull();
+    });
+  });
+
+  test('NOT shown for PREPARING status even with matching driver', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Terima Cash (COD)')).toBeNull();
+    });
+  });
+
+  test('NOT shown when driverId does not match current user', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'other-driver' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Terima Cash (COD)')).toBeNull();
+    });
+  });
+
+  test('NOT shown when COD payment already exists', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({ orderId: 'order-123', method: PaymentMethod.CASH });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Terima Cash (COD)')).toBeNull();
+    });
+  });
+
+  test('NOT shown for DELIVERED status', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.DELIVERED, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Terima Cash (COD)')).toBeNull();
+    });
+  });
+
+  test('NOT shown for CANCELLED status', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.CANCELLED, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Terima Cash (COD)')).toBeNull();
+    });
+  });
+});
+
+// ─── Tests: COD Button Behavior ─────────────────────────────────────
+
+describe('COD button behavior', () => {
+  let alertSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0; // reset payments
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockGenerateCodIdempotencyKey.mockResolvedValue('cod:order-123:device-abc:1234567890');
+  });
+
+  afterEach(() => {
+    alertSpy.mockRestore();
+  });
+
+  test('shows confirmation alert with correct text', async () => {
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+    });
+    await act(async () => {
+      fireEvent.press(getByText('Terima Cash (COD)'));
+    });
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Terima Cash (COD)',
+      expect.stringContaining('Rp'),
+      expect.arrayContaining([
+        expect.objectContaining({ text: 'Batal' }),
+        expect.objectContaining({ text: 'Ya, Terima' }),
+      ])
+    );
+  });
+
+  test('writes CAPTURED payment with correct fields on confirm', async () => {
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+    });
+    await act(async () => {
+      fireEvent.press(getByText('Terima Cash (COD)'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya, Terima');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    expect(mockPaymentsCollection.create).toHaveBeenCalled();
+    const createArg = mockPaymentsCollection.create.mock.calls[0][0];
+    const createdPayment: any = {};
+    createArg(createdPayment);
+    expect(createdPayment.orderId).toBe('order-123');
+    expect(createdPayment.method).toBe(PaymentMethod.CASH);
+    expect(createdPayment.status).toBe(PaymentStatus.CAPTURED);
+    expect(createdPayment.amountCents).toBe(50000);
+    expect(createdPayment.currency).toBe('IDR');
+    expect(createdPayment.kind).toBe('PAYMENT');
+    expect(createdPayment.failedSyncAttempts).toBe(0);
+  });
+
+  test('generates idempotency key with correct order ID', async () => {
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+    });
+    await act(async () => {
+      fireEvent.press(getByText('Terima Cash (COD)'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya, Terima');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    expect(mockGenerateCodIdempotencyKey).toHaveBeenCalledWith('order-123');
+  });
+
+  test('hides button after successful COD collection', async () => {
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+    });
+    await act(async () => {
+      fireEvent.press(getByText('Terima Cash (COD)'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya, Terima');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    await waitFor(() => {
+      expect(queryByText('Terima Cash (COD)')).toBeNull();
+    });
   });
 });

@@ -14,8 +14,10 @@ import type { Database } from '@nozbe/watermelondb';
 
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
+import { PaymentModel } from '../db/models/PaymentModel';
 import { getCurrentUserId } from '../sync/session';
-import { OrderStatus } from '@delivery/shared';
+import { generateCodIdempotencyKey } from '../sync/idempotency';
+import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -108,6 +110,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [hasCodPayment, setHasCodPayment] = useState(false);
 
   useEffect(() => {
     getCurrentUserId().then(setCurrentUserId);
@@ -145,6 +148,29 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     };
   }, [database, orderId]);
 
+  // Check if COD payment already exists for this order
+  useEffect(() => {
+    if (!orderId) return;
+
+    const checkCodPayment = async () => {
+      try {
+        const paymentsCollection = database.get<PaymentModel>('payments');
+        const payments = await paymentsCollection
+          .query()
+          .fetch();
+
+        const hasCod = payments.some(
+          (p) => p.orderId === orderId && p.method === PaymentMethod.CASH,
+        );
+        setHasCodPayment(hasCod);
+      } catch (err) {
+        console.warn('[OrderDetail] failed to check COD payment:', err);
+      }
+    };
+
+    checkCodPayment();
+  }, [database, orderId]);
+
   /**
    * Check if the current driver can cancel this order.
    * Driver can cancel if:
@@ -160,6 +186,59 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     if (!cancellableStatuses.includes(order.status as any)) return false;
     if (!currentUserId || order.driverId !== currentUserId) return false;
     return true;
+  };
+
+  /**
+   * Check if COD button should be shown.
+   * Shows for OUT_FOR_DELIVERY orders assigned to current driver,
+   * and only if no COD payment already exists.
+   */
+  const canCollectCod = (order: OrderModel): boolean => {
+    if (order.status !== OrderStatus.OUT_FOR_DELIVERY) return false;
+    if (!currentUserId || order.driverId !== currentUserId) return false;
+    if (hasCodPayment) return false;
+    return true;
+  };
+
+  /**
+   * Handle COD collection.
+   * Writes a CAPTURED payment locally to WatermelonDB.
+   * SyncCoordinator will pick up the dirty record and push to server.
+   */
+  const handleCollectCod = async (orderToCollect: OrderModel) => {
+    const amount = formatCurrency(orderToCollect.totalCents, orderToCollect.currency);
+    Alert.alert(
+      'Terima Cash (COD)',
+      `Kumpulkan payment cash Rp ${amount} dari customer?`,
+      [
+        { text: 'Batal', style: 'cancel' },
+        {
+          text: 'Ya, Terima',
+          onPress: async () => {
+            try {
+              const idempotencyKey = await generateCodIdempotencyKey(orderToCollect.id);
+              const paymentsCollection = database.get<PaymentModel>('payments');
+              await database.write(async () => {
+                await paymentsCollection.create((record) => {
+                  record.orderId = orderToCollect.id;
+                  record.idempotencyKey = idempotencyKey;
+                  record.method = PaymentMethod.CASH;
+                  record.status = PaymentStatus.CAPTURED;
+                  record.amountCents = orderToCollect.totalCents;
+                  record.currency = orderToCollect.currency;
+                  record.kind = 'PAYMENT';
+                  record.failedSyncAttempts = 0;
+                });
+              });
+              setHasCodPayment(true);
+            } catch (err) {
+              console.error('[OrderDetail] failed to record COD:', err);
+              Alert.alert('Gagal', 'Tidak bisa mencatat payment. Coba lagi.');
+            }
+          },
+        },
+      ],
+    );
   };
 
   /**
@@ -289,6 +368,16 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
           onPress={() => handleCancelOrder(order)}
         >
           <Text style={styles.cancelButtonText}>Batalkan Order</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* COD Button — only visible if driver can collect COD and no COD payment exists */}
+      {order && currentUserId && canCollectCod(order) && (
+        <TouchableOpacity
+          style={styles.codButton}
+          onPress={() => handleCollectCod(order)}
+        >
+          <Text style={styles.codButtonText}>Terima Cash (COD)</Text>
         </TouchableOpacity>
       )}
 
@@ -429,6 +518,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cancelButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  codButton: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    backgroundColor: '#059669',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  codButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
