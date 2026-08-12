@@ -70,7 +70,8 @@ jest.mock('../map/networkMonitor', () => ({
 
 jest.mock('../map/location', () => ({
   locationService: {
-    subscribe: jest.fn(() => () => {}),
+    subscribe: jest.fn(() => Promise.resolve(() => {})),
+    hasPermission: jest.fn(() => true),
   },
 }));
 
@@ -106,7 +107,7 @@ describe('MapScreen', () => {
     (networkMonitor.subscribe as jest.Mock).mockReturnValue(() => {});
     (networkMonitor.check as jest.Mock).mockResolvedValue('online');
 
-    (locationService.subscribe as jest.Mock).mockReturnValue(() => {});
+    (locationService.subscribe as jest.Mock).mockResolvedValue(() => {});
 
     // Default: offline packs available
     (offlineStorage.listPacks as jest.Mock).mockResolvedValue([{ state: 'complete' }]);
@@ -190,7 +191,7 @@ describe('MapScreen', () => {
             coords: { latitude: -6.175, longitude: 106.827 }, // { lat, lng }
           });
         }, 0);
-        return () => {};
+        return Promise.resolve(() => {});
       });
 
       // Order coordinates: [lng, lat] format
@@ -237,7 +238,7 @@ describe('MapScreen', () => {
             coords: { latitude: -6.175, longitude: 106.827 },
           });
         }, 0);
-        return () => {};
+        return Promise.resolve(() => {});
       });
 
       // Order lookup pending (don't resolve yet)
@@ -267,7 +268,7 @@ describe('MapScreen', () => {
             coords: { latitude: -6.175, longitude: 106.827 },
           });
         }, 0);
-        return () => {};
+        return Promise.resolve(() => {});
       });
 
       mockFind.mockResolvedValue({
@@ -298,7 +299,7 @@ describe('MapScreen', () => {
             coords: { latitude: -6.175, longitude: 106.827 },
           });
         }, 0);
-        return () => {};
+        return Promise.resolve(() => {});
       });
 
       mockFind.mockResolvedValue({
@@ -327,7 +328,7 @@ describe('MapScreen', () => {
             coords: { latitude: -6.175, longitude: 106.827 },
           });
         }, 0);
-        return () => {};
+        return Promise.resolve(() => {});
       });
 
       mockFind.mockResolvedValue({

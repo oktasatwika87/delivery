@@ -15,10 +15,13 @@
  * - Setiap test cleanup subscribe-nya via unsubscribe (return dari subscribe)
  *   agar singleton.listeners Set kembali ke 0 untuk test berikutnya — supaya
  *   subscribe berikutnya bisa re-register bridgeListener ke mock.
+ * - subscribe() sekarang async (permission request), jadi semua subscribe()
+ *   harus di-await.
  */
 
 import { LocationManager } from '@maplibre/maplibre-react-native';
 import type { Location } from '@maplibre/maplibre-react-native';
+import { PermissionsAndroid } from 'react-native';
 import { locationService } from './location';
 
 type LocationListener = (location: Location) => void;
@@ -36,18 +39,34 @@ const makeLocation = (lat: number, lng: number): Location => ({
   timestamp: 1000,
 });
 
-const subscribe = (listener: LocationListener) => locationService.subscribe(listener);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const subscribe = async (listener: LocationListener) => locationService.subscribe(listener);
 
 describe('locationService', () => {
   beforeEach(() => {
+    // Clear all mocks and reset state on singleton
+    jest.clearAllMocks();
+
+    // Reset permission status dan listener state pada singleton
+    (locationService as any).permissionStatus = 'never_asked';
+    (locationService as any).isListening = false;
+    (locationService as any).listeners.clear();
+
     // Mock state-only reset: locationListeners Set + call history.
     // Implementation (default fan-out) dipertahankan.
     LocationManager._reset();
   });
 
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   describe('subscribe()', () => {
-    test('memanggil LocationManager.addListener() dengan benar', () => {
-      const unsubscribe = subscribe(() => {});
+    test('memanggil LocationManager.addListener() dengan benar', async () => {
+      // Mock permission granted untuk subscribe test
+      (PermissionsAndroid.request as jest.Mock).mockResolvedValue(PermissionsAndroid.RESULTS.GRANTED);
+
+      const unsubscribe = await subscribe(() => {});
 
       expect(LocationManager.addListener).toHaveBeenCalledTimes(1);
       expect(LocationManager.addListener).toHaveBeenCalledWith(expect.any(Function));
@@ -55,9 +74,12 @@ describe('locationService', () => {
       unsubscribe();
     });
 
-    test('tidak memanggil addListener lagi kalau sudah ada subscriber', () => {
-      const unsub1 = subscribe(() => {});
-      const unsub2 = subscribe(() => {});
+    test('tidak memanggil addListener lagi kalau sudah ada subscriber', async () => {
+      // Mock permission granted untuk subscribe test
+      (PermissionsAndroid.request as jest.Mock).mockResolvedValue(PermissionsAndroid.RESULTS.GRANTED);
+
+      const unsub1 = await subscribe(() => {});
+      const unsub2 = await subscribe(() => {});
 
       expect(LocationManager.addListener).toHaveBeenCalledTimes(1);
 
@@ -67,8 +89,8 @@ describe('locationService', () => {
   });
 
   describe('unsubscribe (return function dari subscribe)', () => {
-    test('memanggil LocationManager.removeListener() dengan benar', () => {
-      const unsubscribe = subscribe(() => {});
+    test('memanggil LocationManager.removeListener() dengan benar', async () => {
+      const unsubscribe = await subscribe(() => {});
       LocationManager.removeListener.mockClear();
 
       unsubscribe();
@@ -76,8 +98,8 @@ describe('locationService', () => {
       expect(LocationManager.removeListener).toHaveBeenCalledTimes(1);
     });
 
-    test('removeListener dipanggil dengan listener yang sama dengan addListener', () => {
-      const unsubscribe = subscribe(() => {});
+    test('removeListener dipanggil dengan listener yang sama dengan addListener', async () => {
+      const unsubscribe = await subscribe(() => {});
       const bridgeListener = (LocationManager.addListener as jest.Mock).mock.calls[0][0];
       LocationManager.removeListener.mockClear();
 
@@ -86,9 +108,9 @@ describe('locationService', () => {
       expect(LocationManager.removeListener).toHaveBeenCalledWith(bridgeListener);
     });
 
-    test('addListener tidak dipanggil ulang setelah semua unsubscribe', () => {
-      const unsub1 = subscribe(() => {});
-      const unsub2 = subscribe(() => {});
+    test('addListener tidak dipanggil ulang setelah semua unsubscribe', async () => {
+      const unsub1 = await subscribe(() => {});
+      const unsub2 = await subscribe(() => {});
 
       unsub1();
       expect(LocationManager.addListener).toHaveBeenCalledTimes(1);
@@ -99,14 +121,14 @@ describe('locationService', () => {
   });
 
   describe('multiple subscribers', () => {
-    test('semua subscriber dapat notifikasi saat _emitLocation() dipanggil', () => {
+    test('semua subscriber dapat notifikasi saat _emitLocation() dipanggil', async () => {
       const locations1: Location[] = [];
       const locations2: Location[] = [];
       const locations3: Location[] = [];
 
-      const unsub1 = subscribe((loc) => locations1.push(loc));
-      const unsub2 = subscribe((loc) => locations2.push(loc));
-      const unsub3 = subscribe((loc) => locations3.push(loc));
+      const unsub1 = await subscribe((loc) => locations1.push(loc));
+      const unsub2 = await subscribe((loc) => locations2.push(loc));
+      const unsub3 = await subscribe((loc) => locations3.push(loc));
 
       const mockLocation = makeLocation(-6.175, 106.827);
       LocationManager._emitLocation(mockLocation);
@@ -123,14 +145,14 @@ describe('locationService', () => {
       unsub3();
     });
 
-    test('unsubscribe satu subscriber tidak mempengaruhi subscriber lain', () => {
+    test('unsubscribe satu subscriber tidak mempengaruhi subscriber lain', async () => {
       const locations1: Location[] = [];
       const locations2: Location[] = [];
       const locations3: Location[] = [];
 
-      const unsub1 = subscribe((loc) => locations1.push(loc));
-      const unsub2 = subscribe((loc) => locations2.push(loc));
-      const unsub3 = subscribe((loc) => locations3.push(loc));
+      const unsub1 = await subscribe((loc) => locations1.push(loc));
+      const unsub2 = await subscribe((loc) => locations2.push(loc));
+      const unsub3 = await subscribe((loc) => locations3.push(loc));
 
       unsub1();
 
@@ -145,12 +167,12 @@ describe('locationService', () => {
       unsub3();
     });
 
-    test('banyak location update semua subscriber dapat semuanya', () => {
+    test('banyak location update semua subscriber dapat semuanya', async () => {
       const locations1: Location[] = [];
       const locations2: Location[] = [];
 
-      const unsub1 = subscribe((loc) => locations1.push(loc));
-      const unsub2 = subscribe((loc) => locations2.push(loc));
+      const unsub1 = await subscribe((loc) => locations1.push(loc));
+      const unsub2 = await subscribe((loc) => locations2.push(loc));
 
       const points = [
         makeLocation(-6.175, 106.827),
@@ -188,6 +210,14 @@ describe('locationService', () => {
 
       expect(result).toBeNull();
     });
+
+    test('mengembalikan null kalau getLastKnownLocation throw', async () => {
+      (LocationManager.getLastKnownLocation as jest.Mock).mockRejectedValue(new Error('GPS unavailable'));
+
+      const result = await locationService.getLastKnown();
+
+      expect(result).toBeNull();
+    });
   });
 
   describe('setMinDisplacement()', () => {
@@ -207,6 +237,71 @@ describe('locationService', () => {
       expect(LocationManager.setMinDisplacement).toHaveBeenNthCalledWith(1, 5);
       expect(LocationManager.setMinDisplacement).toHaveBeenNthCalledWith(2, 15);
       expect(LocationManager.setMinDisplacement).toHaveBeenNthCalledWith(3, 50);
+    });
+  });
+
+  describe('requestPermission()', () => {
+    test('mengembalikan granted dan set permissionStatus kalau permission granted', async () => {
+      // Setup mock untuk test ini
+      (PermissionsAndroid.request as jest.Mock).mockResolvedValue(PermissionsAndroid.RESULTS.GRANTED);
+
+      const result = await locationService.requestPermission();
+
+      expect(result).toBe('granted');
+      expect(locationService.hasPermission()).toBe(true);
+    });
+
+    test('memanggil PermissionsAndroid.request() setiap kali dipanggil', async () => {
+      // Setup mock untuk test ini
+      (PermissionsAndroid.request as jest.Mock).mockResolvedValue(PermissionsAndroid.RESULTS.GRANTED);
+
+      await locationService.requestPermission();
+      await locationService.requestPermission();
+
+      // Setiap pemanggilan akan trigger request baru
+      expect(PermissionsAndroid.request).toHaveBeenCalledTimes(2);
+    });
+
+    test('mengembalikan denied kalau permission ditolak', async () => {
+      (PermissionsAndroid.request as jest.Mock).mockResolvedValue(PermissionsAndroid.RESULTS.DENIED);
+
+      const result = await locationService.requestPermission();
+
+      expect(result).toBe('denied');
+    });
+
+    test('mengembalikan blocked kalau permission permanently denied (NEVER_ASK_AGAIN)', async () => {
+      (PermissionsAndroid.request as jest.Mock).mockResolvedValue(PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN);
+
+      const result = await locationService.requestPermission();
+
+      expect(result).toBe('blocked');
+    });
+  });
+
+  describe('hasPermission()', () => {
+    test('mengembalikan true kalau permission granted', () => {
+      (locationService as any).permissionStatus = 'granted';
+
+      expect(locationService.hasPermission()).toBe(true);
+    });
+
+    test('mengembalikan false kalau permission denied', () => {
+      (locationService as any).permissionStatus = 'denied';
+
+      expect(locationService.hasPermission()).toBe(false);
+    });
+
+    test('mengembalikan false kalau permission blocked (NEVER_ASK_AGAIN)', () => {
+      (locationService as any).permissionStatus = 'blocked';
+
+      expect(locationService.hasPermission()).toBe(false);
+    });
+
+    test('mengembalikan false kalau permission belum pernah diminta', () => {
+      (locationService as any).permissionStatus = 'never_asked';
+
+      expect(locationService.hasPermission()).toBe(false);
     });
   });
 

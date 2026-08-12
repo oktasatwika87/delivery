@@ -78,6 +78,20 @@ const Platform = {
   Version: 35,
 };
 
+// ─── PermissionsAndroid ───────────────────────────────────────────────
+const PermissionsAndroid = {
+  PERMISSIONS: {
+    ACCESS_FINE_LOCATION: 'android.permission.ACCESS_FINE_LOCATION',
+    ACCESS_COARSE_LOCATION: 'android.permission.ACCESS_COARSE_LOCATION',
+  },
+  RESULTS: {
+    GRANTED: 'granted',
+    DENIED: 'denied',
+    NEVER_ASK_AGAIN: 'never_ask_again',
+  },
+  request: jest.fn().mockResolvedValue('granted'),
+};
+
 // ─── Re-exports minimal ─────────────────────────────────────────────
 // Untuk hal yang tidak dipakai component ini tapi mungkin di-require
 // transitively, kita re-export mock undefined (akan throw kalau dipakai).
@@ -92,6 +106,7 @@ module.exports = {
   Linking,
   Modal,
   NativeModules,
+  PermissionsAndroid,
   PixelRatio,
   Platform,
   ScrollView,

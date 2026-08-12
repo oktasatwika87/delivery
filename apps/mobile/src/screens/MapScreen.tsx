@@ -96,10 +96,24 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
   // ─── GPS subscription ────────────────────────────────────────────────────
 
   useEffect(() => {
-    const unsubscribe = locationService.subscribe((loc: { coords: { latitude: number; longitude: number } }) => {
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+
+    locationService.subscribe((loc: { coords: { latitude: number; longitude: number } }) => {
       setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+    }).then((unsub) => {
+      // Kalau cleanup sudah jalan duluan (component unmount), langsung unsubscribe
+      if (cancelled) {
+        unsub();
+      } else {
+        unsubscribe = unsub;
+      }
     });
-    return unsubscribe;
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   // ─── Load offline regions ──────────────────────────────────────────────────
