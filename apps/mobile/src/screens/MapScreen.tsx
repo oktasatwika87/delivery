@@ -17,7 +17,7 @@
  * Pola: functional component + withDatabase HOC, sama dengan chat/Login screen.
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Linking,
@@ -245,6 +245,7 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
                   type: 'LineString',
                   coordinates: routeGeometry,
                 },
+                properties: null,
               }}
             >
               <MapLibreGL.LineLayer
