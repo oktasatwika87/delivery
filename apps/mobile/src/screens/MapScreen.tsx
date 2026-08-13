@@ -205,6 +205,7 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
         const result = await routeService.getRoute({ origin, destination });
 
         if (!cancelled) {
+          console.log('[MapScreen] route geometry length:', result.route.geometry?.length, 'isFromCache:', result.isFromCache);
           setRouteGeometry(result.route.geometry);
           setIsFromCache(result.isFromCache);
           setRouteError(null);
@@ -257,7 +258,7 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
           />
 
           {/* Route polyline */}
-          {routeGeometry && routeGeometry.length > 0 && (
+          {routeGeometry && routeGeometry.length >= 2 && (
             <MapLibreGL.ShapeSource
               id="route"
               shape={{
