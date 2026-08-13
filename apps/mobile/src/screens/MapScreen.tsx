@@ -99,6 +99,13 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     let cancelled = false;
     let unsubscribe: (() => void) | undefined;
 
+    // Initial fix dari last-known cache — gak nunggu listener fire.
+    // Kalau null (no permission / no cache), no-op; listener live tetap jalan paralel.
+    locationService.getLastKnown().then((loc) => {
+      if (cancelled || !loc) return;
+      setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+    });
+
     locationService.subscribe((loc: { coords: { latitude: number; longitude: number } }) => {
       setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
     }).then((unsub) => {

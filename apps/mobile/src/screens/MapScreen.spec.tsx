@@ -72,6 +72,7 @@ jest.mock('../map/location', () => ({
   locationService: {
     subscribe: jest.fn(() => Promise.resolve(() => {})),
     hasPermission: jest.fn(() => true),
+    getLastKnown: jest.fn().mockResolvedValue(null),
   },
 }));
 
