@@ -56,10 +56,20 @@ export class SyncCoordinator implements Coordinator {
   private syncInterval: ReturnType<typeof setInterval> | null = null;
 
   async start(db: Database): Promise<void> {
-    if (this.stopped) return;
+    // Reset stopped flag FIRST — allows restart after stop() was previously called
+    this.stopped = false;
+
+    // Already running? Skip interval setup to prevent double-mount.
+    // Also skip initial pull to avoid duplicate work.
+    if (this.syncInterval) {
+      // Just update db reference in case it changed
+      this.db = db;
+      console.log('[SyncCoordinator] start() called — already running, skipping duplicate start');
+      return;
+    }
+
     console.log('[SyncCoordinator] start() called');
     this.db = db;
-    this.stopped = false;
 
     // First sync: full pull (cursor null)
     // Bungkus try/catch supaya kegagalan pull pertama tidak menghalangi periodic sync
