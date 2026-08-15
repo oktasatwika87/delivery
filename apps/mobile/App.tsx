@@ -14,7 +14,7 @@
  * try/catch di syncTick() sehingga aman. Setelah user login, sync
  * akan jalan efektif mulai tick berikutnya (dan langsung via pullNow()).
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
@@ -31,7 +31,7 @@ import { ChatScreen } from './src/screens/ChatScreen';
 import { MapScreen } from './src/screens/MapScreen';
 import { MapSettingsScreen } from './src/screens/MapSettingsScreen';
 import { routeSnapshotService } from './src/map/routeSnapshot';
-import { networkMonitor } from './src/map/networkMonitor';
+import { networkMonitor, type NetworkStatus } from './src/map/networkMonitor';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -47,6 +47,10 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 function App(): React.JSX.Element {
   const [ready, setReady] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
+
+  // Track previous network status so we only kick flushNow on
+  // offline → online transition (not initial 'online' or every probe).
+  const prevNetworkStatusRef = useRef<NetworkStatus>(networkMonitor.getStatus());
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +98,35 @@ function App(): React.JSX.Element {
       cancelled = true;
       syncCoordinator.stop();
       networkMonitor.stop();
+    };
+  }, []);
+
+  // ─── Kick sync on back-online transition ────────────────────────────────────
+  // networkMonitor fires on every status change. Only trigger flushNow when
+  // we transition offline → online (not initial 'online', not every probe).
+  useEffect(() => {
+    let cancelled = false;
+
+    const unsubscribe = networkMonitor.subscribe((status) => {
+      const prev = prevNetworkStatusRef.current;
+      prevNetworkStatusRef.current = status;
+
+      if (prev === 'offline' && status === 'online' && !cancelled) {
+        console.log('[App] Network back online — triggering immediate flush');
+        syncCoordinator.flushNow().catch((err) => {
+          if (!cancelled) {
+            console.warn(
+              '[App] Post-online flushNow failed (will retry on next tick):',
+              err,
+            );
+          }
+        });
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
     };
   }, []);
 
