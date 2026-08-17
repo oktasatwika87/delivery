@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   Alert,
   ScrollView,
@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
+import { Q } from '@nozbe/watermelondb';
 import { withDatabase } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
 
@@ -35,6 +36,31 @@ interface AddressData {
 
 interface Props {
   database: Database;
+}
+
+// ─── Failed Payment Banner ────────────────────────────────────────────────────
+
+interface FailedPaymentBannerProps {
+  payments: PaymentModel[];
+  onDismiss: () => void;
+  isDismissed: boolean;
+}
+
+function FailedPaymentBanner({ payments, onDismiss, isDismissed }: FailedPaymentBannerProps): React.JSX.Element | null {
+  const hasFailedPayment = payments.some((p) => p.status === PaymentStatus.FAILED);
+
+  if (!hasFailedPayment || isDismissed) return null;
+
+  return (
+    <View style={styles.failedBanner}>
+      <Text style={styles.failedBannerText}>
+        COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.
+      </Text>
+      <TouchableOpacity onPress={onDismiss} style={styles.failedBannerDismiss}>
+        <Text style={styles.failedBannerDismissText}>✕</Text>
+      </TouchableOpacity>
+    </View>
+  );
 }
 
 // ─── Status Badge ───────────────────────────────────────────────────────────
@@ -111,6 +137,10 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [hasCodPayment, setHasCodPayment] = useState(false);
+  const [payments, setPayments] = useState<PaymentModel[]>([]);
+  const [failedBannerDismissed, setFailedBannerDismissed] = useState(false);
+  // Use ref for synchronous inflight guard (state updates are async, refs are sync)
+  const inflightCollectRef = useRef(false);
 
   useEffect(() => {
     getCurrentUserId().then(setCurrentUserId);
@@ -148,27 +178,41 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     };
   }, [database, orderId]);
 
-  // Check if COD payment already exists for this order
+  // Observe payments collection filtered by orderId
   useEffect(() => {
     if (!orderId) return;
 
-    const checkCodPayment = async () => {
+    let subscription: { unsubscribe: () => void } | null = null;
+
+    const subscribe = async () => {
       try {
         const paymentsCollection = database.get<PaymentModel>('payments');
-        const payments = await paymentsCollection
-          .query()
-          .fetch();
-
-        const hasCod = payments.some(
-          (p) => p.orderId === orderId && p.method === PaymentMethod.CASH,
-        );
-        setHasCodPayment(hasCod);
+        subscription = paymentsCollection
+          .query(Q.where('order_id', orderId))
+          .observe()
+          .subscribe({
+            next: (records) => {
+              setPayments(records);
+              // Update hasCodPayment based on observation
+              const hasCod = records.some(
+                (p) => p.method === PaymentMethod.CASH,
+              );
+              setHasCodPayment(hasCod);
+            },
+            error: (err) => {
+              console.warn('[OrderDetail] payments observe error:', err);
+            },
+          });
       } catch (err) {
-        console.warn('[OrderDetail] failed to check COD payment:', err);
+        console.warn('[OrderDetail] failed to observe payments:', err);
       }
     };
 
-    checkCodPayment();
+    subscribe();
+
+    return () => {
+      subscription?.unsubscribe();
+    };
   }, [database, orderId]);
 
   /**
@@ -215,6 +259,10 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         {
           text: 'Ya, Terima',
           onPress: async () => {
+            // Inflight guard: prevent double-tap / concurrent calls
+            // Use ref for synchronous check (state updates are async, refs are sync)
+            if (inflightCollectRef.current) return;
+            inflightCollectRef.current = true;
             try {
               const idempotencyKey = await generateCodIdempotencyKey(orderToCollect.id);
               const paymentsCollection = database.get<PaymentModel>('payments');
@@ -234,6 +282,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
             } catch (err) {
               console.error('[OrderDetail] failed to record COD:', err);
               Alert.alert('Gagal', 'Tidak bisa mencatat payment. Coba lagi.');
+            } finally {
+              inflightCollectRef.current = false;
             }
           },
         },
@@ -295,6 +345,13 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
 
   return (
     <ScrollView style={styles.container}>
+      {/* Failed Payment Banner */}
+      <FailedPaymentBanner
+        payments={payments}
+        isDismissed={failedBannerDismissed}
+        onDismiss={() => setFailedBannerDismissed(true)}
+      />
+
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Order #{order.id.slice(0, 8)}</Text>
@@ -550,5 +607,30 @@ const styles = StyleSheet.create({
   mutedText: {
     fontSize: 14,
     color: '#9ca3af',
+  },
+  // Failed Payment Banner
+  failedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#fcd34d',
+  },
+  failedBannerText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#92400e',
+    fontWeight: '500',
+  },
+  failedBannerDismiss: {
+    marginLeft: 12,
+    padding: 4,
+  },
+  failedBannerDismissText: {
+    fontSize: 16,
+    color: '#92400e',
+    fontWeight: '600',
   },
 });

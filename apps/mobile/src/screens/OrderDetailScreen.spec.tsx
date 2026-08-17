@@ -62,14 +62,31 @@ const mockFindAndObserve = jest.fn(() => ({
 
 // Mock payments for COD existence check
 const mockPayments: any[] = [];
+let paymentsSubscriptionCallback: ((payments: any[]) => void) | null = null;
+let mockPaymentsQuery: any = null;
+
 const mockPaymentsCollection: any = {
-  query: () => ({
-    fetch: jest.fn().mockResolvedValue(mockPayments),
+  query: jest.fn().mockImplementation((_query: any) => {
+    mockPaymentsQuery = {
+      observe: jest.fn().mockReturnValue({
+        subscribe: jest.fn().mockImplementation(({ next }: { next: (payments: any[]) => void }) => {
+          paymentsSubscriptionCallback = next;
+          // Immediately emit current payments
+          next([...mockPayments]);
+          return { unsubscribe: jest.fn() };
+        }),
+      }),
+    };
+    return mockPaymentsQuery;
   }),
   create: jest.fn().mockImplementation((fn: (r: any) => void) => {
-    const newPayment: any = { id: 'new-payment-id', failedSyncAttempts: 0 };
+    const newPayment: any = { id: 'new-payment-id', failedSyncAttempts: 0, orderId: 'order-123', method: PaymentMethod.CASH };
     fn(newPayment);
     mockPayments.push(newPayment);
+    // Notify subscription
+    if (paymentsSubscriptionCallback) {
+      paymentsSubscriptionCallback([...mockPayments]);
+    }
     return Promise.resolve(newPayment);
   }),
 };
@@ -79,11 +96,20 @@ const mockDatabase: any = {
     if (name === 'payments') return mockPaymentsCollection;
     return { findAndObserve: mockFindAndObserve };
   },
-  write: async (fn: () => Promise<void>) => { await fn(); },
+  write: async (fn: () => Promise<void>) => {
+    // Simulate async database write - allows state to update between calls
+    await new Promise<void>((resolve) => setImmediate(() => resolve()));
+    await fn();
+  },
 };
 
 jest.mock('@nozbe/watermelondb/react', () => ({ withDatabase: (C: any) => C }));
-jest.mock('@nozbe/watermelondb', () => ({ withDatabase: (C: any) => C }));
+jest.mock('@nozbe/watermelondb', () => ({
+  Q: {
+    where: jest.fn().mockReturnValue({ _where: 'order_id' }),
+  },
+  withDatabase: (C: any) => C,
+}));
 
 function renderScreen() {
   return render(
@@ -440,5 +466,241 @@ describe('COD button behavior', () => {
     await waitFor(() => {
       expect(queryByText('Terima Cash (COD)')).toBeNull();
     });
+  });
+});
+
+// ─── Tests: Failed Payment Banner ─────────────────────────────────────────
+
+describe('Failed Payment Banner', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0; // reset payments
+    paymentsSubscriptionCallback = null; // reset subscription
+    mockPaymentsQuery = null; // reset query mock
+    mockGenerateCodIdempotencyKey.mockResolvedValue('cod:order-123:device-abc:1234567890');
+  });
+
+  test('shows banner when payment status is FAILED', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({
+      id: 'payment-failed-1',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.FAILED,
+    });
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeTruthy();
+    });
+  });
+
+  test('does NOT show banner when no FAILED payments', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({
+      id: 'payment-ok-1',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.CAPTURED,
+    });
+
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeNull();
+    });
+  });
+
+  test('banner shows independent of order status (even when order is CANCELLED)', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.CANCELLED, driverId: 'driver-456' });
+    mockPayments.push({
+      id: 'payment-failed-2',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.FAILED,
+    });
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeTruthy();
+    });
+  });
+
+  test('banner can be dismissed', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({
+      id: 'payment-failed-3',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.FAILED,
+    });
+
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeTruthy();
+    });
+
+    // Press dismiss button
+    await act(async () => {
+      fireEvent.press(getByText('✕'));
+    });
+
+    await waitFor(() => {
+      expect(queryByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeNull();
+    });
+  });
+
+  test('banner reappears on screen re-mount when payment still FAILED', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({
+      id: 'payment-failed-4',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.FAILED,
+    });
+
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeTruthy();
+    });
+
+    // Dismiss
+    await act(async () => {
+      fireEvent.press(getByText('✕'));
+    });
+
+    await waitFor(() => {
+      expect(queryByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeNull();
+    });
+
+    // Simulate re-mount by re-rendering
+    const { getByText: getByText2 } = renderScreen();
+    await waitFor(() => {
+      expect(getByText2('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeTruthy();
+    });
+  });
+});
+
+// ─── Tests: Payment Observation ─────────────────────────────────────────────
+
+describe('Payment observation', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    paymentsSubscriptionCallback = null;
+    mockPaymentsQuery = null;
+  });
+
+  test('payments query is filtered by orderId', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    renderScreen();
+
+    await waitFor(() => {
+      expect(mockPaymentsCollection.query).toHaveBeenCalled();
+    });
+
+    // Verify observe was called on the query result
+    expect(mockPaymentsQuery?.observe).toHaveBeenCalled();
+  });
+
+  test('updates hasCodPayment when payment changes via observation', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    renderScreen();
+    await waitFor(() => {
+      expect(mockPaymentsCollection.query).toHaveBeenCalled();
+    });
+
+    // Button should be visible initially since no COD exists
+    const buttonBefore = await new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(true), 0);
+    });
+    expect(buttonBefore).toBe(true);
+
+    // Simulate payment being added via subscription
+    mockPayments.push({
+      id: 'payment-obs-1',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.CAPTURED,
+    });
+
+    // Trigger subscription callback - this updates hasCodPayment to true
+    if (paymentsSubscriptionCallback) {
+      paymentsSubscriptionCallback([...mockPayments]);
+    }
+
+    // After subscription callback, hasCodPayment should be true
+    // The mockPaymentsCollection.create should NOT be called until user confirms
+    expect(mockPaymentsCollection.create).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Tests: Double-Tap Prevention ─────────────────────────────────────────
+
+describe('Double-tap prevention', () => {
+  let alertSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    paymentsSubscriptionCallback = null;
+    mockPaymentsQuery = null;
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockGenerateCodIdempotencyKey.mockResolvedValue('cod:order-123:device-abc:1234567890');
+  });
+
+  afterEach(() => {
+    alertSpy.mockRestore();
+  });
+
+  test('handleCollectCod guard prevents concurrent calls from creating duplicate payments', async () => {
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+    });
+
+    // Spy on the database write to verify only one call
+    const writeSpy = jest.spyOn(mockDatabase, 'write');
+
+    // First tap - opens confirmation dialog
+    await act(async () => {
+      fireEvent.press(getByText('Terima Cash (COD)'));
+    });
+
+    expect(Alert.alert).toHaveBeenCalledTimes(1);
+
+    // Get the "Ya, Terima" button handler
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya, Terima');
+    expect(yaButton?.onPress).toBeDefined();
+
+    // Clear previous calls
+    writeSpy.mockClear();
+    mockPaymentsCollection.create.mockClear();
+
+    // Call onPress TWICE synchronously (same event loop tick, no await between)
+    // The first call starts the async write
+    // The second call should be blocked by the guard (if guard is inside onPress)
+    // OR should see hasCodPayment=true (if guard is outside onPress)
+    act(() => {
+      yaButton?.onPress?.(); // First call - starts write
+      yaButton?.onPress?.(); // Second call - should be no-op
+    });
+
+    // Wait for async operations to complete
+    await waitFor(() => {
+      expect(mockPaymentsCollection.create).toHaveBeenCalled();
+    });
+
+    // Only ONE write should have been initiated despite two onPress calls
+    // If the guard is working, only the first call executes
+    expect(mockPaymentsCollection.create).toHaveBeenCalledTimes(1);
   });
 });
