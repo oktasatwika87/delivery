@@ -129,6 +129,13 @@ export class SyncCoordinator implements Coordinator {
       return null;
     }
 
+    // Check if push timed out (empty acks means no server response)
+    if (resp.acks.length === 0 && payload.records.length > 0) {
+      // Timeout: increment failedSyncAttempts for all attempted records
+      console.warn('[flushNow] pushBatch returned empty acks — treating as timeout');
+      await this.markRecordsFailed(payload.records, this.db);
+    }
+
     // Process acks: conflict = overwrite local row dengan data server
     await this.resolveAcks(resp.acks, this.db);
 
@@ -137,6 +144,60 @@ export class SyncCoordinator implements Coordinator {
     if (resp.pullDelta) await this.applyPull(resp.pullDelta);
 
     return resp;
+  }
+
+  /**
+   * Mark records as failed due to timeout (no ack from server).
+   * Increments failedSyncAttempts and flips status to FAILED if at cap.
+   */
+  private async markRecordsFailed(
+    records: SyncRecordPush[],
+    db: Database,
+  ): Promise<void> {
+    const batch: any[] = [];
+
+    for (const record of records) {
+      const collection = this.collectionFor(record.entityType, db);
+      if (!collection) continue;
+
+      const existing = await collection.find(record.id).catch(() => null);
+      if (existing) {
+        const currentAttempts = (existing as any).failedSyncAttempts ?? 0;
+        const nextAttempts = currentAttempts + 1;
+
+        batch.push(existing.prepareUpdate((r: any) => {
+          r.failedSyncAttempts = nextAttempts;
+          // For chat messages and payments, flip domain status to FAILED so UI can surface it
+          if ((record.entityType === 'chat_message' || record.entityType === 'payment') && nextAttempts >= MAX_SYNC_ATTEMPTS) {
+            (r as any).status = 'FAILED';
+            console.error(
+              `[markRecordsFailed] Record timed out after ${MAX_SYNC_ATTEMPTS} attempts — ${record.entityType} id=${record.id} marked FAILED.`,
+            );
+          } else if (nextAttempts >= MAX_SYNC_ATTEMPTS) {
+            console.error(
+              `[markRecordsFailed] Record timed out after ${MAX_SYNC_ATTEMPTS} attempts — ${record.entityType} id=${record.id}.`,
+            );
+          }
+        }));
+
+        if (nextAttempts < MAX_SYNC_ATTEMPTS) {
+          console.warn(
+            `[markRecordsFailed] Record timed out: entityType=${record.entityType}, id=${record.id}`,
+            `attempt ${nextAttempts}/${MAX_SYNC_ATTEMPTS}`,
+          );
+        }
+      }
+    }
+
+    if (batch.length > 0) {
+      try {
+        await db.write(async () => {
+          await db.batch(...batch);
+        });
+      } catch (err) {
+        console.error('[markRecordsFailed] Failed to write batch:', err);
+      }
+    }
   }
 
   // ============ pull ============
@@ -523,11 +584,11 @@ export class SyncCoordinator implements Coordinator {
 
           batch.push(existing.prepareUpdate((r: any) => {
             r.failedSyncAttempts = nextAttempts;
-            // For chat messages, flip domain status to FAILED so UI can surface it
-            if (ack.entityType === 'chat_message' && nextAttempts >= MAX_SYNC_ATTEMPTS) {
+            // For chat messages and payments, flip domain status to FAILED so UI can surface it
+            if ((ack.entityType === 'chat_message' || ack.entityType === 'payment') && nextAttempts >= MAX_SYNC_ATTEMPTS) {
               (r as any).status = 'FAILED';
               console.error(
-                `[resolveAcks] Record permanently rejected after ${MAX_SYNC_ATTEMPTS} attempts — chat_message id=${ack.id} marked FAILED. ` +
+                `[resolveAcks] Record permanently rejected after ${MAX_SYNC_ATTEMPTS} attempts — ${ack.entityType} id=${ack.id} marked FAILED. ` +
                 `User should be notified. Server reason: ${ack.reason ?? 'unknown'}`,
               );
             } else if (nextAttempts >= MAX_SYNC_ATTEMPTS) {

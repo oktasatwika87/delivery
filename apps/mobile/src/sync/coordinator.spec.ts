@@ -8,7 +8,19 @@
  * - collection.find() return Model instance dengan method prepareUpdate
  * - prepareUpdate(fn) SIMPAN operation ke batch (deferred)
  * - db.batch() EKSEKUSI semua prepared operations
+ *
+ * AsyncStorage mock sudah di-handle oleh jest.config.js moduleNameMapper.
  */
+
+// Mock session
+jest.mock('./session', () => ({
+  getCurrentUserId: jest.fn().mockResolvedValue('test-user-id'),
+}));
+
+// Mock device
+jest.mock('./device', () => ({
+  getDeviceId: jest.fn().mockResolvedValue('test-device-id'),
+}));
 
 import { SyncCoordinator } from './coordinator';
 
@@ -19,6 +31,15 @@ type SyncRecordPull = {
   serverChangedAt: string;
   deleted: boolean;
   data: Record<string, unknown>;
+};
+
+type SyncRecordPush = {
+  entityType: string;
+  id: string;
+  data: Record<string, unknown>;
+  op: 'create' | 'update' | 'delete';
+  clientChangedAt: string;
+  baseVersion: number | null;
 };
 
 type SyncPullResponse = {
@@ -697,6 +718,196 @@ describe('SyncCoordinator', () => {
       const updatedRow = state.records.get('chat_messages')!.get('chat-recovered')!;
       expect(updatedRow.failedSyncAttempts).toBe(2); // tidak berubah
       expect(updatedRow._raw._status).toBe('synced');
+    });
+  });
+
+  describe('payment FAILED surfacing', () => {
+    test('payment domain status menjadi FAILED setelah MAX_SYNC_ATTEMPTS rejections', async () => {
+      const row = createMockRow('payment-perma-fail', 'created');
+      row.serverVersion = 0;
+      row.failedSyncAttempts = 4; // satu lagi akan mentrigger cap
+      row.status = 'CAPTURED';
+      row.orderId = 'order-1';
+      row.idempotencyKey = 'idem-1';
+      row.method = 'CASH';
+      row.amountCents = 50000;
+      row.currency = 'IDR';
+      row.kind = 'PAYMENT';
+      state.records.get('payments')!.set('payment-perma-fail', row);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'payment',
+          id: 'payment-perma-fail',
+          status: 'rejected',
+          reason: 'Server validation error',
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      const updatedRow = state.records.get('payments')!.get('payment-perma-fail')!;
+      expect(updatedRow.failedSyncAttempts).toBe(5);
+      expect((updatedRow as any).status).toBe('FAILED');
+    });
+
+    test('payment dengan rejected ack increment failedSyncAttempts', async () => {
+      const row = createMockRow('payment-retry-1', 'created');
+      row.serverVersion = 0;
+      row.failedSyncAttempts = 0;
+      row.status = 'CAPTURED';
+      row.orderId = 'order-1';
+      row.idempotencyKey = 'idem-1';
+      row.method = 'CASH';
+      row.amountCents = 50000;
+      row.currency = 'IDR';
+      row.kind = 'PAYMENT';
+      state.records.get('payments')!.set('payment-retry-1', row);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'payment',
+          id: 'payment-retry-1',
+          status: 'rejected',
+          reason: 'Entity not found',
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // Verifikasi failedSyncAttempts naik
+      const updatedRow = state.records.get('payments')!.get('payment-retry-1')!;
+      expect(updatedRow.failedSyncAttempts).toBe(1);
+      // Status domain tidak berubah ke FAILED sebelum cap (MAX=5)
+      expect((updatedRow as any).status).not.toBe('FAILED');
+    });
+
+    test('payment accepted tidak me-reset failedSyncAttempts', async () => {
+      const row = createMockRow('payment-accepted', 'created');
+      row.serverVersion = 0;
+      row.failedSyncAttempts = 2;
+      row.status = 'CAPTURED';
+      row.orderId = 'order-1';
+      row.idempotencyKey = 'idem-1';
+      row.method = 'CASH';
+      row.amountCents = 50000;
+      row.currency = 'IDR';
+      row.kind = 'PAYMENT';
+      state.records.get('payments')!.set('payment-accepted', row);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'payment',
+          id: 'payment-accepted',
+          status: 'accepted',
+          serverVersion: 3,
+          serverChangedAt: new Date().toISOString(),
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      const updatedRow = state.records.get('payments')!.get('payment-accepted')!;
+      expect(updatedRow.failedSyncAttempts).toBe(2); // tidak berubah
+      expect(updatedRow._raw._status).toBe('synced');
+    });
+  });
+
+  describe('markRecordsFailed — timeout handling', () => {
+    test('markRecordsFailed increment counter untuk records yang di-timeout', async () => {
+      const row = createMockRow('payment-timeout-1', 'created');
+      row.serverVersion = 0;
+      row.failedSyncAttempts = 0;
+      row.status = 'CAPTURED';
+      row.orderId = 'order-1';
+      row.idempotencyKey = 'idem-1';
+      row.method = 'CASH';
+      row.amountCents = 50000;
+      row.currency = 'IDR';
+      row.kind = 'PAYMENT';
+      state.records.get('payments')!.set('payment-timeout-1', row);
+
+      const records: SyncRecordPush[] = [
+        {
+          entityType: 'payment',
+          id: 'payment-timeout-1',
+          data: {},
+          op: 'create',
+          clientChangedAt: new Date().toISOString(),
+          baseVersion: null,
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.markRecordsFailed(records, mockDb);
+
+      const updatedRow = state.records.get('payments')!.get('payment-timeout-1')!;
+      expect(updatedRow.failedSyncAttempts).toBe(1);
+      expect((updatedRow as any).status).not.toBe('FAILED');
+    });
+
+    test('markRecordsFailed flip status ke FAILED setelah MAX_SYNC_ATTEMPTS timeouts', async () => {
+      const row = createMockRow('payment-timeout-fail', 'created');
+      row.serverVersion = 0;
+      row.failedSyncAttempts = 4; // satu lagi akan mentrigger cap
+      row.status = 'CAPTURED';
+      row.orderId = 'order-1';
+      row.idempotencyKey = 'idem-1';
+      row.method = 'CASH';
+      row.amountCents = 50000;
+      row.currency = 'IDR';
+      row.kind = 'PAYMENT';
+      state.records.get('payments')!.set('payment-timeout-fail', row);
+
+      const records: SyncRecordPush[] = [
+        {
+          entityType: 'payment',
+          id: 'payment-timeout-fail',
+          data: {},
+          op: 'create',
+          clientChangedAt: new Date().toISOString(),
+          baseVersion: null,
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.markRecordsFailed(records, mockDb);
+
+      const updatedRow = state.records.get('payments')!.get('payment-timeout-fail')!;
+      expect(updatedRow.failedSyncAttempts).toBe(5);
+      expect((updatedRow as any).status).toBe('FAILED');
+    });
+
+    test('markRecordsFailed untuk chat_message flip status ke FAILED', async () => {
+      const row = createMockRow('chat-timeout-fail', 'created');
+      row.serverVersion = 0;
+      row.failedSyncAttempts = 4;
+      (row as any).status = 'pending_send';
+      row.roomId = 'room-1';
+      row.senderId = 'user-1';
+      row.body = 'test';
+      state.records.get('chat_messages')!.set('chat-timeout-fail', row);
+
+      const records: SyncRecordPush[] = [
+        {
+          entityType: 'chat_message',
+          id: 'chat-timeout-fail',
+          data: {},
+          op: 'create',
+          clientChangedAt: new Date().toISOString(),
+          baseVersion: null,
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.markRecordsFailed(records, mockDb);
+
+      const updatedRow = state.records.get('chat_messages')!.get('chat-timeout-fail')!;
+      expect(updatedRow.failedSyncAttempts).toBe(5);
+      expect((updatedRow as any).status).toBe('FAILED');
     });
   });
 });
