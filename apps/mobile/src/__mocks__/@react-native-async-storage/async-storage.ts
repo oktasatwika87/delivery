@@ -22,9 +22,16 @@ function clear(): Promise<void> {
   return Promise.resolve();
 }
 
-// Reset mock storage before each test
-beforeEach(() => {
-  mockStorage = {};
-});
+// Named exports
+export { getItem, setItem, removeItem, clear, mockStorage };
 
-export { getItem, setItem, removeItem, clear };
+// Default export (for default import syntax)
+export default {
+  getItem,
+  setItem,
+  removeItem,
+  clear,
+  _resetStorage: () => {
+    mockStorage = {};
+  },
+};
