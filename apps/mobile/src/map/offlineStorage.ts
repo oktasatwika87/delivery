@@ -15,13 +15,25 @@
  *   import { offlineStorage, DownloadProgress } from '../map/offlineStorage';
  *   await offlineStorage.downloadRegion({
  *     name: 'jakarta',
- *     bounds: [[106.7, -6.3], [106.95, -6.1]],
+ *     bounds: [[106.95, -6.1], [106.7, -6.35]],
  *     minZoom: 10,
  *     maxZoom: 16,
  *   }, onProgress);
  */
 
 import { OfflineManager, type OfflinePackStatus, OfflinePack } from '@maplibre/maplibre-react-native';
+import Config from 'react-native-config';
+
+/**
+ * HTTP URL for the offline-pack style JSON.
+ *
+ * Served by the NestJS backend at /static/style.demotiles.offline.json.
+ * Reaches backend via API_BASE_URL (http://10.0.2.2:3000 on Android emulator).
+ *
+ * Note: OfflineManager.createPack() requires an HTTP(S) URL — file:// and
+ * asset:// schemes are rejected by maplibre-native's offline download system.
+ */
+const OFFLINE_STYLE_URL = `${Config.API_BASE_URL}/static/style.demotiles.offline.json`;
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
@@ -31,9 +43,11 @@ export type Bounds = [[number, number], [number, number]];
 export interface DownloadRegionInput {
   /** Unique pack name — pack di-identify dengan string ini di v10. */
   name: string;
-  /** Tile server URL — bukan Style JSON path. */
-  styleURL: string;
-  /** Bbox [[neLng, neLat], [swLng, swLat]]. */
+  /**
+   * Bbox [[neLng, neLat], [swLng, swLat]] — first pair is NE corner
+   * (larger lng, larger lat), second pair is SW corner. MapLibre v10
+   * requires this positional order.
+   */
   bounds: Bounds;
   /** Default 10 — zoom level minimum yang di-download. */
   minZoom?: number;
@@ -151,21 +165,29 @@ class OfflineStorageServiceImpl implements OfflineStorageService {
     let lastError: unknown = null;
     while (attempt < MAX_RETRY_ATTEMPTS) {
       try {
-        // createPack returns void di v10 — pack otomatis ter-register
-        // di OfflineManager singleton.
+        // Style JSON served by backend at /static/style.demotiles.offline.json.
+        // HTTP URL required — maplibre-native's offline download system rejects file:// URLs.
         await OfflineManager.createPack(
           {
             name: input.name,
-            styleURL: input.styleURL,
+            styleURL: OFFLINE_STYLE_URL,
             bounds: input.bounds,
             minZoom,
             maxZoom,
           },
-          (pack, status) => {
-            onProgress(packInfoFromStatus(pack, status));
+          (_pack, status) => {
+            console.log(`[offlineStorage] download progress: ${input.name}`, {
+              state: status.state,
+              percentage: status.percentage,
+              completedTileCount: status.completedTileCount,
+              completedTileSize: status.completedTileSize,
+              requiredResourceCount: status.requiredResourceCount,
+            });
+            onProgress(packInfoFromStatus(_pack, status));
           },
           (_pack, err) => {
-            onError({ message: err.message });
+            console.error(`[offlineStorage] download error: ${input.name}`, err.message ?? err);
+            onError({ message: err.message ?? String(err) });
           },
         );
         // createPack v10 tidak return pack, tapi subscribe sudah terdaftar.

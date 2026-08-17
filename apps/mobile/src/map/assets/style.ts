@@ -1,16 +1,24 @@
 /**
  * Map style constants — consistent tile source across download and view.
  *
- * offlineStorage.downloadRegion uses TILE_STYLE_URL to download tiles into
- * MapLibre's native tile cache. When offline, MapScreen uses TILE_STYLE
- * (which references the same tile source) so MapLibre serves cached tiles.
- * Until tiles are downloaded, a local GeoJSON layer ensures the map is not
- * blank — but the real tile layer will appear once offline region is ready.
+ * offlineStorage.downloadRegion uses a backend-served HTTP URL
+ * (${API_BASE_URL}/static/style.demotiles.offline.json) to download tiles
+ * into MapLibre's native tile cache. The style JSON (with glyphs stripped)
+ * is hosted by the NestJS backend at /static/.
+ *
+ * offlineStorage now uses a direct HTTP URL instead of the old approach
+ * (which failed because OfflineManager.createPack rejects file:// and asset:// schemes).
+ *
+ * When offline, MapScreen uses TILE_STYLE (which references the same tile
+ * source via TILE_STYLE_URL) so MapLibre serves cached tiles.
  */
 
-/** Demo vector tile style — used by offlineStorage.downloadRegion to
- *  seed MapLibre's native tile cache. Must match TILE_STYLE's source URL. */
-export const TILE_STYLE_URL = 'https://demotiles.maplibre.org/style.json';
+/** Demo vector tile source (TileJSON 2.0.0) — used by MapView.mapStyle (online path).
+ *  Zoom range: 0-6 only. Tiles at https://demotiles.maplibre.org/tiles/{z}/{x}/{y}.pbf.
+ *
+ *  NOTE: preset zoom levels (10-16) return no tiles when downloading offline packs
+ *  with this source — this is expected behavior, not a bug. */
+export const TILE_STYLE_URL = 'https://demotiles.maplibre.org/tiles/tiles.json';
 
 /** Map style for MapScreen.mapStyle prop.
  *

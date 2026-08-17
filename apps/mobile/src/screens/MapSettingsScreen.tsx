@@ -25,7 +25,6 @@ import { withDatabase } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
 
 import { offlineStorage, type PackInfo, type Bounds } from '../map/offlineStorage';
-import { TILE_STYLE_URL } from '../map/assets/style';
 
 interface PresetRegion {
   name: string;
@@ -36,29 +35,31 @@ interface PresetRegion {
 // Default presets — beberapa kota kerja kurir di Indonesia.
 // User bisa tambah preset baru dari UI advanced (TODO), atau override via
 // config / API nanti.
+// NOTE: bounds order is NE-first [[neLng, neLat], [swLng, swLat]] per
+// OfflineCreatePackOptions contract.
 const PRESETS: PresetRegion[] = [
   {
     name: 'jakarta',
     label: 'Jakarta',
     bounds: [
-      [106.7, -6.1],
-      [106.95, -6.35],
+      [106.95, -6.1],  // NE corner (larger lng, larger lat)
+      [106.7, -6.35],  // SW corner (smaller lng, smaller lat)
     ],
   },
   {
     name: 'bandung',
     label: 'Bandung',
     bounds: [
-      [107.5, -6.85],
-      [107.75, -7.0],
+      [107.75, -6.85], // NE corner
+      [107.5, -7.0],   // SW corner
     ],
   },
   {
     name: 'surabaya',
     label: 'Surabaya',
     bounds: [
-      [112.6, -7.2],
-      [112.85, -7.35],
+      [112.85, -7.2],  // NE corner
+      [112.6, -7.35],  // SW corner
     ],
   },
 ];
@@ -101,8 +102,6 @@ function MapSettingsBase(_props: Props): React.JSX.Element {
         await offlineStorage.downloadRegion(
           {
             name: preset.name,
-            // Untuk demo maplibre tile server (placeholder production).
-            styleURL: TILE_STYLE_URL,
             bounds: preset.bounds,
             minZoom: 10,
             maxZoom: 16,

@@ -11,6 +11,14 @@
 import { offlineStorage, stateFromNumber } from './offlineStorage';
 import { OfflineManager } from '@maplibre/maplibre-react-native';
 
+// Mock react-native-config
+jest.mock('react-native-config', () => ({
+  __esModule: true,
+  default: {
+    API_BASE_URL: 'http://10.0.2.2:3000',
+  },
+}));
+
 // Helper: mock pack dengan status
 function mockPackWithStatus(name: string, state: number, percentage: number) {
   return {
@@ -169,9 +177,9 @@ describe('offlineStorage', () => {
 
   describe('downloadRegion()', () => {
     // Mutable bounds type (not readonly)
+    // NOTE: bounds order is NE-first per OfflineCreatePackOptions contract.
     const mockInput = {
       name: 'test-region',
-      styleURL: 'https://example.com/style.json',
       bounds: [[106.95, -6.1], [106.7, -6.3]] as [[number, number], [number, number]],
       minZoom: 10,
       maxZoom: 16,
@@ -200,7 +208,7 @@ describe('offlineStorage', () => {
       expect(OfflineManager.createPack).toHaveBeenCalledWith(
         expect.objectContaining({
           name: mockInput.name,
-          styleURL: mockInput.styleURL,
+          styleURL: 'http://10.0.2.2:3000/static/style.demotiles.offline.json',
           bounds: mockInput.bounds,
           minZoom: mockInput.minZoom,
           maxZoom: mockInput.maxZoom,
@@ -240,7 +248,6 @@ describe('offlineStorage', () => {
 
       const input = {
         name: 'retry-test-1',
-        styleURL: mockInput.styleURL,
         bounds: mockInput.bounds,
         minZoom: mockInput.minZoom,
         maxZoom: mockInput.maxZoom,
@@ -286,7 +293,6 @@ describe('offlineStorage', () => {
 
       const input = {
         name: 'retry-test-2',
-        styleURL: mockInput.styleURL,
         bounds: mockInput.bounds,
         minZoom: mockInput.minZoom,
         maxZoom: mockInput.maxZoom,
