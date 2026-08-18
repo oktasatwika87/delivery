@@ -1,0 +1,44 @@
+# tileserver-gl — self-hosted OSM tile server for Bali (Nusa Tenggara extract)
+#
+# Usage:
+#   Development (localhost):
+#     docker compose up
+#     # serves at http://localhost:8080
+#
+#   Production (VPS):
+#     scp -r infra/tileserver/ user@vps:/opt/tileserver/
+#     ssh user@vps
+#     cd /opt/tileserver
+#     # Edit .env with your domain and VPS IP
+#     docker compose up -d
+#     # Then set up Caddy: scp infra/tileserver/Caddyfile user@vps:/etc/caddy/Caddyfile
+#
+# Endpoints:
+#   Style JSON:  http://localhost:8080/styles/bali/style.json
+#   TileJSON:    http://localhost:8080/data/bali.json
+#   Vector tiles: http://localhost:8080/data/bali/{z}/{x}/{y}.pbf
+#   Sprite:      http://localhost:8080/sprites/bali.json
+#
+# Initial data setup (one-time per OSM refresh):
+#   ./refresh-osm.sh
+#   # This downloads Geofabrik extract, runs planetiler, outputs bali.mbtiles
+
+services:
+  tileserver:
+    image: maptiler/tileserver-gl:v2.3.0
+    container_name: tileserver-gl
+    restart: unless-stopped
+    volumes:
+      - ./data:/data:ro
+    ports:
+      - "8080:8080"
+    environment:
+      # tileserver-gl reads .mbtiles from /data/ automatically
+      # No config file needed — drops .mbtiles in /data/ and it's served
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

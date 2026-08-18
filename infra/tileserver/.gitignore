@@ -1,0 +1,8 @@
+# OSM tile data — gitignored, uploaded to VPS via scp
+data/
+
+# planetiler JAR (downloaded separately from GitHub releases)
+planetiler.jar
+
+# Logs
+*.log
