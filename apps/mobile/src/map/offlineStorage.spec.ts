@@ -16,6 +16,7 @@ jest.mock('react-native-config', () => ({
   __esModule: true,
   default: {
     API_BASE_URL: 'http://10.0.2.2:3000',
+    TILE_BASE_URL: 'http://10.0.2.2:8080',
   },
 }));
 
@@ -208,7 +209,7 @@ describe('offlineStorage', () => {
       expect(OfflineManager.createPack).toHaveBeenCalledWith(
         expect.objectContaining({
           name: mockInput.name,
-          styleURL: 'http://10.0.2.2:3000/static/style.demotiles.offline.json',
+          styleURL: 'http://10.0.2.2:8080/styles/bali/style.json',
           bounds: mockInput.bounds,
           minZoom: mockInput.minZoom,
           maxZoom: mockInput.maxZoom,

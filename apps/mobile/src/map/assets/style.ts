@@ -1,31 +1,38 @@
 /**
  * Map style constants — consistent tile source across download and view.
  *
- * offlineStorage.downloadRegion uses a backend-served HTTP URL
- * (${API_BASE_URL}/static/style.demotiles.offline.json) to download tiles
- * into MapLibre's native tile cache. The style JSON (with glyphs stripped)
- * is hosted by the NestJS backend at /static/.
+ * Self-hosted OSM tiles via tileserver-gl (VPS):
+ *   - Style: ${TILE_BASE_URL}/styles/bali/style.json
+ *   - Tiles: ${TILE_BASE_URL}/data/bali/{z}/{x}/{y}.pbf
  *
- * offlineStorage now uses a direct HTTP URL instead of the old approach
- * (which failed because OfflineManager.createPack rejects file:// and asset:// schemes).
+ * TILE_STYLE_URL is used by:
+ *   1. MapScreen (online path) — MapView.mapStyle references TILE_STYLE,
+ *      which points at TILE_STYLE_URL (tileserver-gl style.json).
+ *   2. offlineStorage.downloadRegion (offline path) — OfflineManager.createPack
+ *      uses OFFLINE_STYLE_URL to pre-cache tiles from tileserver-gl.
  *
- * When offline, MapScreen uses TILE_STYLE (which references the same tile
- * source via TILE_STYLE_URL) so MapLibre serves cached tiles.
+ * Both paths read the same tile source (tileserver-gl serves the .mbtiles
+ * at /data/bali.json TileJSON endpoint, style.json references it as "/data/bali.json"
+ * relative URL so OfflineManager resolves it correctly).
  */
 
-/** Demo vector tile source (TileJSON 2.0.0) — used by MapView.mapStyle (online path).
- *  Zoom range: 0-6 only. Tiles at https://demotiles.maplibre.org/tiles/{z}/{x}/{y}.pbf.
+import Config from 'react-native-config';
+
+/**
+ * TileJSON endpoint from tileserver-gl.
+ * Points at /data/bali.json (relative path so OfflineManager resolves it).
  *
- *  NOTE: preset zoom levels (10-16) return no tiles when downloading offline packs
- *  with this source — this is expected behavior, not a bug. */
-export const TILE_STYLE_URL = 'https://demotiles.maplibre.org/tiles/tiles.json';
+ * Zoom range: 0-20 (self-hosted Bali extract, not limited like demotiles z0-6).
+ */
+export const TILE_STYLE_URL = `${Config.TILE_BASE_URL}/styles/bali/style.json`;
 
 /** Map style for MapScreen.mapStyle prop.
  *
  * Two layers:
- *  - local_roads: embedded empty GeoJSON (always shows blank road outlines)
- *  - tiles: references the vector tile source that offlineStorage pre-caches.
- *    MapLibre serves these tiles from native cache when offline — no network.
+ *   - local_roads: embedded empty GeoJSON (always shows blank road outlines
+ *     as fallback when tile source is unavailable).
+ *   - tile_roads: references the self-hosted tile source served by tileserver-gl.
+ *     MapLibre serves these tiles from native cache when offline.
  *
  * Type 'string' so Metro parses as JSON. Passed as object to MapView
  * via JSON.parse, so both the GeoJSON and tile source are resolved.

@@ -27,13 +27,13 @@ import Config from 'react-native-config';
 /**
  * HTTP URL for the offline-pack style JSON.
  *
- * Served by the NestJS backend at /static/style.demotiles.offline.json.
- * Reaches backend via API_BASE_URL (http://10.0.2.2:3000 on Android emulator).
+ * Served by tileserver-gl at /styles/bali/style.json.
+ * Reaches tile server via TILE_BASE_URL (http://10.0.2.2:8080 on Android emulator).
  *
  * Note: OfflineManager.createPack() requires an HTTP(S) URL — file:// and
  * asset:// schemes are rejected by maplibre-native's offline download system.
  */
-const OFFLINE_STYLE_URL = `${Config.API_BASE_URL}/static/style.demotiles.offline.json`;
+const OFFLINE_STYLE_URL = `${Config.TILE_BASE_URL}/styles/bali/style.json`;
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
@@ -165,7 +165,7 @@ class OfflineStorageServiceImpl implements OfflineStorageService {
     let lastError: unknown = null;
     while (attempt < MAX_RETRY_ATTEMPTS) {
       try {
-        // Style JSON served by backend at /static/style.demotiles.offline.json.
+        // Style JSON served by tileserver-gl at /styles/bali/style.json.
         // HTTP URL required — maplibre-native's offline download system rejects file:// URLs.
         await OfflineManager.createPack(
           {
