@@ -22,6 +22,20 @@ jest.mock('./device', () => ({
   getDeviceId: jest.fn().mockResolvedValue('test-device-id'),
 }));
 
+// Mock syncEvents — define mocks OUTSIDE jest.mock so Jest hoisting works
+const emitMock = jest.fn();
+const onMock = jest.fn();
+const offMock = jest.fn();
+const onceMock = jest.fn();
+jest.mock('./syncEvents', () => ({
+  syncEvents: {
+    emit: emitMock,
+    on: onMock,
+    off: offMock,
+    once: onceMock,
+  },
+}));
+
 import { SyncCoordinator } from './coordinator';
 
 type SyncRecordPull = {
@@ -128,9 +142,10 @@ function createCollection(name: string) {
     query() {
       return {
         fetch() {
-          return [...collectionRecords.values()].filter(
-            (r) => r._raw._status !== 'synced',
-          );
+          // Return rows with model methods attached so prepareUpdate works
+          return [...collectionRecords.values()]
+            .filter((r) => r._raw._status !== 'synced')
+            .map((r) => attachModelMethods(r));
         },
       };
     },
@@ -908,6 +923,347 @@ describe('SyncCoordinator', () => {
       const updatedRow = state.records.get('chat_messages')!.get('chat-timeout-fail')!;
       expect(updatedRow.failedSyncAttempts).toBe(5);
       expect((updatedRow as any).status).toBe('FAILED');
+    });
+  });
+
+  describe('idempotency key defensive fallback', () => {
+    test('localRowToSyncRecord generates fallback idempotencyKey when row.idempotencyKey is empty', async () => {
+      const row = createMockRow('payment-no-key', 'created');
+      row.serverVersion = 0;
+      row.failedSyncAttempts = 0;
+      row.status = 'CAPTURED';
+      row.orderId = 'order-1';
+      row.idempotencyKey = ''; // empty — simulates old data / debug insert
+      row.method = 'CASH';
+      row.amountCents = 50000;
+      row.currency = 'IDR';
+      row.kind = 'PAYMENT';
+      row.createdAt = Date.now();
+      row.updatedAt = Date.now();
+
+      // @ts-expect-error - accessing private method for testing
+      const record = coordinator.localRowToSyncRecord(row, 'payments');
+
+      // Fallback key should be valid format cod:uuid
+      expect(record.data.idempotencyKey).toMatch(/^cod:[0-9a-f-]+$/i);
+      expect(record.data.idempotencyKey).not.toBe('');
+    });
+
+    test('localRowToSyncRecord uses row idempotencyKey when present', async () => {
+      const row = createMockRow('payment-with-key', 'created');
+      row.serverVersion = 0;
+      row.failedSyncAttempts = 0;
+      row.status = 'CAPTURED';
+      row.orderId = 'order-1';
+      row.idempotencyKey = 'cod:550e8400-e29b-41d4-a716-446655440000';
+      row.method = 'CASH';
+      row.amountCents = 50000;
+      row.currency = 'IDR';
+      row.kind = 'PAYMENT';
+      row.createdAt = Date.now();
+      row.updatedAt = Date.now();
+
+      // @ts-expect-error - accessing private method for testing
+      const record = coordinator.localRowToSyncRecord(row, 'payments');
+
+      // Should use the row's key, not generate a fallback
+      expect(record.data.idempotencyKey).toBe('cod:550e8400-e29b-41d4-a716-446655440000');
+    });
+  });
+
+  describe('ack-id mismatch recovery (findLocalPaymentByAck)', () => {
+    test('accepted ack with ack-id mismatch recovers via idempotencyKey match', async () => {
+      // Setup: local row exists but with different UUID than server
+      const localRow = createMockRow('local-uuid-123', 'created');
+      localRow.serverVersion = 0;
+      localRow.status = 'CAPTURED';
+      localRow.orderId = 'order-1';
+      localRow.idempotencyKey = 'cod:server-matched-key-456'; // server will return this
+      localRow.method = 'CASH';
+      localRow.amountCents = 50000;
+      localRow.currency = 'IDR';
+      localRow.kind = 'PAYMENT';
+      state.records.get('payments')!.set('local-uuid-123', localRow);
+
+      // Ack from server: accepted but with server's UUID, not local's
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'payment',
+          id: 'server-uuid-789', // different from local
+          status: 'accepted',
+          serverVersion: 5,
+          serverChangedAt: new Date().toISOString(),
+          serverData: {
+            idempotencyKey: 'cod:server-matched-key-456',
+            orderId: 'order-1',
+            method: 'CASH',
+            status: 'CAPTURED',
+            amountCents: 50000,
+            currency: 'IDR',
+            kind: 'PAYMENT',
+          },
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // Local row should be marked synced
+      const updatedRow = state.records.get('payments')!.get('local-uuid-123')!;
+      expect(updatedRow.serverVersion).toBe(5);
+      expect(updatedRow._raw._status).toBe('synced');
+    });
+
+    test('conflict ack with ack-id mismatch recovers via idempotencyKey match', async () => {
+      // Setup: local row exists but with different UUID than server
+      const localRow = createMockRow('local-uuid-abc', 'created');
+      localRow.serverVersion = 0;
+      localRow.status = 'CAPTURED';
+      localRow.orderId = 'order-1';
+      localRow.idempotencyKey = 'cod:conflict-matched-key-def';
+      localRow.method = 'CASH';
+      localRow.amountCents = 50000;
+      localRow.currency = 'IDR';
+      localRow.kind = 'PAYMENT';
+      state.records.get('payments')!.set('local-uuid-abc', localRow);
+
+      // Ack from server: conflict with server's data and UUID
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'payment',
+          id: 'server-uuid-ghi', // different from local
+          status: 'conflict',
+          serverVersion: 10,
+          serverChangedAt: new Date().toISOString(),
+          serverData: {
+            idempotencyKey: 'cod:conflict-matched-key-def',
+            orderId: 'order-1',
+            method: 'CASH',
+            status: 'CAPTURED',
+            amountCents: 60000, // server has different amount
+            currency: 'IDR',
+            kind: 'PAYMENT',
+          },
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // Local row should be marked synced
+      const updatedRow = state.records.get('payments')!.get('local-uuid-abc')!;
+      expect(updatedRow.serverVersion).toBe(10);
+      expect(updatedRow._raw._status).toBe('synced');
+    });
+
+    test('ack without serverData does not match by idempotencyKey', async () => {
+      // Setup: local row with a known idempotencyKey
+      const localRow = createMockRow('local-row-xyz', 'created');
+      localRow.serverVersion = 0;
+      localRow.status = 'CAPTURED';
+      localRow.orderId = 'order-1';
+      localRow.idempotencyKey = 'cod:orphan-key-999';
+      localRow.method = 'CASH';
+      localRow.amountCents = 50000;
+      localRow.currency = 'IDR';
+      localRow.kind = 'PAYMENT';
+      state.records.get('payments')!.set('local-row-xyz', localRow);
+
+      // Ack without serverData (no idempotencyKey to match)
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'payment',
+          id: 'server-unknown-id',
+          status: 'accepted',
+          serverVersion: 3,
+          serverChangedAt: new Date().toISOString(),
+          // No serverData — can't match by idempotencyKey
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // Local row should NOT be synced (no match possible)
+      const updatedRow = state.records.get('payments')!.get('local-row-xyz')!;
+      expect(updatedRow.serverVersion).toBe(0); // unchanged
+      expect(updatedRow._raw._status).toBe('created'); // still dirty
+    });
+  });
+
+  describe('resolveAcks — order entity', () => {
+    beforeEach(() => {
+      emitMock.mockClear();
+    });
+
+    test('rejected ack on order increments failedSyncAttempts', async () => {
+      const orderRow = createMockRow('order-rejected-1', 'updated');
+      orderRow.serverVersion = 3;
+      orderRow.failedSyncAttempts = 1;
+      orderRow.status = 'OUT_FOR_DELIVERY';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-rejected-1', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-rejected-1',
+          status: 'rejected',
+          reason: 'Order sudah di-reassign ke driver lain',
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // Verifikasi failedSyncAttempts naik
+      const updatedRow = state.records.get('orders')!.get('order-rejected-1')!;
+      expect(updatedRow.failedSyncAttempts).toBe(2);
+      // Status domain tidak berubah ke FAILED (order tidak punya domain status FAILED)
+      expect((updatedRow as any).status).not.toBe('FAILED');
+    });
+
+    test('rejected ack on order at cap does NOT flip status (no FAILED domain status exists)', async () => {
+      const orderRow = createMockRow('order-rejected-cap', 'updated');
+      orderRow.serverVersion = 3;
+      orderRow.failedSyncAttempts = 4; // satu lagi akan mentrigger cap
+      orderRow.status = 'CANCELLED';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-rejected-cap', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-rejected-cap',
+          status: 'rejected',
+          reason: 'Tidak bisa mengubah status order dari DELIVERED ke CANCELLED',
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      const updatedRow = state.records.get('orders')!.get('order-rejected-cap')!;
+      expect(updatedRow.failedSyncAttempts).toBe(5);
+      // Order tidak punya FAILED domain status — status TIDAK boleh berubah
+      expect(updatedRow.status).toBe('CANCELLED');
+    });
+
+    test('conflict ack on order emits orderConflict event', async () => {
+      const orderRow = createMockRow('order-conflict-emit', 'updated');
+      orderRow.serverVersion = 5;
+      orderRow.status = 'OUT_FOR_DELIVERY';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-conflict-emit', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-conflict-emit',
+          status: 'conflict',
+          serverVersion: 10,
+          serverChangedAt: new Date().toISOString(),
+          serverData: {
+            customerId: 'cust-1',
+            driverId: 'bob',
+            status: 'DELIVERED',
+            items: [],
+            deliveryAddress: {},
+            totalCents: 50000,
+            currency: 'IDR',
+            notes: null,
+          },
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // Verify orderConflict event was emitted
+      expect(emitMock).toHaveBeenCalledWith('orderConflict', expect.objectContaining({
+        orderId: 'order-conflict-emit',
+        reason: 'order-status-conflict',
+        serverStatus: 'DELIVERED',
+      }));
+    });
+
+    test('rejected ack on order emits orderRejected event', async () => {
+      const orderRow = createMockRow('order-rejected-emit', 'updated');
+      orderRow.serverVersion = 5;
+      orderRow.failedSyncAttempts = 4;
+      orderRow.status = 'CANCELLED';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-rejected-emit', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-rejected-emit',
+          status: 'rejected',
+          reason: 'Order sudah di-reassign ke driver lain',
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // Verify orderRejected event was emitted
+      expect(emitMock).toHaveBeenCalledWith('orderRejected', expect.objectContaining({
+        orderId: 'order-rejected-emit',
+        reason: 'Order sudah di-reassign ke driver lain',
+      }));
+    });
+
+    test('conflict ack on order overwrites local data with server data', async () => {
+      const orderRow = createMockRow('order-overwrite', 'updated');
+      orderRow.serverVersion = 5;
+      orderRow.status = 'OUT_FOR_DELIVERY';
+      orderRow.totalCents = 50000;
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-overwrite', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-overwrite',
+          status: 'conflict',
+          serverVersion: 10,
+          serverChangedAt: new Date().toISOString(),
+          serverData: {
+            customerId: 'cust-1',
+            driverId: 'bob',
+            status: 'DELIVERED',
+            items: [],
+            deliveryAddress: {},
+            totalCents: 75000,
+            currency: 'IDR',
+            notes: null,
+          },
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      const overwritten = state.records.get('orders')!.get('order-overwrite')!;
+      expect(overwritten.serverVersion).toBe(10);
+      expect(overwritten.status).toBe('DELIVERED');
+      expect(overwritten.totalCents).toBe(75000);
+      expect(overwritten._raw._status).toBe('synced');
     });
   });
 });

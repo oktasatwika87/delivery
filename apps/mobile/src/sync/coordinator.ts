@@ -23,6 +23,7 @@ import { pushBatch, pullBatch } from './client';
 import { loadCursor, saveCursor } from './cursor';
 import { getDeviceId } from './device';
 import { getCurrentUserId } from './session';
+import { syncEvents } from './syncEvents';
 
 /**
  * Maximum consecutive failed sync attempts per record. After this many
@@ -137,6 +138,7 @@ export class SyncCoordinator implements Coordinator {
     }
 
     // Process acks: conflict = overwrite local row dengan data server
+    // Events (orderConflict, orderRejected) di-emit di resolveAcks()
     await this.resolveAcks(resp.acks, this.db);
 
     // Simpan cursor dari pullDelta (kalau ada)
@@ -477,10 +479,31 @@ export class SyncCoordinator implements Coordinator {
         updatedAt: new Date(row.updatedAt).toISOString(),
       };
     } else if (colName === 'payments') {
+      let idempotencyKey = row.idempotencyKey;
+      if (!idempotencyKey) {
+        // Defensive: a payment row without idempotencyKey is a data integrity
+        // issue (every COD row should have one from creation). Generate a
+        // fallback so the push payload is well-formed and server-side
+        // dedup still has something to work with.
+        //
+        // Do NOT writeback to the row here — collectDirty() is called from
+        // concurrent sync paths and writeback during read phase is racy.
+        // The next legitimate edit to this row (or another sync cycle) will
+        // re-trigger this fallback, which is acceptable for the recovery path.
+        const fallbackKey = `cod:${(typeof crypto !== 'undefined' && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random()}`}`;
+        console.warn(
+          `[localRowToSyncRecord] payment row ${row.id} missing idempotencyKey — ` +
+          `generating fallback "${fallbackKey}". This indicates a data integrity ` +
+          `issue (should have been set at create time).`
+        );
+        idempotencyKey = fallbackKey;
+      }
       data = {
         id: row.id,
         orderId: row.orderId,
-        idempotencyKey: row.idempotencyKey,
+        idempotencyKey,
         method: row.method,
         status: row.status,
         amountCents: row.amountCents,
@@ -522,6 +545,40 @@ export class SyncCoordinator implements Coordinator {
     };
   }
 
+  /**
+   * Find a local dirty payment row matching an ack. Used when the ack's `id`
+   * doesn't match any local row but `serverData.idempotencyKey` does match
+   * a dirty local row. This handles the "first push succeeded on server but
+   * ack was lost — second push gets existing-server-id as ack.id" case.
+   */
+  private async findLocalPaymentByAck(
+    collection: any,
+    ack: SyncPushResponse['acks'][number],
+  ): Promise<any | null> {
+    // First try by ack.id (fast path)
+    const byId = await collection.find(ack.id).catch(() => null);
+    if (byId) return byId;
+
+    // Fallback: match by idempotencyKey from serverData (payment-specific)
+    if (ack.entityType !== 'payment' || !ack.serverData?.idempotencyKey) {
+      return null;
+    }
+    const idempotencyKey = ack.serverData.idempotencyKey;
+    const dirtyRows = await collection
+      .query(
+        Q.where('_status', Q.notEq('synced')),
+      )
+      .fetch();
+    const matched = dirtyRows.find((r: any) => r.idempotencyKey === idempotencyKey);
+    if (matched) {
+      console.log(
+        `[resolveAcks] payment ack-id mismatch: server id=${ack.id}, ` +
+        `matched local row by idempotencyKey=${idempotencyKey}, local id=${matched.id}`,
+      );
+    }
+    return matched ?? null;
+  }
+
   // ============ resolveAcks ============
 
   /**
@@ -542,7 +599,7 @@ export class SyncCoordinator implements Coordinator {
         const collection = this.collectionFor(ack.entityType, db);
         if (!collection) continue;
 
-        const existing = await collection.find(ack.id).catch(() => null);
+        const existing = await this.findLocalPaymentByAck(collection, ack);
         if (existing) {
           batch.push(existing.prepareUpdate((r: any) => {
             r.serverVersion = ack.serverVersion;
@@ -557,13 +614,23 @@ export class SyncCoordinator implements Coordinator {
             // Mark as synced agar tidak dianggap dirty di collectDirty() berikutnya
             r._raw._status = 'synced';
           }));
+
+          // Emit event untuk order entity
+          if (ack.entityType === 'order') {
+            syncEvents.emit('orderConflict', {
+              orderId: ack.id,
+              reason: 'order-status-conflict',
+              serverStatus: (ack.serverData as any).status ?? 'unknown',
+              serverChangedAt: ack.serverChangedAt ?? new Date().toISOString(),
+            });
+          }
         }
       } else if (ack.status === 'accepted') {
         // Accepted: update serverVersion, mark synced
         const collection = this.collectionFor(ack.entityType, db);
         if (!collection) continue;
 
-        const existing = await collection.find(ack.id).catch(() => null);
+        const existing = await this.findLocalPaymentByAck(collection, ack);
         if (existing) {
           batch.push(existing.prepareUpdate((r: any) => {
             r.serverVersion = ack.serverVersion;
@@ -585,6 +652,7 @@ export class SyncCoordinator implements Coordinator {
           batch.push(existing.prepareUpdate((r: any) => {
             r.failedSyncAttempts = nextAttempts;
             // For chat messages and payments, flip domain status to FAILED so UI can surface it
+            // Orders do NOT have a FAILED domain status — no status flip for orders
             if ((ack.entityType === 'chat_message' || ack.entityType === 'payment') && nextAttempts >= MAX_SYNC_ATTEMPTS) {
               (r as any).status = 'FAILED';
               console.error(
@@ -604,6 +672,14 @@ export class SyncCoordinator implements Coordinator {
             ack.reason ? `reason=${ack.reason}` : '',
             `attempt ${nextAttempts}/${MAX_SYNC_ATTEMPTS}`,
           );
+
+          // Emit event untuk order entity
+          if (ack.entityType === 'order') {
+            syncEvents.emit('orderRejected', {
+              orderId: ack.id,
+              reason: ack.reason ?? 'unknown',
+            });
+          }
         } else {
           console.warn(
             `[resolveAcks] Record rejected but not found locally: entityType=${ack.entityType}, id=${ack.id}`,
