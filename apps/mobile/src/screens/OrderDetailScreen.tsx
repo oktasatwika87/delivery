@@ -18,6 +18,8 @@ import { OrderModel } from '../db/models/OrderModel';
 import { PaymentModel } from '../db/models/PaymentModel';
 import { getCurrentUserId } from '../sync/session';
 import { generateCodIdempotencyKey } from '../sync/idempotency';
+import { syncEvents } from '../sync/syncEvents';
+import type { OrderConflictEvent } from '../sync/syncEvents';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -58,6 +60,44 @@ function FailedPaymentBanner({ payments, onDismiss, isDismissed }: FailedPayment
       </Text>
       <TouchableOpacity onPress={onDismiss} style={styles.failedBannerDismiss}>
         <Text style={styles.failedBannerDismissText}>✕</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// ─── Order Conflict Banner ─────────────────────────────────────────────────────
+
+interface OrderConflictBannerProps {
+  event: OrderConflictEvent | null;
+  onDismiss: () => void;
+}
+
+function OrderConflictBanner({ event, onDismiss }: OrderConflictBannerProps): React.JSX.Element | null {
+  if (!event) return null;
+
+  const isActionNeeded = event.reason === 'reassigned' || event.reason === 'rejected-oc';
+  const backgroundColor = isActionNeeded ? '#fef3c7' : '#e5e7eb';
+  const borderColor = isActionNeeded ? '#fcd34d' : '#d1d5db';
+  const textColor = isActionNeeded ? '#92400e' : '#374151';
+
+  const getMessage = () => {
+    if (event.reason === 'reassigned') {
+      return 'Order ini sudah di-reassign ke driver lain. Hubungi support jika ini seharusnya masih order Anda.';
+    }
+    if (event.reason === 'rejected-oc') {
+      return event.ackReason ?? 'Order tidak bisa diperbarui — status di server sudah berubah.';
+    }
+    // order-status-conflict
+    return `Status order diperbarui server — sekarang ${event.serverStatus}.`;
+  };
+
+  return (
+    <View style={[styles.conflictBanner, { backgroundColor, borderColor }]}>
+      <Text style={[styles.conflictBannerText, { color: textColor }]}>
+        {isActionNeeded ? '⚠️ ' : 'ℹ️ '}{getMessage()}
+      </Text>
+      <TouchableOpacity onPress={onDismiss} style={styles.conflictBannerDismiss}>
+        <Text style={[styles.conflictBannerDismissText, { color: textColor }]}>✕</Text>
       </TouchableOpacity>
     </View>
   );
@@ -139,6 +179,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [hasCodPayment, setHasCodPayment] = useState(false);
   const [payments, setPayments] = useState<PaymentModel[]>([]);
   const [failedBannerDismissed, setFailedBannerDismissed] = useState(false);
+  const [conflictEvent, setConflictEvent] = useState<OrderConflictEvent | null>(null);
   // Use ref for synchronous inflight guard (state updates are async, refs are sync)
   const inflightCollectRef = useRef(false);
 
@@ -214,6 +255,30 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
       subscription?.unsubscribe();
     };
   }, [database, orderId]);
+
+  // Subscribe to sync conflict/rejected events
+  useEffect(() => {
+    const conflictHandler = (event: OrderConflictEvent) => {
+      if (event.orderId !== orderId) return;
+      setConflictEvent(event);
+    };
+    const rejectedHandler = (event: { orderId: string; reason: string }) => {
+      if (event.orderId !== orderId) return;
+      setConflictEvent({
+        orderId: event.orderId,
+        reason: 'rejected-oc',
+        serverStatus: order?.status ?? 'unknown',
+        serverChangedAt: new Date().toISOString(),
+        ackReason: event.reason,
+      });
+    };
+    syncEvents.on('orderConflict', conflictHandler);
+    syncEvents.on('orderRejected', rejectedHandler);
+    return () => {
+      syncEvents.off('orderConflict', conflictHandler);
+      syncEvents.off('orderRejected', rejectedHandler);
+    };
+  }, [orderId, order?.status]);
 
   /**
    * Check if the current driver can cancel this order.
@@ -350,6 +415,12 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         payments={payments}
         isDismissed={failedBannerDismissed}
         onDismiss={() => setFailedBannerDismissed(true)}
+      />
+
+      {/* Order Conflict Banner */}
+      <OrderConflictBanner
+        event={conflictEvent}
+        onDismiss={() => setConflictEvent(null)}
       />
 
       {/* Header */}
@@ -631,6 +702,28 @@ const styles = StyleSheet.create({
   failedBannerDismissText: {
     fontSize: 16,
     color: '#92400e',
+    fontWeight: '600',
+  },
+  // Order Conflict Banner
+  conflictBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  conflictBannerText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '500',
+    lineHeight: 20,
+  },
+  conflictBannerDismiss: {
+    marginLeft: 12,
+    padding: 4,
+  },
+  conflictBannerDismissText: {
+    fontSize: 16,
     fontWeight: '600',
   },
 });
