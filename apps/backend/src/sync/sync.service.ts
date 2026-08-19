@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
+import { OrderStatus, ORDER_ALLOWED_TRANSITIONS } from '@delivery/shared';
 import type {
   ChatMessage,
   Order,
@@ -129,13 +130,18 @@ export class SyncService {
         where: { idempotencyKey: paymentData.idempotencyKey },
       });
       if (existing) {
-        // Record sudah pernah diproses — return data lama, skip duplicate
+        // Record sudah pernah diproses — return data lengkap supaya client
+        // bisa match balugin ack ke local row yang punya `idempotencyKey`
+        // sama. Tanpa serverData, client tidak punya cara match ack.id
+        // (server-side UUID) ke local.id (WatermelonDB UUID) ketika ACK
+        // pertama hilang dan row stuck dirty sampai retry cap.
         return {
           id: existing.id,
           entityType: 'payment',
           status: 'accepted',
           serverVersion: existing.version,
           serverChangedAt: existing.updatedAt.toISOString(),
+          serverData: this.paymentToDomain(existing),
         };
       }
     }
@@ -157,6 +163,30 @@ export class SyncService {
           serverChangedAt: (row.updatedAt as Date).toISOString(),
           serverData: this.rowToDomain(entityType, row),
         };
+      }
+
+      // Order business validation — transition + ownership rules
+      if (entityType === 'order' && op === 'update') {
+        const orderData = data as Order;
+        const orderRow = row as Order;
+        const currentStatus = orderRow.status as OrderStatus;
+        const newStatus = orderData.status as OrderStatus;
+
+        // Rule 1: status transition valid per ORDER_ALLOWED_TRANSITIONS
+        const allowed = ORDER_ALLOWED_TRANSITIONS[currentStatus];
+        if (!allowed?.includes(newStatus)) {
+          return this.nack(id, entityType, 'rejected',
+            `Tidak bisa mengubah status order dari ${currentStatus} ke ${newStatus}`,
+            now, orderRow.version);
+        }
+
+        // Rule 2: ownership — driverId must match (or server driverId is null)
+        const requestDriverId = orderData.driverId;
+        if (requestDriverId !== undefined && orderRow.driverId !== null && orderRow.driverId !== requestDriverId) {
+          return this.nack(id, entityType, 'rejected',
+            'Order sudah di-reassign ke driver lain',
+            now, orderRow.version);
+        }
       }
     }
 
@@ -313,8 +343,9 @@ export class SyncService {
     status: 'rejected' | 'conflict',
     reason: string,
     now: string,
+    serverVersion: number = 0,
   ): SyncRecordAck {
-    return { id, entityType: entityType as SyncRecordAck['entityType'], status, reason, serverVersion: 0, serverChangedAt: now };
+    return { id, entityType: entityType as SyncRecordAck['entityType'], status, reason, serverVersion, serverChangedAt: now };
   }
 
   private orderToDomain(row: {
