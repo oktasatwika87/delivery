@@ -31,9 +31,13 @@ export interface Payment {
   orderId: string;
 
   /**
-   * Idempotency key — UUID generated client-side SEBELUM push.
-   * Memungkinkan retry tanpa double-charge: kalau record dengan idempotencyKey
-   * ini sudah ada di DB, server skip insert & return record lama.
+   * Idempotency key — UUID v4-based identifier for COD sync.
+   *
+   * Format: `cod:${uuid}` where `uuid` is RFC 4122 v4. Generated once
+   * client-side when driver taps "Terima Cash COD" and persisted on the
+   * local row. Stability across retries is guaranteed by the fact that
+   * the key is read from the row (not regenerated). Prevents double-charge
+   * via unique constraint on this column.
    */
   idempotencyKey: string;
 
