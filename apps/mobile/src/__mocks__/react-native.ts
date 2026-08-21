@@ -55,6 +55,8 @@ const Switch = makeComponent('Switch');
 const ScrollView = makeComponent('ScrollView');
 const Modal = makeComponent('Modal');
 const TouchableOpacity = makeComponent('TouchableOpacity');
+const SectionList = makeComponent('SectionList');
+const RefreshControl = makeComponent('RefreshControl');
 
 class ActivityIndicator extends React.Component {
   render() {
@@ -109,7 +111,9 @@ module.exports = {
   PermissionsAndroid,
   PixelRatio,
   Platform,
+  RefreshControl,
   ScrollView,
+  SectionList,
   StyleSheet,
   Switch,
   Text,
