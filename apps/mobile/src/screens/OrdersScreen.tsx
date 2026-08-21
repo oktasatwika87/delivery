@@ -18,6 +18,7 @@ import { OrderModel } from '../db/models/OrderModel';
 import { getCurrentUserId } from '../sync/session';
 import { fetchWithAuth } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
+import { syncEvents } from '../sync/syncEvents';
 import Config from 'react-native-config';
 
 const API_BASE = Config.API_BASE_URL;
@@ -38,6 +39,10 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
   const [poolOrders, setPoolOrders] = useState<OrderModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [removedNotice, setRemovedNotice] = useState<{ visible: boolean; orderId: string | null }>({
+    visible: false,
+    orderId: null,
+  });
 
   // ─── Refs for socket unsubscribe ────────────────────────────────────────────
   const unsubscribeRef = useRef<Array<() => void>>([]);
@@ -151,6 +156,34 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
     };
   }, [fetchPool]);
 
+  // ─── syncEvents subscription: orderRemovedFromView notice ─────────────────────
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const onOrderRemoved = (event: { orderId: string }) => {
+      console.log('[OrdersScreen] orderRemovedFromView:', event.orderId);
+      // Clear any pending notice before showing new one
+      if (noticeTimerRef.current) {
+        clearTimeout(noticeTimerRef.current);
+      }
+      setRemovedNotice({ visible: true, orderId: event.orderId });
+      // Auto-dismiss after ~3 seconds
+      noticeTimerRef.current = setTimeout(() => {
+        setRemovedNotice({ visible: false, orderId: null });
+        noticeTimerRef.current = null;
+      }, 3000);
+    };
+
+    syncEvents.on('orderRemovedFromView', onOrderRemoved);
+    return () => {
+      syncEvents.off('orderRemovedFromView', onOrderRemoved);
+      if (noticeTimerRef.current) {
+        clearTimeout(noticeTimerRef.current);
+        noticeTimerRef.current = null;
+      }
+    };
+  }, []);
+
   // ─── Pull to refresh ────────────────────────────────────────────────────────
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -226,7 +259,16 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
   );
 
   return (
-    <SectionList
+    <>
+      {removedNotice.visible && (
+        <View style={styles.notice}>
+          <Text style={styles.noticeTitle}>Order sudah diambil driver lain</Text>
+          <Text style={styles.noticeDetail}>
+            Order tersebut baru saja di-accept driver lain dan hilang dari daftar Anda.
+          </Text>
+        </View>
+      )}
+      <SectionList
       sections={sections}
       keyExtractor={(o) => o.id}
       renderItem={renderItem}
@@ -242,6 +284,7 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
         </View>
       }
     />
+    </>
   );
 }
 
@@ -324,4 +367,15 @@ const styles = StyleSheet.create({
   acceptButtonText: { color: '#fff', fontWeight: '600', fontSize: 14 },
   empty: { padding: 32, alignItems: 'center' },
   loading: { padding: 32, alignItems: 'center' },
+  notice: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#f59e0b',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginHorizontal: 16,
+    marginTop: 12,
+  },
+  noticeTitle: { fontWeight: '700', color: '#92400e', marginBottom: 4 },
+  noticeDetail: { color: '#78350f', fontSize: 14 },
 });
