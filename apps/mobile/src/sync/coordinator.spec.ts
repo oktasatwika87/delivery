@@ -1174,7 +1174,7 @@ describe('SyncCoordinator', () => {
           serverChangedAt: new Date().toISOString(),
           serverData: {
             customerId: 'cust-1',
-            driverId: 'bob',
+            driverId: 'test-user-id',
             status: 'DELIVERED',
             items: [],
             deliveryAddress: {},
@@ -1264,6 +1264,204 @@ describe('SyncCoordinator', () => {
       expect(overwritten.status).toBe('DELIVERED');
       expect(overwritten.totalCents).toBe(75000);
       expect(overwritten._raw._status).toBe('synced');
+    });
+
+    test('conflict ack — driverId berbeda dari currentUserId → reason accepted-by-other', async () => {
+      const orderRow = createMockRow('order-accepted-other', 'updated');
+      orderRow.serverVersion = 5;
+      orderRow.status = 'ASSIGNED';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-accepted-other', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-accepted-other',
+          status: 'conflict',
+          serverVersion: 10,
+          serverChangedAt: new Date().toISOString(),
+          serverData: {
+            customerId: 'cust-1',
+            driverId: 'different-driver', // bukan 'test-user-id'
+            status: 'ASSIGNED',
+            items: [],
+            deliveryAddress: {},
+            totalCents: 50000,
+            currency: 'IDR',
+            notes: null,
+          },
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      expect(emitMock).toHaveBeenCalledWith('orderConflict', expect.objectContaining({
+        orderId: 'order-accepted-other',
+        reason: 'accepted-by-other',
+        serverStatus: 'ASSIGNED',
+      }));
+    });
+
+    test('conflict ack — driverId sama dengan currentUserId → reason order-status-conflict', async () => {
+      const orderRow = createMockRow('order-same-driver', 'updated');
+      orderRow.serverVersion = 5;
+      orderRow.status = 'PREPARING';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-same-driver', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-same-driver',
+          status: 'conflict',
+          serverVersion: 10,
+          serverChangedAt: new Date().toISOString(),
+          serverData: {
+            customerId: 'cust-1',
+            driverId: 'test-user-id', // sama dengan mock getCurrentUserId
+            status: 'PREPARING',
+            items: [],
+            deliveryAddress: {},
+            totalCents: 50000,
+            currency: 'IDR',
+            notes: null,
+          },
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      expect(emitMock).toHaveBeenCalledWith('orderConflict', expect.objectContaining({
+        orderId: 'order-same-driver',
+        reason: 'order-status-conflict',
+        serverStatus: 'PREPARING',
+      }));
+    });
+
+    test('conflict ack — driverId undefined → reason order-status-conflict', async () => {
+      const orderRow = createMockRow('order-undefined-driver', 'updated');
+      orderRow.serverVersion = 5;
+      orderRow.status = 'CONFIRMED';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-undefined-driver', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-undefined-driver',
+          status: 'conflict',
+          serverVersion: 10,
+          serverChangedAt: new Date().toISOString(),
+          serverData: {
+            customerId: 'cust-1',
+            driverId: undefined, // undefined
+            status: 'CONFIRMED',
+            items: [],
+            deliveryAddress: {},
+            totalCents: 50000,
+            currency: 'IDR',
+            notes: null,
+          },
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      expect(emitMock).toHaveBeenCalledWith('orderConflict', expect.objectContaining({
+        orderId: 'order-undefined-driver',
+        reason: 'order-status-conflict',
+        serverStatus: 'CONFIRMED',
+      }));
+    });
+
+    test('conflict ack — isAcceptedByOther true → emit orderRemovedFromView', async () => {
+      const orderRow = createMockRow('order-removed-view', 'updated');
+      orderRow.serverVersion = 5;
+      orderRow.status = 'ASSIGNED';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-removed-view', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-removed-view',
+          status: 'conflict',
+          serverVersion: 10,
+          serverChangedAt: new Date().toISOString(),
+          serverData: {
+            customerId: 'cust-1',
+            driverId: 'other-driver', // bukan 'test-user-id'
+            status: 'ASSIGNED',
+            items: [],
+            deliveryAddress: {},
+            totalCents: 50000,
+            currency: 'IDR',
+            notes: null,
+          },
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      expect(emitMock).toHaveBeenCalledWith('orderRemovedFromView', expect.objectContaining({
+        orderId: 'order-removed-view',
+      }));
+    });
+
+    test('conflict ack — isAcceptedByOther false → TIDAK emit orderRemovedFromView', async () => {
+      const orderRow = createMockRow('order-keep-view', 'updated');
+      orderRow.serverVersion = 5;
+      orderRow.status = 'PREPARING';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-keep-view', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-keep-view',
+          status: 'conflict',
+          serverVersion: 10,
+          serverChangedAt: new Date().toISOString(),
+          serverData: {
+            customerId: 'cust-1',
+            driverId: 'test-user-id', // sama dengan mock getCurrentUserId
+            status: 'PREPARING',
+            items: [],
+            deliveryAddress: {},
+            totalCents: 50000,
+            currency: 'IDR',
+            notes: null,
+          },
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // orderRemovedFromView JANGAN emit
+      const orderRemovedCalls = emitMock.mock.calls.filter(
+        ([event]) => event === 'orderRemovedFromView'
+      );
+      expect(orderRemovedCalls).toHaveLength(0);
     });
   });
 });

@@ -6,10 +6,14 @@ import { EventEmitter } from 'events';
 
 export interface OrderConflictEvent {
   orderId: string;
-  reason: 'reassigned' | 'order-status-conflict' | 'rejected-oc';
+  reason: 'reassigned' | 'order-status-conflict' | 'accepted-by-other' | 'rejected-oc';
   serverStatus: string;
   serverChangedAt: string;
   ackReason?: string; // dari server, kalau ada
+}
+
+export interface OrderRemovedFromViewEvent {
+  orderId: string;
 }
 
 export interface OrderRejectedEvent {

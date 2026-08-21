@@ -617,12 +617,25 @@ export class SyncCoordinator implements Coordinator {
 
           // Emit event untuk order entity
           if (ack.entityType === 'order') {
+            const serverDriverId = (ack.serverData as any).driverId;
+            const currentUserId = await getCurrentUserId();
+            const isAcceptedByOther = serverDriverId != null && serverDriverId !== currentUserId;
+
+            const reason = isAcceptedByOther ? 'accepted-by-other' : 'order-status-conflict';
+
             syncEvents.emit('orderConflict', {
               orderId: ack.id,
-              reason: 'order-status-conflict',
+              reason,
               serverStatus: (ack.serverData as any).status ?? 'unknown',
               serverChangedAt: ack.serverChangedAt ?? new Date().toISOString(),
             });
+
+            // orderRemovedFromView HANYA emit kalau order di-accept oleh driver lain
+            if (isAcceptedByOther) {
+              syncEvents.emit('orderRemovedFromView', {
+                orderId: ack.id,
+              });
+            }
           }
         }
       } else if (ack.status === 'accepted') {
