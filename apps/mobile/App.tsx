@@ -23,6 +23,7 @@ import { DatabaseProvider } from '@nozbe/watermelondb/react';
 
 import { database } from './src/db';
 import { syncCoordinator } from './src/sync';
+import { ordersSocket } from './src/sync';
 import { getToken } from './src/sync/token-storage';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { OrdersScreen } from './src/screens/OrdersScreen';
@@ -86,7 +87,19 @@ function App(): React.JSX.Element {
       try {
         const token = await getToken();
         console.log('[App] Auth token check done:', token ? `Found` : 'NULL');
-        if (!cancelled) setAuthenticated(!!token);
+        if (!cancelled) {
+          setAuthenticated(!!token);
+          // Restore session: connect ordersSocket kalau token ditemukan.
+          // connect() idempotent — aman dipanggil berkali-kali (double-connect
+          // resolve immediately kalau socket sudah nyala).
+          if (token) {
+            ordersSocket.connect().catch((err) => {
+              if (!cancelled) {
+                console.warn('[App] ordersSocket connect failed (will retry):', err);
+              }
+            });
+          }
+        }
       } catch (err) {
         console.error('[App] Auth token check failed', err);
       } finally {
@@ -98,6 +111,7 @@ function App(): React.JSX.Element {
       cancelled = true;
       syncCoordinator.stop();
       networkMonitor.stop();
+      ordersSocket.disconnect();
     };
   }, []);
 
@@ -155,6 +169,12 @@ function App(): React.JSX.Element {
    */
   const handleLoginSuccess = async (): Promise<void> => {
     setAuthenticated(true);
+    // ordersSocket — connect setelah login sukses. Tidak di-mount (Opsi A lazy
+    // per-screen) karena value proposition WebSocket push (§ 2.2.a) butuh socket
+    // nyala di semua screen (OrderDetail, Map, dll) bukan cuma OrdersScreen.
+    ordersSocket.connect().catch((err) => {
+      console.warn('[App] ordersSocket connect failed (will retry):', err);
+    });
     try {
       console.log('[App] Triggering immediate pull after login...');
       await syncCoordinator.pullNow();
