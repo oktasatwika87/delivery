@@ -15,7 +15,7 @@
  * akan jalan efektif mulai tick berikutnya (dan langsung via pullNow()).
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, View, StyleSheet } from 'react-native';
+import { ActivityIndicator, AppState, View, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -24,6 +24,7 @@ import { DatabaseProvider } from '@nozbe/watermelondb/react';
 import { database } from './src/db';
 import { syncCoordinator } from './src/sync';
 import { ordersSocket } from './src/sync';
+import { chatSocket } from './src/sync/socket';
 import { getToken } from './src/sync/token-storage';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { OrdersScreen } from './src/screens/OrdersScreen';
@@ -82,6 +83,33 @@ function App(): React.JSX.Element {
     // optimistic default 'online' sampai ada bukti sebaliknya.
     networkMonitor.start();
 
+    // ─── AppState listener: pause/resume sync + sockets on background/foreground ──
+    // Fix C6 dari offline-audit-findings.md.
+    // background/inactive → stop sync + disconnect sockets (hemat battery/resource)
+    // active → resume sync + reconnect sockets
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        console.log('[App] AppState active — resuming sync + sockets');
+        // start() idempotent — aman dipanggil meski sudah jalan
+        syncCoordinator.start(database).catch((err) => {
+          console.warn('[App] syncCoordinator resume failed:', err);
+        });
+        // connect() idempotent — double-connect aman
+        chatSocket.connect().catch((err) => {
+          console.warn('[App] chatSocket resume failed:', err);
+        });
+        ordersSocket.connect().catch((err) => {
+          console.warn('[App] ordersSocket resume failed:', err);
+        });
+      } else {
+        // 'background' atau 'inactive' — sama treat-nya untuk MVP
+        console.log('[App] AppState background/inactive — pausing sync + sockets');
+        syncCoordinator.stop();
+        chatSocket.disconnect();
+        ordersSocket.disconnect();
+      }
+    });
+
     // Auth-check jalan PARALEL dengan sync — tidak saling tunggu.
     (async () => {
       try {
@@ -112,6 +140,7 @@ function App(): React.JSX.Element {
       syncCoordinator.stop();
       networkMonitor.stop();
       ordersSocket.disconnect();
+      appStateSubscription.remove();
     };
   }, []);
 
