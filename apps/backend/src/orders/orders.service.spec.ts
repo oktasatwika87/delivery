@@ -42,6 +42,8 @@ describe('OrdersService', () => {
     emitOrderAccepted: jest.Mock;
     emitOrderRejected: jest.Mock;
     emitOrderCancelled: jest.Mock;
+    emitOrderAvailable: jest.Mock;
+    emitOrderUnavailable: jest.Mock;
   };
 
   // Test data
@@ -65,6 +67,8 @@ describe('OrdersService', () => {
       emitOrderAccepted: jest.fn(),
       emitOrderRejected: jest.fn(),
       emitOrderCancelled: jest.fn(),
+      emitOrderAvailable: jest.fn(),
+      emitOrderUnavailable: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -128,6 +132,7 @@ describe('OrdersService', () => {
         driverId,
         version + 1,
       );
+      expect(mockGateway.emitOrderUnavailable).toHaveBeenCalledWith(orderId, 'accepted');
       expect(mockPrisma.order.update).toHaveBeenCalledWith({
         where: { id: orderId, version },
         data: expect.objectContaining({
@@ -277,6 +282,7 @@ describe('OrdersService', () => {
         orderId,
         version + 1,
       );
+      expect(mockGateway.emitOrderUnavailable).toHaveBeenCalledWith(orderId, 'rejected');
       expect(mockPrisma.order.update).toHaveBeenCalledWith({
         where: { id: orderId, version },
         data: expect.objectContaining({
@@ -511,6 +517,201 @@ describe('OrdersService', () => {
       await expect(
         service.cancelOrder(orderId, version, driverId),
       ).rejects.toThrow('Order was modified by another request');
+    });
+  });
+
+  // ===== transitionStatus tests =====
+
+  describe('transitionStatus()', () => {
+    function makeOrder(status: OrderStatusDb, driverId: string | null) {
+      return {
+        id: orderId,
+        customerId,
+        driverId,
+        status,
+        itemsJson: [],
+        addressJson: {},
+        totalCents: 50000,
+        currency: 'IDR',
+        notes: null,
+        version,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        cancelledBy: null,
+        cancelReason: null,
+      };
+    }
+
+    test('order masuk pool (CONFIRMED→ASSIGNED, driverId=null) → emitOrderAvailable', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.CONFIRMED, null);
+      const updatedOrder = {
+        ...currentOrder,
+        status: OrderStatusDb.ASSIGNED,
+        version: version + 1,
+      };
+
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+      mockPrisma.order.update.mockResolvedValue(updatedOrder);
+
+      const result = await service.transitionStatus(orderId, 'ASSIGNED', version, customerId);
+
+      expect(result.status).toBe('ASSIGNED');
+      expect(mockGateway.emitOrderAvailable).toHaveBeenCalledWith(
+        expect.objectContaining({ id: orderId, status: 'ASSIGNED' })
+      );
+      expect(mockGateway.emitOrderUnavailable).not.toHaveBeenCalled();
+    });
+
+    test('order keluar pool (ASSIGNED→CANCELLED, driverId=null) → emitOrderUnavailable reassigned', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.ASSIGNED, null);
+      const updatedOrder = {
+        ...currentOrder,
+        status: OrderStatusDb.CANCELLED,
+        version: version + 1,
+      };
+
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+      mockPrisma.order.update.mockResolvedValue(updatedOrder);
+
+      const result = await service.transitionStatus(orderId, 'CANCELLED', version, customerId);
+
+      expect(result.status).toBe('CANCELLED');
+      expect(mockGateway.emitOrderUnavailable).toHaveBeenCalledWith(orderId, 'reassigned');
+      expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
+    });
+
+    test('transisi tidak melibatkan pool (PREPARING→OUT_FOR_DELIVERY) → neither emit', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.PREPARING, driverId);
+      const updatedOrder = {
+        ...currentOrder,
+        status: OrderStatusDb.OUT_FOR_DELIVERY,
+        version: version + 1,
+      };
+
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+      mockPrisma.order.update.mockResolvedValue(updatedOrder);
+
+      const result = await service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId);
+
+      expect(result.status).toBe('OUT_FOR_DELIVERY');
+      expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
+      expect(mockGateway.emitOrderUnavailable).not.toHaveBeenCalled();
+    });
+  });
+
+  // ===== findAvailable tests =====
+
+  describe('findAvailable()', () => {
+    const driverId = 'driver-uuid-1';
+
+    function makeAvailableOrder(overrideId: string, overrideCreatedAt: Date) {
+      return {
+        id: overrideId,
+        customerId: 'customer-uuid',
+        driverId: null as string | null,
+        status: OrderStatusDb.ASSIGNED,
+        itemsJson: [{ id: 'item-1', productId: 'prod-1', name: 'Nasi Goreng', quantity: 2, unitPriceCents: 25000 }],
+        addressJson: { recipientName: 'Budi', phone: '0812', street: 'Jl. Merdeka', city: 'Denpasar' },
+        totalCents: 50000,
+        currency: 'IDR',
+        notes: null as string | null,
+        version: 1,
+        createdAt: overrideCreatedAt,
+        updatedAt: overrideCreatedAt,
+        cancelledBy: null as string | null,
+        cancelReason: null as string | null,
+      };
+    }
+
+    test('returns ASSIGNED+driverId=null orders sorted by createdAt ASC', async () => {
+      const now = new Date();
+      const order1 = makeAvailableOrder('order-1', new Date(now.getTime() - 10000));
+      const order2 = makeAvailableOrder('order-2', now);
+      const order3 = makeAvailableOrder('order-3', new Date(now.getTime() + 10000));
+
+      // Mock findMany - will be called with correct filters
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([order1, order2, order3]);
+
+      const result = await service.findAvailable(driverId, 50);
+
+      expect(mockPrisma.order.findMany).toHaveBeenCalledWith({
+        where: {
+          status: OrderStatusDb.ASSIGNED,
+          driverId: null,
+          deletedAt: null,
+        },
+        take: 50,
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(result).toHaveLength(3);
+      expect(result[0].id).toBe('order-1');
+      expect(result[1].id).toBe('order-2');
+      expect(result[2].id).toBe('order-3');
+    });
+
+    test('respects take parameter - pass through to Prisma', async () => {
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([]);
+
+      // Service just passes through whatever take value it receives
+      await service.findAvailable(driverId, 25);
+      expect(mockPrisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 25 })
+      );
+    });
+
+    test('respects take parameter - pass through to Prisma (100)', async () => {
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([]);
+
+      await service.findAvailable(driverId, 100);
+      expect(mockPrisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 100 })
+      );
+    });
+
+    test('respects take parameter - pass through to Prisma (200)', async () => {
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([]);
+
+      // Service passes 200 through — clamping is controller's responsibility
+      await service.findAvailable(driverId, 200);
+      expect(mockPrisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 200 })
+      );
+    });
+
+    test('excludes deleted orders (deletedAt !== null)', async () => {
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([]);
+
+      await service.findAvailable(driverId, 50);
+
+      expect(mockPrisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            deletedAt: null,
+          }),
+        })
+      );
+    });
+
+    test('excludes orders with driverId !== null', async () => {
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([]);
+
+      await service.findAvailable(driverId, 50);
+
+      expect(mockPrisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            driverId: null,
+          }),
+        })
+      );
+    });
+
+    test('returns empty array when no available orders', async () => {
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([]);
+
+      const result = await service.findAvailable(driverId, 50);
+
+      expect(result).toEqual([]);
     });
   });
 });

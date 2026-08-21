@@ -61,6 +61,9 @@ export class OrdersService {
       throw new ForbiddenException('Not your order');
     }
 
+    // Track pool state SEBELUM update
+    const wasInPool = current.status === OrderStatusDb.ASSIGNED && current.driverId === null;
+
     const allowed = ORDER_ALLOWED_TRANSITIONS[current.status as unknown as OrderStatus];
     if (!allowed.includes(nextStatus as OrderStatus)) {
       throw new BadRequestException(
@@ -75,6 +78,18 @@ export class OrdersService {
         version: { increment: 1 },
       },
     });
+
+    // Track pool state SETELAH update
+    const isNowInPool = updated.status === OrderStatusDb.ASSIGNED && updated.driverId === null;
+
+    if (isNowInPool && !wasInPool) {
+      // Order baru masuk pool
+      this.ordersGateway.emitOrderAvailable(this.toDomain(updated));
+    } else if (wasInPool && !isNowInPool) {
+      // Order keluar dari pool (di-assign driver, atau status berubah keluar ASSIGNED)
+      this.ordersGateway.emitOrderUnavailable(id, 'reassigned');
+    }
+
     return this.toDomain(updated);
   }
 
@@ -123,6 +138,9 @@ export class OrdersService {
         updated.version,
       );
 
+      // Broadcast ke drivers:available bahwa order sudah taken
+      this.ordersGateway.emitOrderUnavailable(id, 'accepted');
+
       return this.toDomain(updated);
     } catch (err) {
       // OCC conflict: version mismatch → 409 Conflict
@@ -169,6 +187,9 @@ export class OrdersService {
         id,
         updated.version,
       );
+
+      // Broadcast ke drivers:available bahwa order sudah di-reject
+      this.ordersGateway.emitOrderUnavailable(id, 'rejected');
 
       return this.toDomain(updated);
     } catch (err) {
@@ -242,6 +263,26 @@ export class OrdersService {
       }
       throw err;
     }
+  }
+
+  /**
+   * List orders yang siap di-accept (status ASSIGNED, belum ada driver).
+   * Untuk driver lihat pool. Read-only, tidak ada side effect.
+   *
+   * @param _driverId - userId dari JWT (untuk future audit logging, tidak untuk filter)
+   * @param take - max orders (hard cap 100)
+   */
+  async findAvailable(_driverId: string, take: number): Promise<Order[]> {
+    const rows = await this.prisma.order.findMany({
+      where: {
+        status: OrderStatusDb.ASSIGNED,
+        driverId: null,
+        deletedAt: null,
+      },
+      take,
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map((r) => this.toDomain(r));
   }
 
   private toDomain(row: {

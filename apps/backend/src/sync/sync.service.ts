@@ -173,8 +173,13 @@ export class SyncService {
         const newStatus = orderData.status as OrderStatus;
 
         // Rule 1: status transition valid per ORDER_ALLOWED_TRANSITIONS
-        const allowed = ORDER_ALLOWED_TRANSITIONS[currentStatus];
-        if (!allowed?.includes(newStatus)) {
+        // SKIP for * -> PREPARING transitions — Rule 3 will provide specific reason
+        // for accept attempts from non-ACCEPTED states (CANCELLED/DELIVERED).
+        // Rule 2 will catch ownership mismatches for PREPARING pushes where driverId already set.
+        if (
+          newStatus !== OrderStatus.PREPARING &&
+          !ORDER_ALLOWED_TRANSITIONS[currentStatus]?.includes(newStatus)
+        ) {
           return this.nack(id, entityType, 'rejected',
             `Tidak bisa mengubah status order dari ${currentStatus} ke ${newStatus}`,
             now, orderRow.version);
@@ -186,6 +191,30 @@ export class SyncService {
           return this.nack(id, entityType, 'rejected',
             'Order sudah di-reassign ke driver lain',
             now, orderRow.version);
+        }
+
+        // Rule 3B: PREPARING push tanpa driverId — reject as invariant violation.
+        // ASSUMPTION: tidak ada path di codebase saat ini yang bisa push PREPARING tanpa driverId.
+        // Mobile: localRowToSyncRecord() selalu menyertakan driverId (null→undefined, bukan absent).
+        // REST: acceptOrder() selalu assign driverId. transitionStatus() tidak menerima PREPARING tanpa driverId.
+        // Rule 3B ini defensive — pastikan invariant tidak bocor kalau fitur baru ditambahkan.
+        if (newStatus === OrderStatus.PREPARING && orderData.driverId === undefined) {
+          return this.nack(id, entityType, 'rejected',
+            `Tidak bisa mengubah status order dari ${currentStatus} ke PREPARING tanpa driverId`,
+            now, orderRow.version);
+        }
+        // If push PREPARING with driverId set AND server.driverId=null
+        // AND server.status bukan ASSIGNED → accept tidak valid
+        if (
+          newStatus === OrderStatus.PREPARING &&
+          orderData.driverId !== undefined &&
+          orderRow.driverId === null
+        ) {
+          if (currentStatus !== OrderStatus.ASSIGNED) {
+            return this.nack(id, entityType, 'rejected',
+              'Order sudah tidak tersedia untuk di-accept',
+              now, orderRow.version);
+          }
         }
       }
     }

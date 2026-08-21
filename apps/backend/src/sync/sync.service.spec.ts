@@ -491,11 +491,12 @@ describe('applyOne — order update validation', () => {
       updatedAt: new Date(),
     });
 
+    // CANCELLED -> PREPARING: Rule 1 allows *->PREPARING, Rule 3 catches with accept-specific reason
     const record = makeOrderRecord({ baseVersion: 3, data: { ...makeOrderRecord().data, status: 'PREPARING' } });
     const ack = await service.applyOne(record.entityType, record);
 
     expect(ack.status).toBe('rejected');
-    expect(ack.reason).toContain('Tidak bisa mengubah status');
+    expect(ack.reason).toBe('Order sudah tidak tersedia untuk di-accept');
   });
 
   it('rejects when driverId request differs from server.driverId (ownership invalid)', async () => {
@@ -597,6 +598,194 @@ describe('applyOne — order update validation', () => {
 
     expect(ack.status).toBe('rejected');
     expect(ack.reason).toContain('reassign');
+  });
+
+  // ===== Rule 3: accept-specific reason =====
+
+  it('Rule 3: push accept untuk order CANCELLED → reject dengan reason spesifik', async () => {
+    // Server order CANCELLED, driver coba push accept (PREPARING, driverId=me)
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+      id: 'order-validate-uuid',
+      customerId: 'customer-uuid',
+      driverId: null, // order di pool (null)
+      status: 'CANCELLED',
+      itemsJson: [],
+      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      version: 3,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const record = makeOrderRecord({
+      baseVersion: 3,
+      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: 'me' },
+    });
+    const ack = await service.applyOne(record.entityType, record);
+
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Order sudah tidak tersedia untuk di-accept');
+    expect(ack.serverVersion).toBe(3);
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
+  });
+
+  it('Rule 3: push accept untuk order DELIVERED → reject dengan reason spesifik', async () => {
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+      id: 'order-validate-uuid',
+      customerId: 'customer-uuid',
+      driverId: null,
+      status: 'DELIVERED',
+      itemsJson: [],
+      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      version: 10,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const record = makeOrderRecord({
+      baseVersion: 10,
+      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: 'me' },
+    });
+    const ack = await service.applyOne(record.entityType, record);
+
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Order sudah tidak tersedia untuk di-accept');
+    expect(ack.serverVersion).toBe(10);
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
+  });
+
+  it('Rule 3: push accept untuk order ASSIGNED → accept (Rule 3 pass, Rule 1 juga lolos)', async () => {
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+      id: 'order-validate-uuid',
+      customerId: 'customer-uuid',
+      driverId: null, // order di pool
+      status: 'ASSIGNED',
+      itemsJson: [],
+      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      version: 5,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    (prisma.order.upsert as jest.Mock).mockResolvedValue({
+      id: 'order-validate-uuid',
+      version: 6,
+      updatedAt: new Date(),
+    });
+
+    // Driver push: PREPARING, driverId=me
+    const record = makeOrderRecord({
+      baseVersion: 5,
+      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: 'me' },
+    });
+    const ack = await service.applyOne(record.entityType, record);
+
+    // ACCEPTED: server.ASSIGNED -> client.PREPARING valid (ASSIGNED->PREPARING allowed)
+    // server.driverId=null -> Rule 3 condition met, currentStatus=ASSIGNED matches -> pass
+    expect(ack.status).toBe('accepted');
+    expect(ack.serverVersion).toBe(6);
+    expect(prisma.order.upsert).toHaveBeenCalled();
+  });
+
+  it('Rule 3: push accept untuk order yang driverId sudah terisi driver lain → Rule 2 menang', async () => {
+    // Server: order PREPARING, driverId=bob
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+      id: 'order-validate-uuid',
+      customerId: 'customer-uuid',
+      driverId: 'bob', // sudah ada driver
+      status: 'PREPARING',
+      itemsJson: [],
+      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      version: 6,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // Driver 'me' coba push accept
+    const record = makeOrderRecord({
+      baseVersion: 6,
+      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: 'me' },
+    });
+    const ack = await service.applyOne(record.entityType, record);
+
+    // DITOLAK oleh Rule 2 (ownership mismatch), BUKAN Rule 3
+    // Reason harus dari Rule 2, bukan Rule 3
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Order sudah di-reassign ke driver lain');
+    expect(ack.serverVersion).toBe(6);
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
+  });
+
+  // ===== Regression: bypass Rule 1 HANYA untuk accept flow, bukan semua PREPARING =====
+
+  it('Rule 1 regression: push PREPARING tanpa driverId dari CANCELLED → ditolak Rule 1', async () => {
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+      id: 'order-validate-uuid',
+      customerId: 'customer-uuid',
+      driverId: null,
+      status: 'CANCELLED',
+      itemsJson: [],
+      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      version: 3,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // Push PREPARING TANPA driverId — bukan accept flow
+    const record = makeOrderRecord({
+      baseVersion: 3,
+      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: undefined },
+    });
+    const ack = await service.applyOne(record.entityType, record);
+
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toContain('Tidak bisa mengubah status');
+    expect(ack.reason).toContain('CANCELLED');
+    expect(ack.reason).toContain('PREPARING');
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
+  });
+
+  it('Rule 1 regression: push PREPARING tanpa driverId dari PENDING → ditolak Rule 1', async () => {
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+      id: 'order-validate-uuid',
+      customerId: 'customer-uuid',
+      driverId: null,
+      status: 'PENDING',
+      itemsJson: [],
+      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      version: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // Push PREPARING TANPA driverId — bukan accept flow
+    const record = makeOrderRecord({
+      baseVersion: 1,
+      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: undefined },
+    });
+    const ack = await service.applyOne(record.entityType, record);
+
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toContain('Tidak bisa mengubah status');
+    expect(ack.reason).toContain('PENDING');
+    expect(ack.reason).toContain('PREPARING');
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
   });
 });
 

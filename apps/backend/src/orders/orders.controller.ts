@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
   ForbiddenException,
 } from '@nestjs/common';
@@ -28,6 +29,24 @@ interface CancelOrderDto {
 @UseGuards(JwtAuthGuard)
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
+
+  /**
+   * List orders yang siap di-accept oleh driver.
+   * HANYA bisa diakses oleh user dengan role DRIVER.
+   */
+  @Get('available')
+  @HttpCode(HttpStatus.OK)
+  async findAvailable(
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: string,
+    @Query('take') takeStr?: string,
+  ) {
+    if (role !== UserRole.DRIVER) {
+      throw new ForbiddenException('Only drivers can view available pool');
+    }
+    const take = Math.min(Math.max(parseInt(takeStr ?? '50', 10) || 50, 1), 100);
+    return this.ordersService.findAvailable(userId, take);
+  }
 
   @Get(':id')
   findOne(
