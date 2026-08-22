@@ -32,34 +32,34 @@ interface PresetRegion {
   bounds: Bounds;
 }
 
-// Default presets — beberapa kota kerja kurir di Indonesia.
+// Default presets — area delivery di Bali (tile server Tier 3 serve Bali bbox).
 // User bisa tambah preset baru dari UI advanced (TODO), atau override via
 // config / API nanti.
 // NOTE: bounds order is NE-first [[neLng, neLat], [swLng, swLat]] per
 // OfflineCreatePackOptions contract.
 const PRESETS: PresetRegion[] = [
   {
-    name: 'jakarta',
-    label: 'Jakarta',
+    name: 'denpasar',
+    label: 'Denpasar',
     bounds: [
-      [106.95, -6.1],  // NE corner (larger lng, larger lat)
-      [106.7, -6.35],  // SW corner (smaller lng, smaller lat)
+      [115.22, -8.63], // NE corner (larger lng, larger lat)
+      [115.18, -8.67], // SW corner (smaller lng, smaller lat)
     ],
   },
   {
-    name: 'bandung',
-    label: 'Bandung',
+    name: 'kuta-badung',
+    label: 'Kuta / Badung',
     bounds: [
-      [107.75, -6.85], // NE corner
-      [107.5, -7.0],   // SW corner
+      [115.22, -8.69], // NE corner (larger lng, larger lat)
+      [115.12, -8.75], // SW corner (smaller lng, smaller lat)
     ],
   },
   {
-    name: 'surabaya',
-    label: 'Surabaya',
+    name: 'ubud',
+    label: 'Ubud',
     bounds: [
-      [112.85, -7.2],  // NE corner
-      [112.6, -7.35],  // SW corner
+      [115.31, -8.46], // NE corner (larger lng, larger lat)
+      [115.21, -8.54], // SW corner (smaller lng, smaller lat)
     ],
   },
 ];

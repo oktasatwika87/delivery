@@ -68,9 +68,9 @@ describe('offlineStorage', () => {
 
     test('returns packs with correct DownloadState mapping', async () => {
       const mockPacks = [
-        mockPackWithStatus('jakarta', 0, 0),    // inactive
-        mockPackWithStatus('bandung', 1, 50),   // active
-        mockPackWithStatus('surabaya', 2, 100), // complete
+        mockPackWithStatus('denpasar', 0, 0),    // inactive
+        mockPackWithStatus('kuta-badung', 1, 50), // active
+        mockPackWithStatus('ubud', 2, 100),      // complete
       ];
       (OfflineManager.getPacks as jest.Mock).mockResolvedValue(mockPacks);
 
@@ -102,8 +102,8 @@ describe('offlineStorage', () => {
   describe('totalUsedBytes()', () => {
     test('sums completedTileSize from all packs', async () => {
       const mockPacks = [
-        mockPackWithStatus('jakarta', 2, 100),
-        mockPackWithStatus('bandung', 2, 100),
+        mockPackWithStatus('denpasar', 2, 100),
+        mockPackWithStatus('kuta-badung', 2, 100),
       ];
       (OfflineManager.getPacks as jest.Mock).mockResolvedValue(mockPacks);
 
@@ -429,9 +429,9 @@ describe('offlineStorage', () => {
     test('calls OfflineManager.deletePack with correct name', async () => {
       (OfflineManager.deletePack as jest.Mock).mockResolvedValue(undefined);
 
-      await offlineStorage.deletePack('jakarta');
+      await offlineStorage.deletePack('denpasar');
 
-      expect(OfflineManager.deletePack).toHaveBeenCalledWith('jakarta');
+      expect(OfflineManager.deletePack).toHaveBeenCalledWith('denpasar');
     });
   });
 });
