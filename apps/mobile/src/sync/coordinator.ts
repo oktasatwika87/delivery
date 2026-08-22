@@ -649,6 +649,16 @@ export class SyncCoordinator implements Coordinator {
             r.serverVersion = ack.serverVersion;
             // Mark as synced agar tidak dianggap dirty di collectDirty() berikutnya
             r._raw._status = 'synced';
+            // Flip domain status: chat_message -> SENT, payment -> CAPTURED
+            // Ini fix C3 — tanpa ini, pesan chat sync-path tampil 'mengirim...'
+            // selamanya padahal sudah sukses terkirim ke server.
+            if (ack.entityType === 'chat_message') {
+              r.status = 'SENT';
+            } else if (ack.entityType === 'payment') {
+              // Use serverData status if available, fallback to CAPTURED
+              const serverStatus = (ack as any).serverData?.status;
+              r.status = serverStatus ?? 'CAPTURED';
+            }
           }));
         }
       } else if (ack.status === 'rejected') {

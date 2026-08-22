@@ -390,7 +390,7 @@ describe('SyncCoordinator', () => {
       expect(overwritten!._raw._status).toBe('synced');
     });
 
-    test('accept dengan payment entity -> _status synced', async () => {
+    test('accept dengan payment entity -> _status synced + domain status CAPTURED', async () => {
       // Setup: payment row
       const paymentRow = createMockRow('payment-1', 'created');
       paymentRow.serverVersion = 1;
@@ -416,6 +416,104 @@ describe('SyncCoordinator', () => {
       expect(updated).toBeDefined();
       expect(updated!.serverVersion).toBe(3);
       expect(updated!._raw._status).toBe('synced');
+      // C3 fix: domain status flip ke CAPTURED setelah accepted
+      expect((updated as any).status).toBe('CAPTURED');
+    });
+
+    test('accept dengan payment entity + serverData status -> uses serverData', async () => {
+      // Setup: payment row
+      const paymentRow = createMockRow('payment-2', 'created');
+      paymentRow.serverVersion = 1;
+      paymentRow.status = 'PENDING';
+      paymentRow.amountCents = 50000;
+      state.records.get('payments')!.set('payment-2', paymentRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'payment',
+          id: 'payment-2',
+          status: 'accepted',
+          serverVersion: 3,
+          serverChangedAt: new Date().toISOString(),
+          serverData: {
+            status: 'PENDING', // server says still pending
+          },
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      const updated = state.records.get('payments')!.get('payment-2');
+      // Uses serverData status, not hardcoded CAPTURED
+      expect((updated as any).status).toBe('PENDING');
+    });
+
+    test('accept dengan chat_message entity -> _status synced + domain status SENT', async () => {
+      // Setup: chat_message row dengan status pending_send
+      const chatRow = createMockRow('chat-accepted-1', 'created');
+      chatRow.serverVersion = 0;
+      chatRow.status = 'pending_send';
+      chatRow.body = 'Test message';
+      chatRow.roomId = 'room-1';
+      chatRow.senderId = 'user-1';
+      chatRow.clientCreatedAt = Date.now();
+      state.records.get('chat_messages')!.set('chat-accepted-1', chatRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'chat_message',
+          id: 'chat-accepted-1',
+          status: 'accepted',
+          serverVersion: 1,
+          serverChangedAt: new Date().toISOString(),
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // Verifikasi
+      const updated = state.records.get('chat_messages')!.get('chat-accepted-1');
+      expect(updated).toBeDefined();
+      expect(updated!.serverVersion).toBe(1);
+      expect(updated!._raw._status).toBe('synced');
+      // C3 fix: domain status flip ke SENT setelah accepted
+      // Ini yang fix bug 'mengirim...' stuck — sync path sekarang benar flip status
+      expect((updated as any).status).toBe('SENT');
+    });
+
+    test('accept dengan order entity -> TIDAK flip domain status (orders have different flow)', async () => {
+      // Setup: order row
+      const orderRow = createMockRow('order-accepted-1', 'created');
+      orderRow.serverVersion = 1;
+      orderRow.status = 'CONFIRMED';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-accepted-1', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-accepted-1',
+          status: 'accepted',
+          serverVersion: 2,
+          serverChangedAt: new Date().toISOString(),
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      // Verifikasi: order TIDAK punya domain status flip di accepted path
+      const updated = state.records.get('orders')!.get('order-accepted-1');
+      expect(updated).toBeDefined();
+      expect(updated!.serverVersion).toBe(2);
+      expect(updated!._raw._status).toBe('synced');
+      // Order status tetap seperti sebelum — tidak ada perubahan di accepted path
+      expect(updated!.status).toBe('CONFIRMED');
     });
 
     test('conflict dengan chat_message entity -> _status synced', async () => {
