@@ -168,7 +168,7 @@ export class SyncService {
       // Order business validation — transition + ownership rules
       if (entityType === 'order' && op === 'update') {
         const orderData = data as Order;
-        const orderRow = row as Order;
+        const orderRow = row as { status: string; driverId: string | null; version: number };
         const currentStatus = orderRow.status as OrderStatus;
         const newStatus = orderData.status as OrderStatus;
 
