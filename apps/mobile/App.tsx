@@ -25,7 +25,8 @@ import { database } from './src/db';
 import { syncCoordinator } from './src/sync';
 import { ordersSocket } from './src/sync';
 import { chatSocket } from './src/sync/socket';
-import { getToken } from './src/sync/token-storage';
+import { getToken, clearToken } from './src/sync/token-storage';
+import { syncEvents } from './src/sync/syncEvents';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { OrdersScreen } from './src/screens/OrdersScreen';
 import { OrderDetailScreen } from './src/screens/OrderDetailScreen';
@@ -49,6 +50,7 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 function App(): React.JSX.Element {
   const [ready, setReady] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
+  const [logoutReason, setLogoutReason] = useState<'auth-expired' | 'manual' | undefined>(undefined);
 
   // Track previous network status so we only kick flushNow on
   // offline → online transition (not initial 'online' or every probe).
@@ -110,6 +112,24 @@ function App(): React.JSX.Element {
       }
     });
 
+    // ─── Auth-expired listener: force logout saat session expired detected ───
+    const onAuthExpired = (event: { source: string }) => {
+      console.warn('[App] auth-expired event from:', event.source, '— forcing logout');
+      setLogoutReason('auth-expired');
+      // 1. Stop sync coordinator
+      syncCoordinator.stop();
+      // 2. Disconnect sockets (paralel dengan AppState inactive branch)
+      chatSocket.disconnect();
+      ordersSocket.disconnect();
+      // 3. Clear token (FIRST call site for clearToken() in entire codebase)
+      clearToken().catch((err) => {
+        console.error('[App] clearToken failed:', err);
+      });
+      // 4. Reset auth state — trigger re-render ke LoginScreen
+      setAuthenticated(false);
+    };
+    syncEvents.on('auth-expired', onAuthExpired);
+
     // Auth-check jalan PARALEL dengan sync — tidak saling tunggu.
     (async () => {
       try {
@@ -141,6 +161,7 @@ function App(): React.JSX.Element {
       networkMonitor.stop();
       ordersSocket.disconnect();
       appStateSubscription.remove();
+      syncEvents.off('auth-expired', onAuthExpired);
     };
   }, []);
 
@@ -198,6 +219,7 @@ function App(): React.JSX.Element {
    */
   const handleLoginSuccess = async (): Promise<void> => {
     setAuthenticated(true);
+    setLogoutReason(undefined);
     // ordersSocket — connect setelah login sukses. Tidak di-mount (Opsi A lazy
     // per-screen) karena value proposition WebSocket push (§ 2.2.a) butuh socket
     // nyala di semua screen (OrderDetail, Map, dll) bukan cuma OrdersScreen.
@@ -225,7 +247,7 @@ function App(): React.JSX.Element {
       <DatabaseProvider database={database}>
         <NavigationContainer>
           {!authenticated ? (
-            <LoginScreen onLoginSuccess={handleLoginSuccess} />
+            <LoginScreen onLoginSuccess={handleLoginSuccess} logoutReason={logoutReason} />
           ) : (
             <Stack.Navigator screenOptions={{ headerShown: false }}>
               <Stack.Screen name="Orders" component={OrdersScreen} />

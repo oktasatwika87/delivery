@@ -62,8 +62,8 @@ class SimpleEventBus {
    * Unsubscribe from an event.
    * Note: must pass the SAME function reference that was passed to on().
    */
-  off(event: string, callback: EventCallback): void {
-    this.listeners.get(event)?.delete(callback);
+  off<T = unknown>(event: string, callback: EventCallback<T>): void {
+    this.listeners.get(event)?.delete(callback as EventCallback);
   }
 
   /**

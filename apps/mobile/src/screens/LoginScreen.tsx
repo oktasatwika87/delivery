@@ -20,6 +20,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 
@@ -29,13 +30,16 @@ import { saveToken } from '../sync/token-storage';
 interface LoginScreenProps {
   /** Dipanggil setelah login + saveToken berhasil. */
   onLoginSuccess: () => void;
+  /** Reason for forced logout, if any. */
+  logoutReason?: 'auth-expired' | 'manual';
 }
 
-export function LoginScreen({ onLoginSuccess }: LoginScreenProps): React.JSX.Element {
+export function LoginScreen({ onLoginSuccess, logoutReason }: LoginScreenProps): React.JSX.Element {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   const handleSubmit = async (): Promise<void> => {
     if (!phone.trim() || !password.trim()) {
@@ -71,6 +75,15 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps): React.JSX.Ele
       <View style={styles.inner}>
         <Text style={styles.title}>Masuk</Text>
         <Text style={styles.subtitle}>Delivery App</Text>
+
+        {logoutReason === 'auth-expired' && !bannerDismissed && (
+          <View style={styles.banner}>
+            <Text style={styles.bannerText}>⚠️ Sesi Anda telah berakhir. Silakan login ulang untuk melanjutkan.</Text>
+            <TouchableOpacity onPress={() => setBannerDismissed(true)} style={styles.bannerClose}>
+              <Text style={styles.bannerCloseText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {error && (
           <View style={styles.errorBox}>
@@ -157,6 +170,30 @@ const styles = StyleSheet.create({
     color: '#dc2626',
     fontSize: 14,
     textAlign: 'center',
+  },
+  banner: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#fcd34d',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  bannerText: {
+    color: '#92400e',
+    fontSize: 14,
+    flex: 1,
+  },
+  bannerClose: {
+    marginLeft: 8,
+    padding: 4,
+  },
+  bannerCloseText: {
+    color: '#92400e',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   loader: {
     marginTop: 16,
