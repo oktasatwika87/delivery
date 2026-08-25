@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
   RefreshControl,
   SectionList,
@@ -19,6 +19,10 @@ import { getCurrentUserId } from '../sync/session';
 import { fetchAvailableOrders, UnauthorizedError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
+import { locationService } from '../map/location';
+import { networkMonitor } from '../map/networkMonitor';
+import { RouteService } from '../map/routeService';
+import { GraphHopperRoutingProvider } from '../map/routing';
 
 interface SectionData {
   title: string;
@@ -41,8 +45,34 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
     orderId: null,
   });
 
+  // ─── GPS location state ─────────────────────────────────────────────────────
+  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
+
   // ─── Refs for socket unsubscribe ────────────────────────────────────────────
   const unsubscribeRef = useRef<Array<() => void>>([]);
+
+  // ─── Location subscription ──────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    // Initial fix dari last-known cache
+    locationService.getLastKnown().then((loc) => {
+      if (cancelled || !loc) return;
+      setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+    });
+    // Subscribe to updates
+    locationService.subscribe((loc) => {
+      setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+    }).then((unsub) => {
+      if (cancelled) unsub();
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // ─── Route service instance ─────────────────────────────────────────────────
+  const routeService = useMemo(() => {
+    const provider = new GraphHopperRoutingProvider();
+    return new RouteService({ routingProvider: provider, database });
+  }, [database]);
 
   // ─── Fetch available pool from REST ─────────────────────────────────────────
   const fetchPool = useCallback(async (): Promise<void> => {
@@ -195,6 +225,20 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
         setPoolOrders((prev) => prev.filter((o) => o.id !== order.id));
 
         console.log('[OrdersScreen] Order accepted locally:', order.id);
+
+        // ─── Pre-compute route for offline-ready ───────────────────────────────
+        if (networkMonitor.getStatus() === 'online' && currentLocation) {
+          const addressJson = order.addressJson as { coordinates?: [number, number] } | null;
+          if (addressJson?.coordinates && addressJson.coordinates.length === 2) {
+            // Konversi dari [lng, lat] GeoJSON array ke { lng, lat } object
+            const [lng, lat] = addressJson.coordinates;
+            const destination = { lng, lat };
+            const origin = { lng: currentLocation.lng, lat: currentLocation.lat };
+            routeService.getRoute({ origin, destination }).catch((err) => {
+              console.warn('[OrdersScreen] pre-compute route failed:', err);
+            });
+          }
+        }
       } catch (err) {
         console.error('[OrdersScreen] handleAccept failed:', err);
       }
