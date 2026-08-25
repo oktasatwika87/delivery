@@ -122,6 +122,43 @@ export class InvalidCredentialsError extends Error {
   }
 }
 
+export interface AvailableOrderItem {
+  orderId: string;
+  totalCents: number;
+  currency: string;
+  itemsCount: number;
+  city?: string;
+  createdAt: string;
+}
+
+/**
+ * Ambil daftar order yang tersedia di driver pool.
+ * AbortController 8 detik — fail fast kalau network unreachable.
+ */
+export async function fetchAvailableOrders(take?: number): Promise<AvailableOrderItem[]> {
+  let url = `${API_BASE}/orders/available`;
+  if (take !== undefined) {
+    url += `?take=${String(take)}`;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await fetchWithAuth(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error(`fetchAvailableOrders failed: ${res.status}`);
+    return res.json() as Promise<AvailableOrderItem[]>;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      console.warn('[fetchAvailableOrders] Request aborted due to 8s timeout — returning empty');
+      return [];
+    }
+    throw err;
+  }
+}
+
 // ─── Chat ─────────────────────────────────────────────────────────────────
 
 export interface SendMessagePayload {

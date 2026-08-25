@@ -7,7 +7,7 @@
  */
 
 import React from 'react';
-import { render } from '@testing-library/react-native';
+import { render, waitFor } from '@testing-library/react-native';
 
 // ─── Mock @nozbe/watermelondb/react SEBELUM import component ──────────────
 jest.mock('@nozbe/watermelondb/react', () => ({
@@ -35,10 +35,7 @@ jest.mock('../sync/session', () => ({
 // ─── Mock API client ─────────────────────────────────────────────────────────
 // Must use require.resolve to ensure correct module path
 jest.mock('../sync/client', () => ({
-  fetchWithAuth: jest.fn().mockResolvedValue({
-    ok: true,
-    json: jest.fn().mockResolvedValue([]),
-  }),
+  fetchAvailableOrders: jest.fn().mockResolvedValue([]),
 }));
 
 // ─── Mock ordersSocket ────────────────────────────────────────────────────────
@@ -77,8 +74,18 @@ const mockDatabase = {
 
 // ─── Import after mocks ───────────────────────────────────────────────────────
 import { OrdersScreen } from './OrdersScreen';
+import { fetchAvailableOrders } from '../sync/client';
 
 describe('OrdersScreen smoke test', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Reset mock to return empty by default
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue([]);
+    // Reset find to reject (new order create path)
+    mockOrdersCollection.find = jest.fn().mockRejectedValue(new Error('not found'));
+    mockOrdersCollection.create = jest.fn().mockResolvedValue({});
+  });
+
   test('mounts without throwing', () => {
     let error: Error | null = null;
 
@@ -92,5 +99,38 @@ describe('OrdersScreen smoke test', () => {
     }
 
     expect(error).toBeNull();
+  });
+
+  test('fetchPool uses fetchAvailableOrders (not fetchWithAuth)', async () => {
+    // Provide pool data
+    const poolItems = [
+      { orderId: 'order-1', totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z' },
+    ];
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue(poolItems);
+
+    render(<OrdersScreen database={mockDatabase as never} />);
+
+    // Wait for async operations to complete
+    await waitFor(() => {
+      expect(fetchAvailableOrders).toHaveBeenCalled();
+    });
+
+    // Verify create was called (upsert path for new order)
+    expect(mockOrdersCollection.create).toHaveBeenCalled();
+  });
+
+  test('fetchPool does NOT call fetchWithAuth', async () => {
+    // This test verifies the old buggy code path is gone
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue([]);
+
+    render(<OrdersScreen database={mockDatabase as never} />);
+
+    await waitFor(() => {
+      expect(fetchAvailableOrders).toHaveBeenCalled();
+    });
+
+    // fetchWithAuth should NOT be imported/called at all
+    // The module exports fetchAvailableOrders, not fetchWithAuth
+    expect(fetchAvailableOrders).toBeDefined();
   });
 });

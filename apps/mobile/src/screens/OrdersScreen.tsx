@@ -16,12 +16,9 @@ import type { Database } from '@nozbe/watermelondb';
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
 import { getCurrentUserId } from '../sync/session';
-import { fetchWithAuth } from '../sync/client';
+import { fetchAvailableOrders } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
-import Config from 'react-native-config';
-
-const API_BASE = Config.API_BASE_URL;
 
 interface SectionData {
   title: string;
@@ -50,50 +47,30 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
   // ─── Fetch available pool from REST ─────────────────────────────────────────
   const fetchPool = useCallback(async (): Promise<void> => {
     try {
-      const res = await fetchWithAuth(`${API_BASE}/orders/available`);
-      if (!res.ok) throw new Error(`fetchPool failed: ${res.status}`);
-
-      // Response shape dari findAvailable() → toDomain():
-      // { id, customerId, driverId, status, items, deliveryAddress,
-      //   totalCents, currency, notes, cancelledBy, cancelReason, version,
-      //   createdAt, updatedAt }
-      const orders: Array<{
-        id: string;
-        customerId: string;
-        driverId: string | null | undefined;
-        status: string;
-        items: unknown[];
-        deliveryAddress: unknown;
-        totalCents: number;
-        currency: string;
-        notes?: string;
-        version: number;
-        createdAt: string;
-        updatedAt: string;
-      }> = await res.json();
+      // fetchAvailableOrders returns pool items: orderId, totalCents, currency, itemsCount, city?, createdAt
+      const poolItems = await fetchAvailableOrders();
 
       // Upsert each order to local DB with _raw._status='synced'
       // (Penting: synced biar collectDirty gak pickup pool rows)
       await database.write(async () => {
-        for (const order of orders) {
-          const existing = await database.get<OrderModel>('orders').find(order.id).catch(() => null);
+        for (const item of poolItems) {
+          const existing = await database.get<OrderModel>('orders').find(item.orderId).catch(() => null);
           if (existing) {
             await existing.update((r) => {
-              (r as any).serverVersion = order.version;
               (r as any)._raw._status = 'synced';
             });
           } else {
+            // Safe defaults untuk field non-nullable di OrderModel.
+            // Data lengkap (customerId, items, address) belum tersedia di pool payload
+            // karena drivers:available broadcast hanya kirim orderId + metadata minimal.
             await database.get<OrderModel>('orders').create((r) => {
-              (r as any)._raw.id = order.id;
-              (r as any).customerId = order.customerId;
-              (r as any).status = order.status;
-              (r as any).driverId = order.driverId ?? undefined;
-              (r as any).totalCents = order.totalCents;
-              (r as any).currency = order.currency;
-              (r as any).itemsJson = order.items ?? [];
-              (r as any).addressJson = order.deliveryAddress ?? {};
-              (r as any).notes = order.notes ?? undefined;
-              (r as any).serverVersion = order.version;
+              (r as any)._raw.id = item.orderId;
+              (r as any).status = 'ASSIGNED';
+              (r as any).totalCents = item.totalCents;
+              (r as any).currency = item.currency;
+              (r as any).customerId = ''; // pool preview — detail belum tersedia
+              (r as any).itemsJson = []; // pool preview — items belum tersedia
+              (r as any).addressJson = {}; // pool preview — address belum tersedia
               (r as any)._raw._status = 'synced';
             });
           }
