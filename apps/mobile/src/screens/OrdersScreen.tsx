@@ -16,7 +16,7 @@ import type { Database } from '@nozbe/watermelondb';
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
 import { getCurrentUserId } from '../sync/session';
-import { fetchAvailableOrders } from '../sync/client';
+import { fetchAvailableOrders, UnauthorizedError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
 
@@ -88,6 +88,11 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
         .fetch();
       setPoolOrders(pool);
     } catch (err) {
+      // Detect session expired
+      if (err instanceof UnauthorizedError) {
+        syncEvents.emit('auth-expired', { source: 'pool-fetch' });
+        return;
+      }
       console.warn('[OrdersScreen] fetchPool failed:', err);
     }
   }, [database]);
