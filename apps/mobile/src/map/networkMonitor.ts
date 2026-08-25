@@ -16,7 +16,7 @@
 
 import Config from 'react-native-config';
 
-export type NetworkStatus = 'online' | 'offline';
+export type NetworkStatus = 'online' | 'offline' | 'unknown';
 
 type Listener = (status: NetworkStatus) => void;
 
@@ -38,7 +38,7 @@ const PING_TIMEOUT_MS = 5_000;
 const DEFAULT_INTERVAL_MS = 30_000;
 
 class NetworkMonitorImpl implements NetworkMonitor {
-  private status: NetworkStatus = 'online';
+  private status: NetworkStatus = 'unknown';
   private listeners = new Set<Listener>();
   private timer: ReturnType<typeof setInterval> | null = null;
 

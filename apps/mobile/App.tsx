@@ -54,7 +54,7 @@ function App(): React.JSX.Element {
 
   // Track previous network status so we only kick flushNow on
   // offline → online transition (not initial 'online' or every probe).
-  const prevNetworkStatusRef = useRef<NetworkStatus>(networkMonitor.getStatus());
+  const prevNetworkStatusRef = useRef<NetworkStatus>('unknown');
 
   useEffect(() => {
     let cancelled = false;
@@ -175,8 +175,8 @@ function App(): React.JSX.Element {
       const prev = prevNetworkStatusRef.current;
       prevNetworkStatusRef.current = status;
 
-      if (prev === 'offline' && status === 'online' && !cancelled) {
-        console.log('[App] Network back online — triggering immediate flush');
+      if (prev !== 'online' && status === 'online' && !cancelled) {
+        console.log('[App] Network status known online (was ' + prev + ') — triggering flush');
         syncCoordinator.flushNow().catch((err) => {
           if (!cancelled) {
             console.warn(
