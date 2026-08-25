@@ -19,7 +19,7 @@ import type {
   SyncPushResponse,
 } from '@delivery/shared';
 
-import { pushBatch, pullBatch } from './client';
+import { pushBatch, pullBatch, UnauthorizedError } from './client';
 import { loadCursor, saveCursor } from './cursor';
 import { getDeviceId } from './device';
 import { getCurrentUserId } from './session';
@@ -127,6 +127,12 @@ export class SyncCoordinator implements Coordinator {
       // Network gagal atau backend reject request — row lokal tetap dirty,
       // akan di-retry di sync cycle berikutnya. Log warning.
       console.warn('[flushNow] pushBatch failed, will retry next sync:', err);
+
+      // Detect session expired
+      if (err instanceof UnauthorizedError) {
+        syncEvents.emit('auth-expired', { source: 'sync-push' });
+      }
+
       return null;
     }
 
@@ -224,6 +230,12 @@ export class SyncCoordinator implements Coordinator {
       return pull;
     } catch (err) {
       console.warn('[SyncCoordinator] pullNow() failed:', err);
+
+      // Detect session expired
+      if (err instanceof UnauthorizedError) {
+        syncEvents.emit('auth-expired', { source: 'sync-pull' });
+      }
+
       return null;
     }
   }
