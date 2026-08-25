@@ -37,6 +37,9 @@ export async function pushBatch(payload: SyncPushPayload): Promise<SyncPushRespo
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
+    if (res.status === 401) {
+      throw new UnauthorizedError();
+    }
     if (!res.ok) throw new Error(`pushBatch failed: ${res.status}`);
     return res.json() as Promise<SyncPushResponse>;
   } catch (err: any) {
@@ -66,6 +69,9 @@ export async function pullBatch(deviceId: string, cursor: string | null): Promis
   try {
     const res = await fetchWithAuth(url, { signal: controller.signal });
     clearTimeout(timeoutId);
+    if (res.status === 401) {
+      throw new UnauthorizedError();
+    }
     if (!res.ok) throw new Error(`pullBatch failed: ${res.status}`);
     return res.json() as Promise<SyncPullResponse>;
   } catch (err: any) {
@@ -122,6 +128,14 @@ export class InvalidCredentialsError extends Error {
   }
 }
 
+/** Error yang dilempar saat session expired (bukan wrong credentials). */
+export class UnauthorizedError extends Error {
+  constructor(message: string = 'Sesi berakhir, silakan login ulang') {
+    super(message);
+    this.name = 'UnauthorizedError';
+  }
+}
+
 export interface AvailableOrderItem {
   orderId: string;
   totalCents: number;
@@ -147,6 +161,9 @@ export async function fetchAvailableOrders(take?: number): Promise<AvailableOrde
   try {
     const res = await fetchWithAuth(url, { signal: controller.signal });
     clearTimeout(timeoutId);
+    if (res.status === 401) {
+      throw new UnauthorizedError();
+    }
     if (!res.ok) throw new Error(`fetchAvailableOrders failed: ${res.status}`);
     return res.json() as Promise<AvailableOrderItem[]>;
   } catch (err: any) {
@@ -194,6 +211,10 @@ export async function sendChatMessage(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+
+  if (res.status === 401) {
+    throw new UnauthorizedError();
+  }
 
   if (!res.ok) {
     const body = await res.text();
