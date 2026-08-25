@@ -33,6 +33,7 @@ import Config from 'react-native-config';
 import type { ChatMessage } from '@delivery/shared';
 
 import { getCurrentToken } from './session';
+import { syncEvents } from './syncEvents';
 
 /** Base URL dari .env (react-native-config) */
 const WS_BASE = Config.API_BASE_URL;
@@ -169,6 +170,12 @@ class ChatSocketManager {
       this.socket.on('connect_error', (err) => {
         console.error('[ChatSocket] connect_error:', err.message);
         this.emit('connect_error', err.message);
+
+        // Detect token-related auth failure
+        if (err.message && /jwt|unauthorized|token expired|invalid token/i.test(err.message)) {
+          console.warn('[ChatSocket] auth-related connect_error — emitting auth-expired');
+          syncEvents.emit('auth-expired', { source: 'chat-socket' });
+        }
       });
 
       // Handle initial connect failure (only for initial connect, not for reconnect after first success)

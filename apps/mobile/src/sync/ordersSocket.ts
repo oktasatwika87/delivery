@@ -32,6 +32,7 @@ import { io, Socket } from 'socket.io-client';
 import Config from 'react-native-config';
 
 import { getCurrentToken } from './session';
+import { syncEvents } from './syncEvents';
 
 /** Base URL dari .env (react-native-config) */
 const WS_BASE = Config.API_BASE_URL;
@@ -202,6 +203,12 @@ class OrdersSocketManager {
       this.socket.on('connect_error', (err) => {
         console.error('[OrdersSocket] connect_error:', err.message);
         this.emit('connect_error', err.message);
+
+        // Detect token-related auth failure
+        if (err.message && /jwt|unauthorized|token expired|invalid token/i.test(err.message)) {
+          console.warn('[OrdersSocket] auth-related connect_error — emitting auth-expired');
+          syncEvents.emit('auth-expired', { source: 'orders-socket' });
+        }
       });
 
       // Register reconnect_failed handler SELAMA initial connect only
