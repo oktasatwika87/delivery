@@ -10,6 +10,27 @@ import {
 
 import { OrdersGateway } from './orders.gateway';
 
+/**
+ * Slim payload untuk GET /orders/available.
+ *
+ * Beda dari `Order` full: tidak ada customerId, items[], deliveryAddress{},
+ * notes, version, cancelledBy, cancelReason. Driver cuma butuh preview
+ * minimal untuk nge-tap card — full detail di-fetch via GET /orders/:id
+ * setelah tap.
+ *
+ * Shape ini PARALEL dengan WebSocket broadcast `emitOrderAvailable`
+ * (orders.gateway.ts) — sehingga REST + WS driver pool konsisten.
+ * Lihat catatan desain Tier 6 untuk origin spec.
+ */
+export interface AvailableOrderPayload {
+  orderId: string;
+  totalCents: number;
+  currency: string;
+  itemsCount: number;
+  city?: string;
+  createdAt: string;
+}
+
 @Injectable()
 export class OrdersService {
   constructor(
@@ -269,10 +290,13 @@ export class OrdersService {
    * List orders yang siap di-accept (status ASSIGNED, belum ada driver).
    * Untuk driver lihat pool. Read-only, tidak ada side effect.
    *
+   * Return `AvailableOrderPayload[]` (slim shape), BUKAN full `Order[]`.
+   * Lihat type def di atas untuk rationale + parallel dengan WS broadcast.
+   *
    * @param _driverId - userId dari JWT (untuk future audit logging, tidak untuk filter)
    * @param take - max orders (hard cap 100)
    */
-  async findAvailable(_driverId: string, take: number): Promise<Order[]> {
+  async findAvailable(_driverId: string, take: number): Promise<AvailableOrderPayload[]> {
     const rows = await this.prisma.order.findMany({
       where: {
         status: OrderStatusDb.ASSIGNED,
@@ -282,7 +306,43 @@ export class OrdersService {
       take,
       orderBy: { createdAt: 'asc' },
     });
-    return rows.map((r) => this.toDomain(r));
+    return rows.map((r) => this.toAvailablePayload(r));
+  }
+
+  /**
+   * Map Prisma row ke slim `AvailableOrderPayload`.
+   *
+   * Mapping:
+   * - r.id → orderId
+   * - Array `itemsJson.length` → itemsCount (safe: itemsJson selalu array,
+   *   schema enforced di service.create)
+   * - r.addressJson?.city → city (optional chain karena addressJson typed
+   *   sebagai `Json` di Prisma — defensif, meski schema enforce object)
+   * - r.createdAt.toISOString() → createdAt (string format ISO 8601,
+   *   sesuai `Order.createdAt` convention)
+   */
+  private toAvailablePayload(row: {
+    id: string;
+    itemsJson: unknown;
+    addressJson: unknown;
+    totalCents: number;
+    currency: string;
+    createdAt: Date;
+  }): AvailableOrderPayload {
+    const items = Array.isArray(row.itemsJson) ? row.itemsJson : [];
+    const address =
+      row.addressJson && typeof row.addressJson === 'object'
+        ? (row.addressJson as { city?: string })
+        : null;
+
+    return {
+      orderId: row.id,
+      totalCents: row.totalCents,
+      currency: row.currency,
+      itemsCount: items.length,
+      city: address?.city,
+      createdAt: row.createdAt.toISOString(),
+    };
   }
 
   private toDomain(row: {

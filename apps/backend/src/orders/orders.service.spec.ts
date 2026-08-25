@@ -623,7 +623,7 @@ describe('OrdersService', () => {
       };
     }
 
-    test('returns ASSIGNED+driverId=null orders sorted by createdAt ASC', async () => {
+    test('returns slim AvailableOrderPayload (not full Order) sorted by createdAt ASC', async () => {
       const now = new Date();
       const order1 = makeAvailableOrder('order-1', new Date(now.getTime() - 10000));
       const order2 = makeAvailableOrder('order-2', now);
@@ -644,9 +644,96 @@ describe('OrdersService', () => {
         orderBy: { createdAt: 'asc' },
       });
       expect(result).toHaveLength(3);
-      expect(result[0].id).toBe('order-1');
-      expect(result[1].id).toBe('order-2');
-      expect(result[2].id).toBe('order-3');
+      // Slim shape: orderId (bukan `id` dari full Order)
+      expect(result[0].orderId).toBe('order-1');
+      expect(result[1].orderId).toBe('order-2');
+      expect(result[2].orderId).toBe('order-3');
+      // PENTING: payload TIDAK boleh bocor full Order fields seperti `customerId`,
+      // `driverId`, `notes`, `version`, `cancelledBy`, `cancelReason`, `items`,
+      // `deliveryAddress`. Type assertion catch-all untuk regressions.
+      for (const item of result) {
+        expect(item).not.toHaveProperty('id');
+        expect(item).not.toHaveProperty('customerId');
+        expect(item).not.toHaveProperty('driverId');
+        expect(item).not.toHaveProperty('notes');
+        expect(item).not.toHaveProperty('version');
+        expect(item).not.toHaveProperty('items');
+        expect(item).not.toHaveProperty('deliveryAddress');
+      }
+    });
+
+    test('maps slim payload fields correctly: orderId, totalCents, currency, itemsCount, city, createdAt', async () => {
+      const createdAt = new Date('2026-08-25T10:00:00.000Z');
+      const order = makeAvailableOrder('order-1', createdAt);
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([order]);
+
+      const result = await service.findAvailable(driverId, 50);
+
+      expect(result).toHaveLength(1);
+      const item = result[0];
+      expect(item.orderId).toBe('order-1');
+      expect(item.totalCents).toBe(50000);
+      expect(item.currency).toBe('IDR');
+      // itemsJson array berisi 1 line item → itemsCount = 1
+      expect(item.itemsCount).toBe(1);
+      // city di-extract dari addressJson
+      expect(item.city).toBe('Denpasar');
+      // createdAt jadi ISO 8601 string, bukan Date object
+      expect(item.createdAt).toBe('2026-08-25T10:00:00.000Z');
+      expect(typeof item.createdAt).toBe('string');
+    });
+
+    test('itemsCount reflects items array length (multiple items)', async () => {
+      const order = {
+        ...makeAvailableOrder('order-multi', new Date()),
+        itemsJson: [
+          { id: 'item-1', productId: 'p1', name: 'A', quantity: 1, unitPriceCents: 10000 },
+          { id: 'item-2', productId: 'p2', name: 'B', quantity: 2, unitPriceCents: 15000 },
+          { id: 'item-3', productId: 'p3', name: 'C', quantity: 1, unitPriceCents: 20000 },
+        ],
+      };
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([order]);
+
+      const result = await service.findAvailable(driverId, 50);
+
+      expect(result[0].itemsCount).toBe(3);
+    });
+
+    test('itemsCount falls back to 0 if itemsJson is not an array (defensive)', async () => {
+      // Edge case: data integrity issue, itemsJson somehow bukan array
+      const order = {
+        ...makeAvailableOrder('order-corrupt', new Date()),
+        itemsJson: 'not-an-array' as unknown,
+      };
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([order]);
+
+      const result = await service.findAvailable(driverId, 50);
+
+      expect(result[0].itemsCount).toBe(0);
+    });
+
+    test('city is undefined if addressJson missing city field', async () => {
+      const order = {
+        ...makeAvailableOrder('order-no-city', new Date()),
+        addressJson: { recipientName: 'Budi', phone: '0812', street: 'Jl. Merdeka' /* no city */ },
+      };
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([order]);
+
+      const result = await service.findAvailable(driverId, 50);
+
+      expect(result[0].city).toBeUndefined();
+    });
+
+    test('city is undefined if addressJson is null or non-object (defensive)', async () => {
+      const order = {
+        ...makeAvailableOrder('order-bad-addr', new Date()),
+        addressJson: null as unknown,
+      };
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue([order]);
+
+      const result = await service.findAvailable(driverId, 50);
+
+      expect(result[0].city).toBeUndefined();
     });
 
     test('respects take parameter - pass through to Prisma', async () => {
