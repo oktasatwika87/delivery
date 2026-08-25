@@ -88,14 +88,17 @@ function App(): React.JSX.Element {
     // ─── AppState listener: pause/resume sync + sockets on background/foreground ──
     // Fix C6 dari offline-audit-findings.md.
     // background/inactive → stop sync + disconnect sockets (hemat battery/resource)
-    // active → resume sync + reconnect sockets
+    // active → resume sockets (sync coordinator TIDAK di-restart — dia udah
+    //   jalan terus sejak mount via setInterval; kalau di-start ulang di sini
+    //   bakal race dengan mount's start(), causing duplicate initial pull dan
+    //   "Cannot update a record with pending changes" dari WatermelonDB)
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
-        console.log('[App] AppState active — resuming sync + sockets');
-        // start() idempotent — aman dipanggil meski sudah jalan
-        syncCoordinator.start(database).catch((err) => {
-          console.warn('[App] syncCoordinator resume failed:', err);
-        });
+        console.log('[App] AppState active — resuming sockets only');
+        // syncCoordinator TIDAK dipanggil start() di sini. Periodic sync udah
+        // jalan dari setInterval yang di-set saat mount. Cukup resume sockets.
+        // (start() punya guard di syncInterval, tapi guard gak nutup window
+        //  antara mount dan initial pull selesai — race reproducible.)
         // connect() idempotent — double-connect aman
         chatSocket.connect().catch((err) => {
           console.warn('[App] chatSocket resume failed:', err);
