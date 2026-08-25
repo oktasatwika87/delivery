@@ -62,7 +62,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       } else {
         this.userSockets.set(payload.sub, new Set([client.id]));
       }
-    } catch {
+    } catch (err) {
+      console.warn(
+        '[ChatGateway] JWT verification failed:',
+        err instanceof Error ? err.message : String(err),
+      );
       client.disconnect();
     }
   }
