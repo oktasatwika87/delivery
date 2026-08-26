@@ -14,6 +14,9 @@
 
 import * as Keychain from 'react-native-keychain';
 
+import { getRoleFromToken } from './jwt-decode';
+import type { UserRole } from '@delivery/shared';
+
 const SERVICE = 'delivery-app';
 const KEY = 'session';
 
@@ -71,4 +74,23 @@ export async function getUserId(): Promise<string | null> {
  */
 export async function clearToken(): Promise<void> {
   await Keychain.resetGenericPassword({ service: SERVICE });
+}
+
+/**
+ * Ambil role user dari token yang tersimpan.
+ * Decode JWT dan ekstrak role dari payload.
+ *
+ * Return null kalau:
+ * - belum ada session
+ * - token tidak bisa di-decode
+ * - role tidak valid (bukan CUSTOMER/DRIVER)
+ *
+ * Ini dipakai untuk validasi token lama yang mungkin tidak punya field role.
+ */
+export async function getRole(): Promise<UserRole | null> {
+  const token = await getToken();
+  if (!token) {
+    return null;
+  }
+  return getRoleFromToken(token);
 }
