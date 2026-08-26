@@ -55,17 +55,27 @@ export class SyncCoordinator implements Coordinator {
   private db: Database | null = null;
   private stopped = false;
   private syncInterval: ReturnType<typeof setInterval> | null = null;
+  /** Guards against concurrent start() calls — set BEFORE any await, reset in finally. */
+  private isStarting = false;
 
   async start(db: Database): Promise<void> {
     // Reset stopped flag FIRST — allows restart after stop() was previously called
     this.stopped = false;
 
-    // Already running? Skip interval setup to prevent double-mount.
-    // Also skip initial pull to avoid duplicate work.
+    // Guard against concurrent start() calls.
+    // Set isStarting BEFORE any await so call #2 cannot slip past this guard
+    // while call #1 is still inside its await this.pull(null).
+    if (this.isStarting) {
+      console.log('[SyncCoordinator] start() called — another start() already in progress, skipping');
+      return;
+    }
+    this.isStarting = true;
+
+    // Also skip re-initialization if periodic sync is already running.
     if (this.syncInterval) {
-      // Just update db reference in case it changed
       this.db = db;
-      console.log('[SyncCoordinator] start() called — already running, skipping duplicate start');
+      console.log('[SyncCoordinator] start() called — already running, updating db reference');
+      this.isStarting = false;
       return;
     }
 
@@ -81,6 +91,8 @@ export class SyncCoordinator implements Coordinator {
       console.log('[SyncCoordinator] Initial pull succeeded');
     } catch (err) {
       console.warn('[SyncCoordinator] Initial pull failed, will retry on next tick:', err);
+    } finally {
+      this.isStarting = false;
     }
 
     // Periodic sync setiap 30 detik
