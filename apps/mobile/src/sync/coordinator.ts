@@ -59,7 +59,12 @@ export class SyncCoordinator implements Coordinator {
   private isStarting = false;
 
   async start(db: Database): Promise<void> {
-    // Reset stopped flag FIRST — allows restart after stop() was previously called
+    // Always update db reference FIRST — even if this call gets skipped due to
+    // concurrent start(), the db instance stays fresh. Placed BEFORE the
+    // isStarting guard so skipped calls still update this.db.
+    this.db = db;
+
+    // Reset stopped flag — allows restart after stop() was previously called
     this.stopped = false;
 
     // Guard against concurrent start() calls.
@@ -71,16 +76,15 @@ export class SyncCoordinator implements Coordinator {
     }
     this.isStarting = true;
 
-    // Also skip re-initialization if periodic sync is already running.
+    // Skip re-initialization if periodic sync is already running.
+    // db reference was already updated above.
     if (this.syncInterval) {
-      this.db = db;
-      console.log('[SyncCoordinator] start() called — already running, updating db reference');
+      console.log('[SyncCoordinator] start() called — already running, skipping duplicate interval');
       this.isStarting = false;
       return;
     }
 
     console.log('[SyncCoordinator] start() called');
-    this.db = db;
 
     // First sync: full pull (cursor null)
     // Bungkus try/catch supaya kegagalan pull pertama tidak menghalangi periodic sync
