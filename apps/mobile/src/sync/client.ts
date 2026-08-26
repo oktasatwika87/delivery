@@ -120,6 +120,42 @@ export async function login(phone: string, password: string): Promise<LoginRespo
   return res.json() as Promise<LoginResponse>;
 }
 
+/** Register request payload */
+export interface RegisterRequest {
+  phone: string;
+  password: string;
+  name: string;
+  role: 'CUSTOMER' | 'DRIVER';
+}
+
+/**
+ * Register akun baru ke backend.
+ *
+ * throws RegisterError kalau registration gagal.
+ */
+export async function register(dto: RegisterRequest): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(dto),
+  });
+
+  if (!res.ok) {
+    const errorBody = await res.text();
+    throw new RegisterError(`Registration failed: ${res.status} - ${errorBody}`);
+  }
+
+  return res.json() as Promise<LoginResponse>;
+}
+
+/** Error yang dilempar saat registration gagal. */
+export class RegisterError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RegisterError';
+  }
+}
+
 /** Error yang dilempar saat login gagal karena credentials salah. */
 export class InvalidCredentialsError extends Error {
   constructor(message: string) {

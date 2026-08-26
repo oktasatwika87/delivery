@@ -32,9 +32,11 @@ interface LoginScreenProps {
   onLoginSuccess: () => void;
   /** Reason for forced logout, if any. */
   logoutReason?: 'auth-expired' | 'manual';
+  /** Navigasi ke register screen. */
+  onNavigateToRegister?: () => void;
 }
 
-export function LoginScreen({ onLoginSuccess, logoutReason }: LoginScreenProps): React.JSX.Element {
+export function LoginScreen({ onLoginSuccess, logoutReason, onNavigateToRegister }: LoginScreenProps): React.JSX.Element {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -122,6 +124,12 @@ export function LoginScreen({ onLoginSuccess, logoutReason }: LoginScreenProps):
         {loading && (
           <ActivityIndicator style={styles.loader} size="small" />
         )}
+
+        {onNavigateToRegister && (
+          <TouchableOpacity style={styles.registerLink} onPress={onNavigateToRegister} disabled={loading}>
+            <Text style={styles.registerLinkText}>Belum punya akun? Daftar</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </KeyboardAvoidingView>
   );
@@ -197,5 +205,13 @@ const styles = StyleSheet.create({
   },
   loader: {
     marginTop: 16,
+  },
+  registerLink: {
+    marginTop: 24,
+    alignItems: 'center',
+  },
+  registerLinkText: {
+    color: '#2563eb',
+    fontSize: 14,
   },
 });
