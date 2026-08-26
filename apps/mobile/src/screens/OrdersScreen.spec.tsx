@@ -38,6 +38,14 @@ jest.mock('../sync/client', () => ({
   fetchAvailableOrders: jest.fn().mockResolvedValue([]),
 }));
 
+// ─── Mock navigation ───────────────────────────────────────────────────────
+jest.mock('@react-navigation/native', () => ({
+  NavigationContainer: ({ children }: { children: React.ReactNode }) => children,
+  useNavigation: () => ({
+    navigate: jest.fn(),
+  }),
+}));
+
 // ─── Mock ordersSocket ────────────────────────────────────────────────────────
 jest.mock('../sync/ordersSocket', () => ({
   ordersSocket: {
@@ -47,12 +55,37 @@ jest.mock('../sync/ordersSocket', () => ({
   },
 }));
 
-// ─── Mock navigation ───────────────────────────────────────────────────────
-jest.mock('@react-navigation/native', () => ({
-  NavigationContainer: ({ children }: { children: React.ReactNode }) => children,
-  useNavigation: () => ({
-    navigate: jest.fn(),
-  }),
+// ─── Mock routing provider untuk route pre-compute ───────────────────────────
+jest.mock('../map/routing', () => ({
+  GraphHopperRoutingProvider: jest.fn().mockImplementation(() => ({
+    getRoute: jest.fn().mockResolvedValue({ distance: 1000, duration: 300 }),
+  })),
+}));
+
+// ─── Mock location service ────────────────────────────────────────────────────
+jest.mock('../map/location', () => ({
+  locationService: {
+    getLastKnown: jest.fn().mockResolvedValue(null),
+    subscribe: jest.fn().mockResolvedValue(jest.fn()),
+  },
+}));
+
+// ─── Mock network monitor ─────────────────────────────────────────────────────
+jest.mock('../map/networkMonitor', () => ({
+  networkMonitor: {
+    getStatus: jest.fn().mockReturnValue('online'),
+    subscribe: jest.fn().mockReturnValue(jest.fn()),
+  },
+}));
+
+// ─── Mock sync coordinator (untuk route pre-compute) ─────────────────────────
+jest.mock('../sync', () => ({
+  syncCoordinator: {
+    start: jest.fn().mockResolvedValue(undefined),
+    stop: jest.fn(),
+    flushNow: jest.fn().mockResolvedValue(null),
+    pullNow: jest.fn().mockResolvedValue(null),
+  },
 }));
 
 // ─── Mock WatermelonDB ──────────────────────────────────────────────────────
@@ -102,9 +135,9 @@ describe('OrdersScreen smoke test', () => {
   });
 
   test('fetchPool uses fetchAvailableOrders (not fetchWithAuth)', async () => {
-    // Provide pool data
+    // Provide pool data WITH version field (OCC baseVersion untuk sync push)
     const poolItems = [
-      { orderId: 'order-1', totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z' },
+      { orderId: 'order-1', totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z', version: 1 },
     ];
     (fetchAvailableOrders as jest.Mock).mockResolvedValue(poolItems);
 

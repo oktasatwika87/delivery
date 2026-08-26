@@ -143,6 +143,8 @@ export interface AvailableOrderItem {
   itemsCount: number;
   city?: string;
   createdAt: string;
+  /** Server version untuk OCC baseVersion saat driver accept (sync push). */
+  version: number;
 }
 
 /**

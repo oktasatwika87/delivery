@@ -648,21 +648,25 @@ describe('OrdersService', () => {
       expect(result[0].orderId).toBe('order-1');
       expect(result[1].orderId).toBe('order-2');
       expect(result[2].orderId).toBe('order-3');
-      // PENTING: payload TIDAK boleh bocor full Order fields seperti `customerId`,
-      // `driverId`, `notes`, `version`, `cancelledBy`, `cancelReason`, `items`,
-      // `deliveryAddress`. Type assertion catch-all untuk regressions.
+      // PENTING: slim shape tidak boleh bocor full Order fields seperti
+      // `customerId`, `driverId`, `notes`, `cancelledBy`, `cancelReason`,
+      // `items`, `deliveryAddress`. Type assertion catch-all untuk regressions.
+      // `version` TETAP ada (client butuh serverVersion untuk OCC).
       for (const item of result) {
         expect(item).not.toHaveProperty('id');
         expect(item).not.toHaveProperty('customerId');
         expect(item).not.toHaveProperty('driverId');
         expect(item).not.toHaveProperty('notes');
-        expect(item).not.toHaveProperty('version');
         expect(item).not.toHaveProperty('items');
         expect(item).not.toHaveProperty('deliveryAddress');
+        expect(item).not.toHaveProperty('cancelledBy');
+        expect(item).not.toHaveProperty('cancelReason');
+        // version WAJIB ada (OCC baseVersion untuk sync push)
+        expect(item).toHaveProperty('version');
       }
     });
 
-    test('maps slim payload fields correctly: orderId, totalCents, currency, itemsCount, city, createdAt', async () => {
+    test('maps slim payload fields correctly: orderId, totalCents, currency, itemsCount, city, createdAt, version', async () => {
       const createdAt = new Date('2026-08-25T10:00:00.000Z');
       const order = makeAvailableOrder('order-1', createdAt);
       mockPrisma.order.findMany = jest.fn().mockResolvedValue([order]);
@@ -681,6 +685,9 @@ describe('OrdersService', () => {
       // createdAt jadi ISO 8601 string, bukan Date object
       expect(item.createdAt).toBe('2026-08-25T10:00:00.000Z');
       expect(typeof item.createdAt).toBe('string');
+      // version dari Prisma row (OCC baseVersion untuk sync push)
+      expect(item.version).toBe(order.version);
+      expect(typeof item.version).toBe('number');
     });
 
     test('itemsCount reflects items array length (multiple items)', async () => {
