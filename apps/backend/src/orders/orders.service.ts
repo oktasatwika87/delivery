@@ -14,13 +14,9 @@ import { OrdersGateway } from './orders.gateway';
  * Slim payload untuk GET /orders/available.
  *
  * Beda dari `Order` full: tidak ada customerId, items[], deliveryAddress{},
- * notes, cancelledBy, cancelReason. Driver cuma butuh preview
+ * notes, version, cancelledBy, cancelReason. Driver cuma butuh preview
  * minimal untuk nge-tap card — full detail di-fetch via GET /orders/:id
  * setelah tap.
- *
- * `version` DIIKUT sertakan karena client butuh serverVersion yang valid
- * untuk sync push (OCC baseVersion). Tanpa version, pool rows tidak bisa
- * di-accept karena push akan reject OCC.
  *
  * Shape ini PARALEL dengan WebSocket broadcast `emitOrderAvailable`
  * (orders.gateway.ts) — sehingga REST + WS driver pool konsisten.
@@ -33,8 +29,6 @@ export interface AvailableOrderPayload {
   itemsCount: number;
   city?: string;
   createdAt: string;
-  /** Server version untuk OCC baseVersion saat driver accept (sync push). */
-  version: number;
 }
 
 @Injectable()
@@ -326,7 +320,6 @@ export class OrdersService {
    *   sebagai `Json` di Prisma — defensif, meski schema enforce object)
    * - r.createdAt.toISOString() → createdAt (string format ISO 8601,
    *   sesuai `Order.createdAt` convention)
-   * - r.version → version (server version untuk OCC baseVersion)
    */
   private toAvailablePayload(row: {
     id: string;
@@ -335,7 +328,6 @@ export class OrdersService {
     totalCents: number;
     currency: string;
     createdAt: Date;
-    version: number;
   }): AvailableOrderPayload {
     const items = Array.isArray(row.itemsJson) ? row.itemsJson : [];
     const address =
@@ -350,7 +342,6 @@ export class OrdersService {
       itemsCount: items.length,
       city: address?.city,
       createdAt: row.createdAt.toISOString(),
-      version: row.version,
     };
   }
 

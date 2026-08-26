@@ -93,8 +93,6 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
             // Safe defaults untuk field non-nullable di OrderModel.
             // Data lengkap (customerId, items, address) belum tersedia di pool payload
             // karena drivers:available broadcast hanya kirim orderId + metadata minimal.
-            // serverVersion diambil dari item.version (OCC baseVersion untuk sync push).
-            // failedSyncAttempts di-set 0 karena row baru dari server, belum pernah sync.
             await database.get<OrderModel>('orders').create((r) => {
               (r as any)._raw.id = item.orderId;
               (r as any).status = 'ASSIGNED';
@@ -103,9 +101,7 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
               (r as any).customerId = ''; // pool preview — detail belum tersedia
               (r as any).itemsJson = []; // pool preview — items belum tersedia
               (r as any).addressJson = {}; // pool preview — address belum tersedia
-              (r as any).serverVersion = item.version; // OCC baseVersion dari server
-              (r as any).failedSyncAttempts = 0; // row baru dari server, belum pernah sync
-              (r as any)._raw._status = 'synced'; // dari pool (bukan perubahan user)
+              (r as any)._raw._status = 'synced';
             });
           }
         }
@@ -221,12 +217,7 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
           await order.update((r) => {
             (r as any).status = 'PREPARING';
             (r as any).driverId = userId;
-            // JANGAN set _raw._status = 'synced' di sini.
-            // WatermelonDB otomatis set _status='updated' setelah prepareUpdate.
-            // Kalau diset manual ke 'synced', collectDirty() akan SKIP row ini,
-            // sehingga accept order TIDAK PERNAH ter-push ke backend.
-            // Biarkan status 'updated' secara natural — collectDirty() akan
-            // PICK UP row ini dan push via sync cycle berikutnya.
+            (r as any)._raw._status = 'synced';
           });
         });
 
