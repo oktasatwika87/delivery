@@ -57,6 +57,8 @@ const Modal = makeComponent('Modal');
 const TouchableOpacity = makeComponent('TouchableOpacity');
 const SectionList = makeComponent('SectionList');
 const RefreshControl = makeComponent('RefreshControl');
+const Button = makeComponent('Button');
+const KeyboardAvoidingView = makeComponent('KeyboardAvoidingView');
 
 class ActivityIndicator extends React.Component {
   render() {
@@ -104,7 +106,9 @@ const PixelRatio = { get: () => 2, getFontScale: () => 1 };
 module.exports = {
   ActivityIndicator,
   AppRegistry,
+  Button,
   Image,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   NativeModules,
