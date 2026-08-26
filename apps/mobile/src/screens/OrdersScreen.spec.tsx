@@ -55,6 +55,39 @@ jest.mock('@react-navigation/native', () => ({
   }),
 }));
 
+// ─── Mock routing provider untuk route pre-compute ───────────────────────────
+jest.mock('../map/routing', () => ({
+  GraphHopperRoutingProvider: jest.fn().mockImplementation(() => ({
+    getRoute: jest.fn().mockResolvedValue({ distance: 1000, duration: 300 }),
+  })),
+}));
+
+// ─── Mock location service ────────────────────────────────────────────────────
+jest.mock('../map/location', () => ({
+  locationService: {
+    getLastKnown: jest.fn().mockResolvedValue(null),
+    subscribe: jest.fn().mockResolvedValue(jest.fn()),
+  },
+}));
+
+// ─── Mock network monitor ─────────────────────────────────────────────────────
+jest.mock('../map/networkMonitor', () => ({
+  networkMonitor: {
+    getStatus: jest.fn().mockReturnValue('online'),
+    subscribe: jest.fn().mockReturnValue(jest.fn()),
+  },
+}));
+
+// ─── Mock sync coordinator ─────────────────────────────────────────────────
+jest.mock('../sync', () => ({
+  syncCoordinator: {
+    start: jest.fn().mockResolvedValue(undefined),
+    stop: jest.fn(),
+    flushNow: jest.fn().mockResolvedValue(null),
+    pullNow: jest.fn().mockResolvedValue(null),
+  },
+}));
+
 // ─── Mock WatermelonDB ──────────────────────────────────────────────────────
 const mockOrdersCollection = {
   query: jest.fn().mockReturnValue({
