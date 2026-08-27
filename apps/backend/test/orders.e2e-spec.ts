@@ -1,13 +1,13 @@
-/**
+﻿/**
  * E2E tests untuk Orders accept/reject endpoints.
  *
  * Coverage:
- * 1. Driver accept order ASSIGNED → PREPARING
+ * 1. Driver accept order ASSIGNED â†’ PREPARING
  * 2. Customer ditolak akses accept (403)
- * 3. Order tidak dalam status ASSIGNED → 400
- * 4. Order sudah di-assign driver lain → 409 Conflict
- * 5. Driver reject order ASSIGNED → CANCELLED
- * 6. Race condition: 2 driver accept bersamaan → cuma 1 sukses, 1 dapat 409
+ * 3. Order tidak dalam status ASSIGNED â†’ 400
+ * 4. Order sudah di-assign driver lain â†’ 409 Conflict
+ * 5. Driver reject order ASSIGNED â†’ CANCELLED
+ * 6. Race condition: 2 driver accept bersamaan â†’ cuma 1 sukses, 1 dapat 409
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
@@ -24,7 +24,7 @@ describe('Orders (e2e) - accept/reject', () => {
   let driverToken: string;
   let customerToken: string;
   let prisma: PrismaClient;
-  // UUID statis — deterministic, readable, dan valid sebagai @db.Uuid di Prisma.
+  // UUID statis â€” deterministic, readable, dan valid sebagai @db.Uuid di Prisma.
   // Pola: prefix 'e2e00000-' (8 hex char) + '-0000-0000-' + 12 hex digit suffix.
   // Suffix mnemonic: 'd000' = driver, 'c000' = customer, suffix per-test dari nama test.
   const driverUserId = 'e2e00000-0000-0000-0000-00000000d000';
@@ -51,7 +51,7 @@ describe('Orders (e2e) - accept/reject', () => {
     prisma = new PrismaClient();
     await prisma.$connect();
 
-    // Seed test users — required karena Order.customerId FK ke User.id
+    // Seed test users â€” required karena Order.customerId FK ke User.id
     const testUsers = [
       { id: driverUserId, role: 'DRIVER' as const, name: 'E2E Driver 1', phone: '+628000000001' },
       { id: customerUserId, role: 'CUSTOMER' as const, name: 'E2E Customer', phone: '+628000000002' },
@@ -68,6 +68,14 @@ describe('Orders (e2e) - accept/reject', () => {
 
     driverToken = generateToken(driverUserId, UserRole.DRIVER);
     customerToken = generateToken(customerUserId, UserRole.CUSTOMER);
+
+    // Warm-up: establish Prisma connection pool before any test runs.
+    // Without this, a cold pool causes the first query in each Prisma client
+    // to take ~12ms extra (connection establishment), which shifts timing enough
+    // that a "race condition" test can see sequential behavior instead of
+    // concurrent behavior â€” making the losing driver get 400 (status check)
+    // instead of 409 (OCC conflict). See race-condition-investigation-report.md.
+    await prisma.$queryRaw`SELECT 1`;
   });
 
   afterAll(async () => {
@@ -308,7 +316,7 @@ describe('Orders (e2e) - accept/reject', () => {
       });
 
       try {
-        // driver2 coba cancel order driver1 → harus 403
+        // driver2 coba cancel order driver1 â†’ harus 403
         await request(app.getHttpServer())
           .post(`/orders/${orderId}/cancel`)
           .set('Authorization', `Bearer ${driver2Token}`)
