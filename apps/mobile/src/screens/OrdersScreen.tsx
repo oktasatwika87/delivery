@@ -84,25 +84,33 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
       // (Penting: synced biar collectDirty gak pickup pool rows)
       await database.write(async () => {
         for (const item of poolItems) {
+          // Guard against malformed backend response where orderId is null/undefined.
+          if (!item.orderId) {
+            continue;
+          }
           const existing = await database.get<OrderModel>('orders').find(item.orderId).catch(() => null);
           if (existing) {
             await existing.update((r) => {
               (r as any)._raw._status = 'synced';
             });
           } else {
-            // Safe defaults untuk field non-nullable di OrderModel.
-            // Data lengkap (customerId, items, address) belum tersedia di pool payload
-            // karena drivers:available broadcast hanya kirim orderId + metadata minimal.
-            await database.get<OrderModel>('orders').create((r) => {
-              (r as any)._raw.id = item.orderId;
-              (r as any).status = 'ASSIGNED';
-              (r as any).totalCents = item.totalCents;
-              (r as any).currency = item.currency;
-              (r as any).customerId = ''; // pool preview — detail belum tersedia
-              (r as any).itemsJson = []; // pool preview — items belum tersedia
-              (r as any).addressJson = {}; // pool preview — address belum tersedia
-              (r as any)._raw._status = 'synced';
+            // Gunakan prepareCreateFromDirtyRaw untuk custom ID — ini cara resmi
+            // WatermelonDB untuk buat record dengan ID spesifik dari backend.
+            // prepareCreateFromDirtyRaw HANYA membuat prepared record;
+            // harus dilewatkan ke database.batch() untuk benar-benar persist.
+            const preparedRecord = database.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+              id: item.orderId,
+              _status: 'synced',
+              _changed: '',
+              status: 'ASSIGNED',
+              totalCents: item.totalCents,
+              currency: item.currency,
+              customerId: '',
+              driverId: null,
+              itemsJson: [],
+              addressJson: {},
             });
+            await database.batch(preparedRecord);
           }
         }
       });

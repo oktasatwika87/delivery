@@ -98,11 +98,18 @@ const mockOrdersCollection = {
   }),
   find: jest.fn().mockRejectedValue(new Error('not found')),
   create: jest.fn().mockResolvedValue({}),
+  prepareCreateFromDirtyRaw: jest.fn().mockReturnValue({
+    _preparedState: 'create',
+    _raw: { id: '', _status: 'synced' },
+  }),
 };
+
+const mockBatch = jest.fn().mockResolvedValue(undefined);
 
 const mockDatabase = {
   get: jest.fn().mockReturnValue(mockOrdersCollection),
   write: jest.fn().mockImplementation(async (fn: () => Promise<void>) => fn()),
+  batch: mockBatch,
 };
 
 // ─── Import after mocks ───────────────────────────────────────────────────────
@@ -117,6 +124,11 @@ describe('OrdersScreen smoke test', () => {
     // Reset find to reject (new order create path)
     mockOrdersCollection.find = jest.fn().mockRejectedValue(new Error('not found'));
     mockOrdersCollection.create = jest.fn().mockResolvedValue({});
+    mockOrdersCollection.prepareCreateFromDirtyRaw = jest.fn().mockReturnValue({
+      _preparedState: 'create',
+      _raw: { id: '', _status: 'synced' },
+    });
+    mockBatch.mockResolvedValue(undefined);
   });
 
   test('mounts without throwing', () => {
@@ -134,27 +146,109 @@ describe('OrdersScreen smoke test', () => {
     expect(error).toBeNull();
   });
 
-  test('fetchPool uses fetchAvailableOrders (not fetchWithAuth)', async () => {
-    // Provide pool data
+  test('fetchPool uses prepareCreateFromDirtyRaw with batch for new orders', async () => {
+    // Regression test: verify the CORRECT WatermelonDB pattern for custom ID.
+    // Old buggy pattern: create() with _raw.id override — causes corrupt rows.
+    // Correct pattern: prepareCreateFromDirtyRaw + database.batch().
     const poolItems = [
-      { orderId: 'order-1', totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z' },
+      { orderId: 'order-custom-1', totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z' },
     ];
     (fetchAvailableOrders as jest.Mock).mockResolvedValue(poolItems);
 
     render(<OrdersScreen database={mockDatabase as never} />);
 
-    // Wait for async operations to complete
     await waitFor(() => {
       expect(fetchAvailableOrders).toHaveBeenCalled();
     });
 
-    // Verify create was called (upsert path for new order)
-    expect(mockOrdersCollection.create).toHaveBeenCalled();
+    // Verify prepareCreateFromDirtyRaw was called (NOT the old create() pattern)
+    expect(mockOrdersCollection.prepareCreateFromDirtyRaw).toHaveBeenCalledTimes(1);
+
+    // Verify batch was called to persist the prepared record
+    expect(mockBatch).toHaveBeenCalledTimes(1);
+
+    // Verify the custom ID was passed correctly
+    expect(mockOrdersCollection.prepareCreateFromDirtyRaw).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'order-custom-1',
+        _status: 'synced',
+        status: 'ASSIGNED',
+        totalCents: 25000,
+        currency: 'IDR',
+        customerId: '',
+        driverId: null,
+      }),
+    );
+
+    // Old create() pattern should NOT be called
+    expect(mockOrdersCollection.create).not.toHaveBeenCalled();
   });
 
-  test('fetchPool does NOT call fetchWithAuth', async () => {
-    // This test verifies the old buggy code path is gone
-    (fetchAvailableOrders as jest.Mock).mockResolvedValue([]);
+  test('fetchPool skips items with null/undefined orderId without throwing', async () => {
+    // Regression test: backend returning null orderId previously caused
+    // "Cannot read property 'id' of null" TypeError from WatermelonDB find(null)
+    const poolItemsWithNullOrderId = [
+      { orderId: null, totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z' },
+      { orderId: 'order-valid', totalCents: 30000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z' },
+      { orderId: undefined, totalCents: 35000, currency: 'IDR', itemsCount: 3, createdAt: '2024-01-01T00:00:00Z' },
+    ];
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue(poolItemsWithNullOrderId);
+
+    let caughtError: Error | null = null;
+    try {
+      render(<OrdersScreen database={mockDatabase as never} />);
+      await waitFor(() => {
+        expect(fetchAvailableOrders).toHaveBeenCalled();
+      });
+    } catch (e) {
+      caughtError = e as Error;
+    }
+
+    // Should NOT throw TypeError
+    expect(caughtError).toBeNull();
+
+    // Valid item should be processed via prepareCreateFromDirtyRaw + batch
+    expect(mockOrdersCollection.prepareCreateFromDirtyRaw).toHaveBeenCalledTimes(1);
+    expect(mockBatch).toHaveBeenCalledTimes(1);
+
+    // Old create() pattern should NOT be called
+    expect(mockOrdersCollection.create).not.toHaveBeenCalled();
+  });
+
+  test('fetchPool handles array with only null orderId items gracefully', async () => {
+    // Edge case: all items have null orderId — should not crash
+    const allNullOrderId = [
+      { orderId: null, totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z' },
+      { orderId: undefined, totalCents: 30000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z' },
+    ];
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue(allNullOrderId);
+
+    let caughtError: Error | null = null;
+    try {
+      render(<OrdersScreen database={mockDatabase as never} />);
+      await waitFor(() => {
+        expect(fetchAvailableOrders).toHaveBeenCalled();
+      });
+    } catch (e) {
+      caughtError = e as Error;
+    }
+
+    // Should NOT throw
+    expect(caughtError).toBeNull();
+    // No creates should happen since all items are skipped
+    expect(mockOrdersCollection.create).not.toHaveBeenCalled();
+    expect(mockOrdersCollection.prepareCreateFromDirtyRaw).not.toHaveBeenCalled();
+    expect(mockBatch).not.toHaveBeenCalled();
+  });
+
+  test('fetchPool passes correct custom ID to prepareCreateFromDirtyRaw', async () => {
+    // Regression test: verify custom ID from backend is passed correctly to
+    // prepareCreateFromDirtyRaw (not the auto-generated ID pattern).
+    const customOrderId = '9e934d93-9da2-4d6a-b587-87a98d3a5cec';
+    const poolItems = [
+      { orderId: customOrderId, totalCents: 50000, currency: 'IDR', itemsCount: 1, city: 'Jakarta', createdAt: '2026-07-23T04:15:57.745Z' },
+    ];
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue(poolItems);
 
     render(<OrdersScreen database={mockDatabase as never} />);
 
@@ -162,8 +256,17 @@ describe('OrdersScreen smoke test', () => {
       expect(fetchAvailableOrders).toHaveBeenCalled();
     });
 
-    // fetchWithAuth should NOT be imported/called at all
-    // The module exports fetchAvailableOrders, not fetchWithAuth
-    expect(fetchAvailableOrders).toBeDefined();
+    // Verify the exact custom ID from backend is preserved
+    expect(mockOrdersCollection.prepareCreateFromDirtyRaw).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: customOrderId,
+      }),
+    );
+
+    // Verify batch was called to persist
+    expect(mockBatch).toHaveBeenCalledTimes(1);
+    expect(mockBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ _preparedState: 'create' }),
+    );
   });
 });
