@@ -287,3 +287,37 @@ export async function createOrder(input: CreateOrderInput): Promise<Order> {
 
   return res.json() as Promise<Order>;
 }
+
+/**
+ * Fetch satu order by id.
+ * Customer pakai ini untuk initial state di OrderTrackingScreen — backend
+ * validate ownership (customer hanya bisa baca order miliknya sendiri,
+ * kalau bukan → 403 ForbiddenException).
+ *
+ * Throw pada error — tracking screen harus tau kalau gagal fetch
+ * (beda dengan fetchAvailableOrders yang return [] karena driver pool
+ * tolerates stale data). Di sini, customer yang baru saja create order
+ * WAJUM liat status aktualnya.
+ */
+export async function getOrderById(orderId: string): Promise<Order> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await fetchWithAuth(`${API_BASE}/orders/${orderId}`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (res.status === 401) {
+      throw new UnauthorizedError();
+    }
+    if (!res.ok) throw new Error(`getOrderById failed: ${res.status}`);
+    return res.json() as Promise<Order>;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      console.warn('[getOrderById] Request aborted due to 8s timeout');
+    }
+    throw err;
+  }
+}

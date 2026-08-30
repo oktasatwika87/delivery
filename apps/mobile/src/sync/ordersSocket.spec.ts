@@ -530,4 +530,154 @@ describe('OrdersSocketManager', () => {
       expect(ordersSocket.wasEverConnected).toBe(true);
     });
   });
+
+  // ===== Customer-targeted events (Tier 3) =====
+  //
+  // order:accepted, order:rejected, order:cancelled di-emit oleh OrdersGateway
+  // ke room customerId (lihat commit backend sebelumnya). Mobile subscribe
+  // ke sini untuk live-update OrderTrackingScreen.
+
+  describe('order:accepted event (customer-targeted)', () => {
+    test('onOrderAccepted callback invoked with correct payload', async () => {
+      var cb = jest.fn();
+      ordersSocket.onOrderAccepted(cb);
+
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await promise;
+
+      var payload = {
+        orderId: 'order-abc',
+        driverId: 'driver-xyz',
+        status: 'PREPARING',
+        version: 2,
+      };
+      trigger('order:accepted', payload);
+
+      expect(cb).toHaveBeenCalledWith(payload);
+    });
+
+    test('unsubscribe removes listener', async () => {
+      var cb = jest.fn();
+      var unsubscribe = ordersSocket.onOrderAccepted(cb);
+
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await promise;
+
+      unsubscribe();
+      trigger('order:accepted', {
+        orderId: 'order-abc',
+        driverId: 'driver-xyz',
+        status: 'PREPARING',
+        version: 2,
+      });
+
+      expect(cb).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('order:rejected event (customer-targeted)', () => {
+    test('onOrderRejected callback invoked with correct payload', async () => {
+      var cb = jest.fn();
+      ordersSocket.onOrderRejected(cb);
+
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await promise;
+
+      var payload = {
+        orderId: 'order-def',
+        status: 'CANCELLED',
+        version: 3,
+      };
+      trigger('order:rejected', payload);
+
+      expect(cb).toHaveBeenCalledWith(payload);
+    });
+
+    test('unsubscribe removes listener', async () => {
+      var cb = jest.fn();
+      var unsubscribe = ordersSocket.onOrderRejected(cb);
+
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await promise;
+
+      unsubscribe();
+      trigger('order:rejected', { orderId: 'order-def', status: 'CANCELLED', version: 3 });
+
+      expect(cb).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('order:cancelled event (customer-targeted)', () => {
+    test('onOrderCancelled callback invoked with correct payload + reason', async () => {
+      var cb = jest.fn();
+      ordersSocket.onOrderCancelled(cb);
+
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await promise;
+
+      var payload = {
+        orderId: 'order-ghi',
+        status: 'CONFIRMED',
+        version: 4,
+        reason: 'Kendaraan mogok',
+      };
+      trigger('order:cancelled', payload);
+
+      expect(cb).toHaveBeenCalledWith(payload);
+    });
+
+    test('onOrderCancelled works when reason is omitted', async () => {
+      var cb = jest.fn();
+      ordersSocket.onOrderCancelled(cb);
+
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await promise;
+
+      trigger('order:cancelled', {
+        orderId: 'order-ghi',
+        status: 'CONFIRMED',
+        version: 4,
+      });
+
+      expect(cb).toHaveBeenCalledWith({
+        orderId: 'order-ghi',
+        status: 'CONFIRMED',
+        version: 4,
+      });
+    });
+
+    test('unsubscribe removes listener', async () => {
+      var cb = jest.fn();
+      var unsubscribe = ordersSocket.onOrderCancelled(cb);
+
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await promise;
+
+      unsubscribe();
+      trigger('order:cancelled', { orderId: 'order-ghi', status: 'CONFIRMED', version: 4 });
+
+      expect(cb).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -56,8 +56,48 @@ export interface OrderUnavailablePayload {
   reason: 'accepted' | 'rejected' | 'reassigned';
 }
 
+/**
+ * Payload for order:accepted event (driver accept → customer terima update).
+ * Status hardcoded 'PREPARING' oleh server (lihat orders.gateway.ts emitOrderAccepted).
+ */
+export interface OrderAcceptedPayload {
+  orderId: string;
+  driverId: string;
+  status: 'PREPARING';
+  version: number;
+}
+
+/**
+ * Payload for order:rejected event (driver reject → customer order CANCELLED).
+ * Status hardcoded 'CANCELLED' oleh server.
+ */
+export interface OrderRejectedPayload {
+  orderId: string;
+  status: 'CANCELLED';
+  version: number;
+}
+
+/**
+ * Payload for order:cancelled event (driver cancel mid-delivery → order
+ * balik ke CONFIRMED, di-reassign nanti). Status hardcoded 'CONFIRMED'.
+ */
+export interface OrderCancelledPayload {
+  orderId: string;
+  status: 'CONFIRMED';
+  version: number;
+  reason?: string;
+}
+
 /** Event yang bisa di-listen */
-export type OrdersSocketEvent = 'orderAvailable' | 'orderUnavailable' | 'connect' | 'disconnect' | 'connect_error';
+export type OrdersSocketEvent =
+  | 'orderAvailable'
+  | 'orderUnavailable'
+  | 'orderAccepted'
+  | 'orderRejected'
+  | 'orderCancelled'
+  | 'connect'
+  | 'disconnect'
+  | 'connect_error';
 
 /** Callback type untuk event listener */
 type EventCallback<T = unknown> = (data: T) => void;
@@ -258,6 +298,21 @@ class OrdersSocketManager {
       this.socket.on('order:unavailable', (payload: OrderUnavailablePayload) => {
         this.emit('orderUnavailable', payload);
       });
+
+      // Customer-targeted events (Tier 3) — delivered ke customer via
+      // room = customerId. OrderTrackingScreen subscribe ke ini untuk
+      // live-update status tanpa refresh manual.
+      this.socket.on('order:accepted', (payload: OrderAcceptedPayload) => {
+        this.emit('orderAccepted', payload);
+      });
+
+      this.socket.on('order:rejected', (payload: OrderRejectedPayload) => {
+        this.emit('orderRejected', payload);
+      });
+
+      this.socket.on('order:cancelled', (payload: OrderCancelledPayload) => {
+        this.emit('orderCancelled', payload);
+      });
     } catch (err) {
       // Stale check: jangan reject promise yang udah bukan punya kita.
       if (gen !== this.generation) return;
@@ -329,6 +384,32 @@ class OrdersSocketManager {
    */
   onOrderUnavailable(callback: (payload: OrderUnavailablePayload) => void): () => void {
     return this.on<OrderUnavailablePayload>('orderUnavailable', callback);
+  }
+
+  /**
+   * Subscribe ke order:accepted event (customer-side).
+   * Fire ketika driver accept order customer — tracking screen update
+   * status ke PREPARING + set driverId.
+   */
+  onOrderAccepted(callback: (payload: OrderAcceptedPayload) => void): () => void {
+    return this.on<OrderAcceptedPayload>('orderAccepted', callback);
+  }
+
+  /**
+   * Subscribe ke order:rejected event (customer-side).
+   * Fire ketika driver reject — order status CANCELLED.
+   */
+  onOrderRejected(callback: (payload: OrderRejectedPayload) => void): () => void {
+    return this.on<OrderRejectedPayload>('orderRejected', callback);
+  }
+
+  /**
+   * Subscribe ke order:cancelled event (customer-side).
+   * Fire ketika driver cancel mid-delivery — order balik ke CONFIRMED
+   * untuk di-reassign ke driver lain.
+   */
+  onOrderCancelled(callback: (payload: OrderCancelledPayload) => void): () => void {
+    return this.on<OrderCancelledPayload>('orderCancelled', callback);
   }
 
   /**
