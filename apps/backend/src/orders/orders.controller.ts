@@ -60,7 +60,11 @@ export class OrdersController {
   create(
     @Body() input: CreateOrderInput,
     @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: string,
   ) {
+    if (role !== UserRole.CUSTOMER) {
+      throw new ForbiddenException('Only customers can create orders');
+    }
     return this.ordersService.create(input, userId);
   }
 

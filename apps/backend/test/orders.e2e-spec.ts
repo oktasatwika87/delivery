@@ -480,6 +480,59 @@ describe('Orders (e2e) - accept/reject', () => {
     });
   });
 
+  describe('POST /orders (create)', () => {
+    test('201: customer bisa create order', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 2, unitPriceCents: 25000 },
+          ],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+          },
+          notes: 'Pakai extra sambel',
+        })
+        .expect(201);
+
+      expect(resp.body.status).toBe(OrderStatus.PENDING);
+      expect(resp.body.customerId).toBe(customerUserId);
+      expect(resp.body.items).toHaveLength(1);
+      expect(resp.body.deliveryAddress.recipientName).toBe('Budi');
+      expect(resp.body.totalCents).toBe(50000);
+      expect(resp.body.currency).toBe('IDR');
+      expect(resp.body.version).toBe(1);
+      expect(resp.body.id).toBeDefined();
+
+      // Cleanup
+      await cleanupOrder(resp.body.id);
+    });
+
+    test('403: driver tidak bisa create order', async () => {
+      await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${driverToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 25000 },
+          ],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+          },
+        })
+        .expect(403);
+    });
+  });
+
   // Unit tests for race condition assertion logic.
   // Proves loserCount filter is correct for BOTH OCC (409) and status-check (400) paths.
   describe('race condition assertion logic', () => {
