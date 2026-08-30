@@ -57,7 +57,14 @@ const Modal = makeComponent('Modal');
 const TouchableOpacity = makeComponent('TouchableOpacity');
 const SectionList = makeComponent('SectionList');
 const RefreshControl = makeComponent('RefreshControl');
-const Button = makeComponent('Button');
+const Button = (props) => {
+  const { title, ...rest } = props;
+  // Render as Text inside View so getByText can find the title
+  return React.createElement(View, rest,
+    React.createElement(Text, null, title)
+  );
+};
+Button.displayName = 'Button';
 const KeyboardAvoidingView = makeComponent('KeyboardAvoidingView');
 
 class ActivityIndicator extends React.Component {
