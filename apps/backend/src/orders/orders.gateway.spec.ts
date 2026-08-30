@@ -72,7 +72,7 @@ describe('OrdersGateway', () => {
       expect(socket.disconnect).not.toHaveBeenCalled();
     });
 
-    test('valid JWT + CUSTOMER role → TIDAK join drivers:available', async () => {
+    test('valid JWT + CUSTOMER role → join own userId room, TIDAK join drivers:available', async () => {
       const socket = makeMockSocket({
         handshake: { auth: { token: 'valid-token' } } as any,
       });
@@ -81,7 +81,8 @@ describe('OrdersGateway', () => {
       await gateway.handleConnection(socket);
 
       expect(mockJwtService.verify).toHaveBeenCalledWith('valid-token');
-      expect(socket.join).not.toHaveBeenCalled();
+      expect(socket.join).toHaveBeenCalledWith('customer-uuid');
+      expect(socket.join).not.toHaveBeenCalledWith('drivers:available');
       expect(socket.data['userId']).toBe('customer-uuid');
       expect(socket.data['role']).toBe(UserRole.CUSTOMER);
       expect(socket.disconnect).not.toHaveBeenCalled();

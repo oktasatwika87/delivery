@@ -13,10 +13,10 @@ import { UserRole, type Order } from '@delivery/shared';
  * WebSocket Gateway untuk order events.
  *
  * Dua arah emit:
- * 1. Customer-targeted (existing): order:accepted, order:rejected, order:cancelled
- *    - room = customerId
- * 2. Driver-targeted (new): order:available, order:unavailable
- *    - room = 'drivers:available' (global, semua driver join saat connect)
+ * 1. Customer-targeted: order:accepted, order:rejected, order:cancelled
+ *    - room = customerId (customer socket joins own userId di handleConnection)
+ * 2. Driver-targeted: order:available, order:unavailable
+ *    - room = 'drivers:available' (driver socket joins di handleConnection)
  *
  * Auth: JWT diverifikasi di handleConnection (reuse pattern dari ChatGateway).
  */
@@ -51,9 +51,19 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
       existing.add(client.id);
       this.userSockets.set(payload.sub, existing);
 
-      // Driver joins global pool room
+      // Driver joins global pool room (untuk order:available/unavailable events)
       if (payload.role === UserRole.DRIVER) {
         client.join(OrdersGateway.DRIVERS_AVAILABLE_ROOM);
+      }
+
+      // Customer joins own userId room (untuk order:accepted/rejected/cancelled events).
+      // Emit calls pake `this.server.to(customerId)` yang cuma delivers ke socket
+      // di room dengan id == customerId — tanpa ini, customer-targeted events
+      // hilang diam-diam. Plumbing ini melengkapi gap Tier 6 yang setengah jadi
+      // (comment bilang "room = customerId" tapi handleConnection tidak pernah
+      // join customer ke room apapun).
+      if (payload.role === UserRole.CUSTOMER) {
+        client.join(payload.sub);
       }
     } catch {
       client.disconnect();
