@@ -18,10 +18,9 @@ describe('CustomerHomeScreen', () => {
 
   test('renders logout button', () => {
     const onLogout = jest.fn();
-    const { UNSAFE_getAllByType } = render(<CustomerHomeScreen onLogout={onLogout} />);
+    const { getByText } = render(<CustomerHomeScreen onLogout={onLogout} />);
 
-    // Button is rendered (mock Button component doesn't have children, but is present)
-    const buttons = UNSAFE_getAllByType('Button' as any);
-    expect(buttons.length).toBe(1);
+    // Logout button is rendered
+    expect(getByText('Logout')).toBeTruthy();
   });
 });

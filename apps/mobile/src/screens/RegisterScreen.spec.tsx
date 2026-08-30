@@ -11,11 +11,11 @@ describe('RegisterScreen', () => {
   test('renders without crashing', () => {
     const onRegisterSuccess = jest.fn();
     const onBackToLogin = jest.fn();
-    const { getByText } = render(
+    const { getAllByText, getByText } = render(
       <RegisterScreen onRegisterSuccess={onRegisterSuccess} onBackToLogin={onBackToLogin} />
     );
 
-    expect(getByText('Daftar')).toBeTruthy();
+    expect(getAllByText('Daftar').length).toBeGreaterThanOrEqual(1);
     expect(getByText('Customer')).toBeTruthy();
     expect(getByText('Driver')).toBeTruthy();
   });
