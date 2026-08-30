@@ -6,6 +6,7 @@
 import Config from 'react-native-config';
 import type { SyncPushPayload, SyncPushResponse, SyncPullResponse } from '@delivery/shared';
 import { getCurrentToken } from './session';
+import type { CreateOrderInput, Order } from '@delivery/shared';
 
 /** Base URL API dari .env (react-native-config) */
 const API_BASE = Config.API_BASE_URL;
@@ -261,4 +262,28 @@ export async function sendChatMessage(
   const response = await res.json();
   console.log('[sendChatMessage] Success:', JSON.stringify(response));
   return response as Promise<SendMessageResponse>;
+}
+
+// ─── Orders ────────────────────────────────────────────────────────────────
+
+/**
+ * Buat order baru.
+ * Online-only — gagal langsung throw, tidak ada offline queue.
+ */
+export async function createOrder(input: CreateOrderInput): Promise<Order> {
+  const res = await fetchWithAuth(`${API_BASE}/orders`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+  if (res.status === 401) {
+    throw new UnauthorizedError();
+  }
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Gagal membuat order: ${res.status} - ${body}`);
+  }
+
+  return res.json() as Promise<Order>;
 }
