@@ -4,9 +4,13 @@
  * Flow:
  *   1. User isi form (alamat, barang, catatan)
  *   2. Submit → createOrder() → sukses/error
- *   3. Sukses → Alert konfirmasi + tombol kembali ke home
+ *   3. Sukses → Alert konfirmasi + tombol "Lihat Status" (panggil onCreateSuccess)
  *
  * Online-only — tidak ada offline queue.
+ *
+ * Tier 3: tambah prop onCreateSuccess. CustomerStack pass callback yang
+ * navigate ke OrderTrackingScreen pakai navigation.replace — jadi back
+ * dari tracking langsung ke home (bukan balik ke form create).
  */
 
 import React, { useState } from 'react';
@@ -28,6 +32,12 @@ import type { CreateOrderInput } from '@delivery/shared';
 
 interface OrderCreateScreenProps {
   onBack: () => void;
+  /**
+   * Dipanggil saat create order sukses dengan order.id yang baru dibuat.
+   * CustomerStack pakai ini untuk navigation.replace ke OrderTrackingScreen.
+   * Opsional — kalau tidak disediakan, fallback ke onBack (legacy Tier 2 flow).
+   */
+  onCreateSuccess?: (orderId: string) => void;
 }
 
 interface FormData {
@@ -53,7 +63,7 @@ interface FormErrors {
   unitPriceCents?: string;
 }
 
-export function OrderCreateScreen({ onBack }: OrderCreateScreenProps): React.JSX.Element {
+export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreenProps): React.JSX.Element {
   const [form, setForm] = useState<FormData>({
     recipientName: '',
     phone: '',
@@ -144,15 +154,17 @@ export function OrderCreateScreen({ onBack }: OrderCreateScreenProps): React.JSX
 
       const order = await createOrder(input);
 
+      // Tier 3: kalau onCreateSuccess disediakan, pakai untuk navigate
+      // langsung ke OrderTrackingScreen (auto-navigate, no double-tap).
+      // Fallback ke onBack kalau prop tidak ada — preserve legacy behavior.
+      const primaryAction = onCreateSuccess
+        ? { text: 'Lihat Status', onPress: () => onCreateSuccess(order.id) }
+        : { text: 'Kembali ke Home', onPress: onBack };
+
       Alert.alert(
         'Order Berhasil',
         `Order berhasil dibuat!\nID: ${order.id.slice(0, 8).toUpperCase()}`,
-        [
-          {
-            text: 'Kembali ke Home',
-            onPress: onBack,
-          },
-        ]
+        [primaryAction]
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Gagal terhubung ke server';

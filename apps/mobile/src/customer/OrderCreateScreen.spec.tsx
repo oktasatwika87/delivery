@@ -6,8 +6,9 @@
  * 1. Render tanpa crash
  * 2. Submit dengan field kosong → validasi block
  * 3. Submit dengan field lengkap → createOrder dipanggil dengan payload benar
- * 4. Submit sukses → Alert konfirmasi
- * 5. Submit gagal → tampil pesan error, form tidak ke-reset
+ * 4. Submit sukses → Alert konfirmasi dengan tombol 'Lihat Status' + onCreateSuccess
+ * 5. Submit sukses tanpa onCreateSuccess → fallback ke tombol 'Kembali ke Home' (legacy)
+ * 6. Submit gagal → tampil pesan error, form tidak ke-reset
  */
 
 import React from 'react';
@@ -114,7 +115,62 @@ describe('OrderCreateScreen', () => {
     expect(callArg.deliveryAddress.postalCode).toBe('10110');
   });
 
-  it('submit sukses → Alert konfirmasi', async () => {
+  it('submit sukses dengan onCreateSuccess → Alert tombol "Lihat Status", callback dipanggil dengan order.id', async () => {
+    const orderId = '12345678-0000-0000-0000-000000000000';
+    const { createOrder } = require('../sync/client');
+    createOrder.mockResolvedValueOnce({
+      id: orderId,
+      status: 'PENDING',
+      customerId: 'user-1',
+      items: [],
+      deliveryAddress: {},
+      totalCents: 10000,
+      currency: 'IDR',
+      version: 1,
+      createdAt: '2026-08-30T00:00:00Z',
+      updatedAt: '2026-08-30T00:00:00Z',
+    });
+
+    const onBack = jest.fn();
+    const onCreateSuccess = jest.fn();
+    const { getByPlaceholderText, getByText } = render(
+      <OrderCreateScreen onBack={onBack} onCreateSuccess={onCreateSuccess} />
+    );
+
+    // Isi minimal form
+    fireEvent.changeText(getByPlaceholderText('Nama Penerima'), 'Budi');
+    fireEvent.changeText(getByPlaceholderText('No. Telepon'), '081234567890');
+    fireEvent.changeText(getByPlaceholderText('Alamat / Jalan'), 'Jl. Test');
+    fireEvent.changeText(getByPlaceholderText('Kota'), 'Jakarta');
+    fireEvent.changeText(getByPlaceholderText('Kode Pos'), '10110');
+    fireEvent.changeText(getByPlaceholderText('Nama Barang'), 'Item');
+    fireEvent.changeText(getByPlaceholderText('Harga (IDR)'), '10000');
+
+    fireEvent.press(getByText('Buat Order'));
+
+    await waitFor(() => {
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Order Berhasil',
+        expect.stringContaining('Order berhasil dibuat'),
+        expect.arrayContaining([
+          expect.objectContaining({ text: 'Lihat Status' }),
+        ])
+      );
+    });
+
+    // Verify onCreateSuccess dipanggil dengan order.id
+    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const buttons = alertCall[2] as Array<{ text: string; onPress: () => void }>;
+    const lihatStatusBtn = buttons.find((b) => b.text === 'Lihat Status');
+    expect(lihatStatusBtn).toBeDefined();
+
+    // Trigger the button press
+    lihatStatusBtn!.onPress();
+    expect(onCreateSuccess).toHaveBeenCalledWith(orderId);
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it('submit sukses tanpa onCreateSuccess → fallback ke tombol "Kembali ke Home" (legacy Tier 2)', async () => {
     const { createOrder } = require('../sync/client');
     createOrder.mockResolvedValueOnce({
       id: '12345678-0000-0000-0000-000000000000',
@@ -134,7 +190,6 @@ describe('OrderCreateScreen', () => {
       <OrderCreateScreen onBack={onBack} />
     );
 
-    // Isi minimal form
     fireEvent.changeText(getByPlaceholderText('Nama Penerima'), 'Budi');
     fireEvent.changeText(getByPlaceholderText('No. Telepon'), '081234567890');
     fireEvent.changeText(getByPlaceholderText('Alamat / Jalan'), 'Jl. Test');

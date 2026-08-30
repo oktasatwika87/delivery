@@ -2,7 +2,9 @@
  * Customer Navigation Stack.
  *
  * Navigation stack for customer users. Contains screens for:
- * - CustomerHomeScreen (placeholder for now)
+ * - CustomerHomeScreen
+ * - OrderCreateScreen (Tier 2)
+ * - OrderTrackingScreen (Tier 3)
  *
  * This stack is rendered when `role === 'CUSTOMER'` in App.tsx.
  */
@@ -12,10 +14,12 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { CustomerHomeScreen } from './CustomerHomeScreen';
 import { OrderCreateScreen } from './OrderCreateScreen';
+import { OrderTrackingScreen } from './OrderTrackingScreen';
 
 export type CustomerStackParamList = {
   CustomerHome: undefined;
   OrderCreate: undefined;
+  OrderTracking: { orderId: string };
 };
 
 const Stack = createNativeStackNavigator<CustomerStackParamList>();
@@ -31,7 +35,22 @@ export function CustomerStack({ onLogout }: CustomerStackProps): React.JSX.Eleme
         {() => <CustomerHomeScreen onLogout={onLogout} />}
       </Stack.Screen>
       <Stack.Screen name="OrderCreate">
-        {({ navigation }) => <OrderCreateScreen onBack={() => navigation.goBack()} />}
+        {({ navigation }) => (
+          <OrderCreateScreen
+            onBack={() => navigation.goBack()}
+            onCreateSuccess={(orderId) =>
+              navigation.replace('OrderTracking', { orderId })
+            }
+          />
+        )}
+      </Stack.Screen>
+      <Stack.Screen name="OrderTracking">
+        {({ navigation, route }) => (
+          <OrderTrackingScreen
+            orderId={route.params.orderId}
+            onBack={() => navigation.goBack()}
+          />
+        )}
       </Stack.Screen>
     </Stack.Navigator>
   );
