@@ -10,12 +10,16 @@
 
 import React from 'react';
 import { StyleSheet, Text, View, Button } from 'react-native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+
+import type { CustomerStackParamList } from './CustomerStack';
 
 interface CustomerHomeScreenProps {
   onLogout: () => void;
+  navigation?: NativeStackNavigationProp<CustomerStackParamList, 'CustomerHome'>;
 }
 
-export function CustomerHomeScreen({ onLogout }: CustomerHomeScreenProps): React.JSX.Element {
+export function CustomerHomeScreen({ onLogout, navigation }: CustomerHomeScreenProps): React.JSX.Element {
   return (
     <View style={styles.container}>
       <View style={styles.content}>
@@ -24,6 +28,11 @@ export function CustomerHomeScreen({ onLogout }: CustomerHomeScreenProps): React
           Order creation and tracking coming in Tier 2/3
         </Text>
         <View style={styles.spacer} />
+        <Button
+          title="Buat Order Baru"
+          onPress={() => navigation?.navigate('OrderCreate')}
+        />
+        <View style={styles.buttonSpacer} />
         <Button title="Logout" onPress={onLogout} />
       </View>
     </View>
@@ -54,5 +63,8 @@ const styles = StyleSheet.create({
   },
   spacer: {
     height: 40,
+  },
+  buttonSpacer: {
+    height: 12,
   },
 });

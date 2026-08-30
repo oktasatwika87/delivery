@@ -11,9 +11,11 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { CustomerHomeScreen } from './CustomerHomeScreen';
+import { OrderCreateScreen } from './OrderCreateScreen';
 
 export type CustomerStackParamList = {
   CustomerHome: undefined;
+  OrderCreate: undefined;
 };
 
 const Stack = createNativeStackNavigator<CustomerStackParamList>();
@@ -27,6 +29,9 @@ export function CustomerStack({ onLogout }: CustomerStackProps): React.JSX.Eleme
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="CustomerHome">
         {() => <CustomerHomeScreen onLogout={onLogout} />}
+      </Stack.Screen>
+      <Stack.Screen name="OrderCreate">
+        {({ navigation }) => <OrderCreateScreen onBack={() => navigation.goBack()} />}
       </Stack.Screen>
     </Stack.Navigator>
   );
