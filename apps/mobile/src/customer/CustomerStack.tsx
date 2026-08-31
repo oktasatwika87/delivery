@@ -32,7 +32,9 @@ export function CustomerStack({ onLogout }: CustomerStackProps): React.JSX.Eleme
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="CustomerHome">
-        {() => <CustomerHomeScreen onLogout={onLogout} />}
+        {({ navigation }) => (
+          <CustomerHomeScreen onLogout={onLogout} navigation={navigation} />
+        )}
       </Stack.Screen>
       <Stack.Screen name="OrderCreate">
         {({ navigation }) => (
