@@ -328,10 +328,17 @@ describe('OrdersService', () => {
   // ===== rejectOrder tests =====
 
   describe('rejectOrder()', () => {
+    // FIX (2026-09): rejectOrder now requires ownership (driverId param) and
+    // transitions back to CONFIRMED (reassign-able), not terminal CANCELLED —
+    // see the method's own doc comment in orders.service.ts for the full
+    // rationale. mockOrderAssigned now has driverId set to the calling driver
+    // (not null) to reflect that reject only ever makes sense for an order
+    // actually assigned to that driver — a pool item (driverId: null) can
+    // never belong to anyone, so it can never legitimately be rejected.
     const mockOrderAssigned = {
       id: orderId,
       customerId,
-      driverId: null,
+      driverId,
       status: OrderStatusDb.ASSIGNED,
       itemsJson: [],
       addressJson: {},
@@ -343,33 +350,69 @@ describe('OrdersService', () => {
       updatedAt: new Date(),
     };
 
-    test('berhasil reject order ASSIGNED', async () => {
+    test('berhasil reject order ASSIGNED yang di-assign ke driver ybs → balik CONFIRMED, reassign-able', async () => {
       const updatedOrder = {
         ...mockOrderAssigned,
-        status: OrderStatusDb.CANCELLED,
+        status: OrderStatusDb.CONFIRMED,
+        driverId: null,
         version: version + 1,
       };
 
       mockPrisma.order.findUnique.mockResolvedValue(mockOrderAssigned);
       mockPrisma.order.update.mockResolvedValue(updatedOrder);
 
-      const result = await service.rejectOrder(orderId, version);
+      const result = await service.rejectOrder(orderId, version, driverId);
 
-      expect(result.status).toBe('CANCELLED');
+      expect(result.status).toBe('CONFIRMED');
+      expect(result.driverId).toBeUndefined();
       expect(result.version).toBe(version + 1);
       expect(mockGateway.emitOrderRejected).toHaveBeenCalledWith(
         customerId,
         orderId,
         version + 1,
       );
-      expect(mockGateway.emitOrderUnavailable).toHaveBeenCalledWith(orderId, 'rejected');
       expect(mockPrisma.order.update).toHaveBeenCalledWith({
         where: { id: orderId, version },
         data: expect.objectContaining({
-          status: OrderStatusDb.CANCELLED,
+          status: OrderStatusDb.CONFIRMED,
+          driverId: null,
           version: { increment: 1 },
         }),
       });
+    });
+
+    test('gagal: driver bukan owner (403 Forbidden) — termasuk order pool (driverId null)', async () => {
+      // Order pool: driverId null — tidak dimiliki siapa pun, jadi tidak
+      // reachable untuk direject oleh driver manapun. Ini kasus yang dulu
+      // jadi celah (siapa pun bisa reject order pool orang lain).
+      const orderPool = {
+        ...mockOrderAssigned,
+        driverId: null,
+      };
+
+      mockPrisma.order.findUnique.mockResolvedValue(orderPool);
+
+      await expect(
+        service.rejectOrder(orderId, version, driverId),
+      ).rejects.toThrow(ForbiddenException);
+      await expect(
+        service.rejectOrder(orderId, version, driverId),
+      ).rejects.toThrow('You are not assigned to this order');
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    test('gagal: driver bukan owner (403 Forbidden) — order milik driver lain', async () => {
+      const orderAssignedToOther = {
+        ...mockOrderAssigned,
+        driverId: anotherDriverId,
+      };
+
+      mockPrisma.order.findUnique.mockResolvedValue(orderAssignedToOther);
+
+      await expect(
+        service.rejectOrder(orderId, version, driverId),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
     test('gagal: order tidak dalam status ASSIGNED (PENDING)', async () => {
@@ -380,11 +423,11 @@ describe('OrdersService', () => {
 
       mockPrisma.order.findUnique.mockResolvedValue(orderPending);
 
-      await expect(service.rejectOrder(orderId, version)).rejects.toThrow(
+      await expect(service.rejectOrder(orderId, version, driverId)).rejects.toThrow(
         BadRequestException,
       );
       await expect(
-        service.rejectOrder(orderId, version),
+        service.rejectOrder(orderId, version, driverId),
       ).rejects.toThrow('Cannot reject order in status PENDING');
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
@@ -392,11 +435,11 @@ describe('OrdersService', () => {
     test('gagal: order tidak ditemukan', async () => {
       mockPrisma.order.findUnique.mockResolvedValue(null);
 
-      await expect(service.rejectOrder(orderId, version)).rejects.toThrow(
+      await expect(service.rejectOrder(orderId, version, driverId)).rejects.toThrow(
         NotFoundException,
       );
       await expect(
-        service.rejectOrder(orderId, version),
+        service.rejectOrder(orderId, version, driverId),
       ).rejects.toThrow(`Order ${orderId} not found`);
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
@@ -409,11 +452,11 @@ describe('OrdersService', () => {
       );
       mockPrisma.order.update.mockRejectedValue(prismaError);
 
-      await expect(service.rejectOrder(orderId, version)).rejects.toThrow(
+      await expect(service.rejectOrder(orderId, version, driverId)).rejects.toThrow(
         ConflictException,
       );
       await expect(
-        service.rejectOrder(orderId, version),
+        service.rejectOrder(orderId, version, driverId),
       ).rejects.toThrow('Order was modified by another request');
     });
   });

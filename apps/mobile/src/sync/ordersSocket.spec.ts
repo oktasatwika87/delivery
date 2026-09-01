@@ -594,7 +594,7 @@ describe('OrdersSocketManager', () => {
 
       var payload = {
         orderId: 'order-def',
-        status: 'CANCELLED',
+        status: 'CONFIRMED',
         version: 3,
       };
       trigger('order:rejected', payload);
@@ -613,7 +613,7 @@ describe('OrdersSocketManager', () => {
       await promise;
 
       unsubscribe();
-      trigger('order:rejected', { orderId: 'order-def', status: 'CANCELLED', version: 3 });
+      trigger('order:rejected', { orderId: 'order-def', status: 'CONFIRMED', version: 3 });
 
       expect(cb).not.toHaveBeenCalled();
     });

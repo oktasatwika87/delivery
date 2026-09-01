@@ -175,13 +175,35 @@ export class OrdersService {
   }
 
   /**
-   * Driver reject order yang sudah di-assign.
-   * Validasi: DRIVER role, status ASSIGNED.
-   * Setelah reject, order bisa di-assign ke driver lain.
+   * Driver reject order yang sudah di-assign KHUSUS ke driver tsb.
+   * Validasi: DRIVER role, status ASSIGNED, DAN driver adalah owner order ini.
+   *
+   * FIX (2026-09): dua bug ditemukan di implementasi lama —
+   * (a) tidak ada ownership check sama sekali (siapa pun dengan role DRIVER
+   *     bisa reject ORDER MANAPUN yang berstatus ASSIGNED, termasuk order
+   *     pool yang tidak terkait dengan mereka);
+   * (b) transisi ke CANCELLED, padahal CANCELLED adalah status terminal
+   *     (ORDER_ALLOWED_TRANSITIONS.CANCELLED = []) — jadi setiap reject
+   *     membunuh order tsb permanen, bertentangan dengan komentar lama
+   *     "order bisa di-assign ke driver lain".
+   * Fix: ownership check sama seperti cancelOrder, dan transisi balik ke
+   * CONFIRMED + driverId: null (reassign-able), sama seperti cancelOrder.
+   *
+   * NOTE: order pool saat ini (status ASSIGNED, driverId: null, lihat
+   * findAvailable()) adalah broadcast — acceptOrder() adalah satu-satunya
+   * jalan order jadi ASSIGNED+driverId terisi, dan acceptOrder() langsung
+   * loncat ke PREPARING dalam operasi yang sama. Artinya tidak ada state
+   * reachable saat ini di mana order ASSIGNED punya driverId terisi — jadi
+   * dengan ownership check ini, endpoint reject aman (selalu 403) sampai
+   * ada model "offer ke driver tertentu" yang benar-benar mengisi driverId
+   * pada status ASSIGNED. Ini bukan bug baru, ini konsekuensi yang benar
+   * dari belum adanya model tsb — lihat Decision 4 (reassignment) di
+   * progress doc.
    */
   async rejectOrder(
     id: string,
     expectedVersion: number,
+    driverId: string,
   ): Promise<Order> {
     const current = await this.prisma.order.findUnique({ where: { id } });
     if (!current) throw new NotFoundException(`Order ${id} not found`);
@@ -193,11 +215,17 @@ export class OrdersService {
       );
     }
 
+    // Ownership: hanya driver yang di-assign order ini yang boleh reject
+    if (current.driverId !== driverId) {
+      throw new ForbiddenException('You are not assigned to this order');
+    }
+
     try {
       const updated = await this.prisma.order.update({
         where: { id, version: expectedVersion },
         data: {
-          status: OrderStatusDb.CANCELLED,
+          status: OrderStatusDb.CONFIRMED,
+          driverId: null,
           version: { increment: 1 },
         },
       });
@@ -209,8 +237,11 @@ export class OrdersService {
         updated.version,
       );
 
-      // Broadcast ke drivers:available bahwa order sudah di-reject
-      this.ordersGateway.emitOrderUnavailable(id, 'rejected');
+      // NOTE: tidak ada emitOrderUnavailable() di sini (beda dari implementasi
+      // lama) — order yang di-reject di sini punya driverId terisi (bukan
+      // pool item), jadi tidak pernah terlihat di pool drivers:available
+      // untuk mulai dengan; tidak ada apa pun untuk di-broadcast sebagai
+      // "sudah tidak tersedia". cancelOrder() juga tidak memanggil ini.
 
       return this.toDomain(updated);
     } catch (err) {

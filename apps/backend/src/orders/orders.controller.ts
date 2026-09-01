@@ -125,11 +125,12 @@ export class OrdersController {
   rejectOrder(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: { version: number },
+    @CurrentUser('id') userId: string,
     @CurrentUser('role') role: string,
   ) {
     if (role !== UserRole.DRIVER) {
       throw new ForbiddenException('Only drivers can reject orders');
     }
-    return this.ordersService.rejectOrder(id, body.version);
+    return this.ordersService.rejectOrder(id, body.version, userId);
   }
 }

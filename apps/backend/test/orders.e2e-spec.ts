@@ -200,9 +200,13 @@ describe('Orders (e2e) - accept/reject', () => {
   });
 
   describe('POST /orders/:id/reject', () => {
-    test('200: driver reject order ASSIGNED', async () => {
+    // FIX (2026-09): rejectOrder now requires ownership (see orders.service.ts
+    // doc comment) and reverts to CONFIRMED (reassign-able), not terminal
+    // CANCELLED — so these tests assign the order to driverUserId explicitly
+    // (createAssignedOrder's 3rd param) rather than leaving driverId null.
+    test('200: driver reject order yang di-assign ke dirinya → CONFIRMED, driverId null', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000b01';
-      await createAssignedOrder(orderId, customerUserId);
+      await createAssignedOrder(orderId, customerUserId, driverUserId);
       try {
         const resp = await request(app.getHttpServer())
           .post(`/orders/${orderId}/reject`)
@@ -210,7 +214,8 @@ describe('Orders (e2e) - accept/reject', () => {
           .send({ version: 1 })
           .expect(200);
 
-        expect(resp.body.status).toBe(OrderStatus.CANCELLED);
+        expect(resp.body.status).toBe(OrderStatus.CONFIRMED);
+        expect(resp.body.driverId).toBeFalsy();
       } finally {
         await cleanupOrder(orderId);
       }
@@ -218,11 +223,27 @@ describe('Orders (e2e) - accept/reject', () => {
 
     test('403: customer (bukan DRIVER) ditolak reject', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000b02';
-      await createAssignedOrder(orderId, customerUserId);
+      await createAssignedOrder(orderId, customerUserId, driverUserId);
       try {
         await request(app.getHttpServer())
           .post(`/orders/${orderId}/reject`)
           .set('Authorization', `Bearer ${customerToken}`)
+          .send({ version: 1 })
+          .expect(403);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('403: driver bukan owner order ini (mencegah reject order pool/orang lain)', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000b03';
+      // Order pool: driverId null — sebelum fix ini, driver mana pun bisa
+      // reject (dan permanently CANCELLED-kan) order pool orang lain.
+      await createAssignedOrder(orderId, customerUserId);
+      try {
+        await request(app.getHttpServer())
+          .post(`/orders/${orderId}/reject`)
+          .set('Authorization', `Bearer ${driverToken}`)
           .send({ version: 1 })
           .expect(403);
       } finally {

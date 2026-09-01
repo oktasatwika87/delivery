@@ -96,11 +96,16 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   /**
    * Emit event ke customer saat order di-reject oleh driver.
+   *
+   * FIX (2026-09): status diubah dari 'CANCELLED' ke 'CONFIRMED' — mengikuti
+   * fix di OrdersService.rejectOrder() (CANCELLED itu status terminal,
+   * membunuh order permanen; reject sekarang balik ke CONFIRMED, sama seperti
+   * cancel, supaya order bisa di-assign ulang). Lihat orders.service.ts.
    */
   emitOrderRejected(customerId: string, orderId: string, newVersion: number): void {
     this.server.to(customerId).emit('order:rejected', {
       orderId,
-      status: 'CANCELLED',
+      status: 'CONFIRMED',
       version: newVersion,
     });
   }

@@ -68,12 +68,17 @@ export interface OrderAcceptedPayload {
 }
 
 /**
- * Payload for order:rejected event (driver reject → customer order CANCELLED).
- * Status hardcoded 'CANCELLED' oleh server.
+ * Payload for order:rejected event (driver reject → order balik ke
+ * CONFIRMED, di-reassign nanti). Status hardcoded 'CONFIRMED' oleh server.
+ *
+ * FIX (2026-09): sebelumnya 'CANCELLED' — diubah mengikuti fix di backend
+ * OrdersService.rejectOrder() (CANCELLED itu status terminal; reject sekarang
+ * konsisten dengan cancel, balik ke CONFIRMED, bukan membunuh order). Lihat
+ * apps/backend/src/orders/orders.service.ts dan orders.gateway.ts.
  */
 export interface OrderRejectedPayload {
   orderId: string;
-  status: 'CANCELLED';
+  status: 'CONFIRMED';
   version: number;
 }
 
