@@ -6,7 +6,7 @@
  * 2. Fetch sukses → render order detail
  * 3. Fetch gagal → render error UI dengan tombol Coba Lagi
  * 4. order:accepted event → update status PREPARING + driverId (filter by orderId)
- * 5. order:rejected event → update status CANCELLED
+ * 5. order:rejected event → update status CONFIRMED (reassign-able)
  * 6. order:cancelled event → update status CONFIRMED + cancelReason
  * 7. Disconnect → tampil banner; Connect → hilang
  * 8. Event untuk orderId lain di-ignore (filter)
@@ -240,7 +240,11 @@ describe('OrderTrackingScreen', () => {
     expect(queryByText('Menunggu konfirmasi')).toBeNull();
   });
 
-  it('order:rejected event → update status CANCELLED', async () => {
+  it('order:rejected event → update status CONFIRMED (reassign-able, not CANCELLED)', async () => {
+    // FIX (2026-09): backend rejectOrder() now reverts to CONFIRMED instead
+    // of terminal CANCELLED — see orders.service.ts rejectOrder() doc
+    // comment. This test previously asserted the old (buggy) CANCELLED
+    // behavior.
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText } = render(
@@ -254,13 +258,13 @@ describe('OrderTrackingScreen', () => {
     act(() => {
       triggerRejected({
         orderId: 'order-abc-123',
-        status: 'CANCELLED',
+        status: 'CONFIRMED',
         version: 3,
       });
     });
 
     await waitFor(() => {
-      expect(getByText('Dibatalkan')).toBeTruthy();
+      expect(getByText('Dikonfirmasi, mencari driver...')).toBeTruthy();
     });
   });
 

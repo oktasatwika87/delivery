@@ -13,7 +13,9 @@
  *
  * Status updates live (tanpa refresh manual):
  *   - order:accepted → status PREPARING + driverId dari payload
- *   - order:rejected → status CANCELLED
+ *   - order:rejected → status CONFIRMED + driverId direset (order bisa
+ *     di-assign ulang — lihat fix di orders.service.ts rejectOrder(),
+ *     sebelumnya keliru CANCELLED, sudah dibetulkan)
  *   - order:cancelled → status CONFIRMED + cancelReason
  *
  * Connection banner muncul saat socket disconnect (network drop / airplane
@@ -145,7 +147,11 @@ export function OrderTrackingScreen({
         (prev) =>
           (prev && {
             ...prev,
-            status: 'CANCELLED' as OrderStatus,
+            // FIX (2026-09): reject sekarang balik ke CONFIRMED (reassign-able),
+            // bukan CANCELLED (terminal) — lihat orders.service.ts rejectOrder().
+            // driverId direset sama seperti onOrderCancelled di bawah.
+            status: 'CONFIRMED' as OrderStatus,
+            driverId: undefined,
             version: payload.version,
           }) ||
           prev,
