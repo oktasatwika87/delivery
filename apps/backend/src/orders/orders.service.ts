@@ -48,42 +48,6 @@ export class OrdersService {
   }
 
   async create(input: CreateOrderInput, userId: string): Promise<Order> {
-    // Validate: at least one item required
-    if (!input.items || input.items.length === 0) {
-      throw new BadRequestException('At least one item is required');
-    }
-
-    // Validate each item: quantity and unitPriceCents must be positive
-    for (const item of input.items) {
-      if (item.quantity <= 0) {
-        throw new BadRequestException('Quantity must be at least 1');
-      }
-      if (item.unitPriceCents <= 0) {
-        throw new BadRequestException('Unit price must be at least 1 cent');
-      }
-    }
-
-    // Validate: deliveryAddress required fields
-    if (!input.deliveryAddress) {
-      throw new BadRequestException('Delivery address is required');
-    }
-    const addr = input.deliveryAddress;
-    if (!addr.recipientName?.trim()) {
-      throw new BadRequestException('Recipient name is required');
-    }
-    if (!addr.phone?.trim()) {
-      throw new BadRequestException('Phone number is required');
-    }
-    if (!addr.street?.trim()) {
-      throw new BadRequestException('Street address is required');
-    }
-    if (!addr.city?.trim()) {
-      throw new BadRequestException('City is required');
-    }
-    if (!addr.postalCode?.trim()) {
-      throw new BadRequestException('Postal code is required');
-    }
-
     const totalCents = input.items.reduce(
       (sum, item) => sum + item.unitPriceCents * item.quantity,
       0,

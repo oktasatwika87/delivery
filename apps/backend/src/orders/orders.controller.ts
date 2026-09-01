@@ -13,12 +13,11 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 
-import type { CreateOrderInput } from '@delivery/shared';
-
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { OrdersService } from './orders.service';
 import { UserRole } from '@delivery/shared';
+import { CreateOrderDto } from './orders.dto';
 
 interface CancelOrderDto {
   version: number;
@@ -58,14 +57,14 @@ export class OrdersController {
 
   @Post()
   create(
-    @Body() input: CreateOrderInput,
+    @Body() dto: CreateOrderDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: string,
   ) {
     if (role !== UserRole.CUSTOMER) {
       throw new ForbiddenException('Only customers can create orders');
     }
-    return this.ordersService.create(input, userId);
+    return this.ordersService.create(dto, userId);
   }
 
   @Patch(':id/status')

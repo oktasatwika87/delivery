@@ -45,7 +45,13 @@ describe('Orders (e2e) - accept/reject', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
-    app.useGlobalPipes(new ValidationPipe({ transform: true }));
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    );
     await app.init();
 
     prisma = new PrismaClient();
@@ -79,6 +85,12 @@ describe('Orders (e2e) - accept/reject', () => {
   });
 
   afterAll(async () => {
+    // Delete orders first (FK to users), then users
+    await prisma.order.deleteMany({
+      where: {
+        customerId: { in: [driverUserId, customerUserId, driver2UserId, driver3UserId] },
+      },
+    });
     await prisma.user.deleteMany({
       where: { id: { in: [driverUserId, customerUserId, driver2UserId, driver3UserId] } },
     });
@@ -530,6 +542,137 @@ describe('Orders (e2e) - accept/reject', () => {
           },
         })
         .expect(403);
+    });
+
+    test('400: items array kosong → validasi error', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+          },
+        })
+        .expect(400);
+      expect(resp.body.message).toContain('At least one item is required');
+    });
+
+    test('400: quantity = 0 → validasi error', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 0, unitPriceCents: 25000 },
+          ],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+          },
+        })
+        .expect(400);
+      expect(resp.body.message.some((m: string) => m.includes('Quantity'))).toBe(true);
+    });
+
+    test('400: quantity negatif → validasi error', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: -5, unitPriceCents: 25000 },
+          ],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+          },
+        })
+        .expect(400);
+      expect(resp.body.message.some((m: string) => m.includes('Quantity'))).toBe(true);
+    });
+
+    test('400: unitPriceCents = 0 → validasi error', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 0 },
+          ],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+          },
+        })
+        .expect(400);
+      expect(resp.body.message.some((m: string) => m.includes('Unit price'))).toBe(true);
+    });
+
+    test('400: missing deliveryAddress → validasi error', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 25000 },
+          ],
+        })
+        .expect(400);
+      expect(resp.body.message).toContain('deliveryAddress must be an object');
+    });
+
+    test('400: missing recipientName → validasi error', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 25000 },
+          ],
+          deliveryAddress: {
+            recipientName: '',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+          },
+        })
+        .expect(400);
+      expect(resp.body.message.some((m: string) => m.includes('Recipient name'))).toBe(true);
+    });
+
+    test('400: missing city → validasi error', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 25000 },
+          ],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: '',
+            postalCode: '10110',
+          },
+        })
+        .expect(400);
+      expect(resp.body.message.some((m: string) => m.includes('City'))).toBe(true);
     });
   });
 

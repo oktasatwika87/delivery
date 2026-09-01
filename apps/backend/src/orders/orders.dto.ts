@@ -7,6 +7,7 @@ import {
   IsString,
   Min,
   ValidateNested,
+  ArrayMinSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -54,6 +55,13 @@ export class DeliveryAddressDto {
   @IsString()
   @IsNotEmpty({ message: 'Postal code is required' })
   postalCode!: string;
+
+  /** [lng, lat] — konsisten dengan GeoJSON convention. */
+  @IsOptional()
+  coordinates?: [number, number];
+
+  /** Index signature for Prisma Json compatibility. */
+  [key: string]: string | number | boolean | object | null | undefined | [number, number] | undefined;
 }
 
 /** Request body untuk POST /orders. */
@@ -61,7 +69,7 @@ export class CreateOrderDto {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
-  @IsNotEmpty({ message: 'At least one item is required' })
+  @ArrayMinSize(1, { message: 'At least one item is required' })
   items!: OrderItemDto[];
 
   @IsObject()
