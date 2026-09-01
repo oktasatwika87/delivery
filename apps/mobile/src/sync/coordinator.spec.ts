@@ -1043,8 +1043,8 @@ describe('SyncCoordinator', () => {
       const record = coordinator.localRowToSyncRecord(row, 'payments');
 
       // Fallback key should be valid format cod:uuid
-      expect(record.data.idempotencyKey).toMatch(/^cod:[0-9a-f-]+$/i);
-      expect(record.data.idempotencyKey).not.toBe('');
+      expect((record.data as { idempotencyKey: string }).idempotencyKey).toMatch(/^cod:[0-9a-f-]+$/i);
+      expect((record.data as { idempotencyKey: string }).idempotencyKey).not.toBe('');
     });
 
     test('localRowToSyncRecord uses row idempotencyKey when present', async () => {
@@ -1065,7 +1065,7 @@ describe('SyncCoordinator', () => {
       const record = coordinator.localRowToSyncRecord(row, 'payments');
 
       // Should use the row's key, not generate a fallback
-      expect(record.data.idempotencyKey).toBe('cod:550e8400-e29b-41d4-a716-446655440000');
+      expect((record.data as { idempotencyKey: string }).idempotencyKey).toBe('cod:550e8400-e29b-41d4-a716-446655440000');
     });
   });
 

@@ -24,6 +24,7 @@ import { loadCursor, saveCursor } from './cursor';
 import { getDeviceId } from './device';
 import { getCurrentUserId } from './session';
 import { syncEvents } from './syncEvents';
+import uuid from 'react-native-uuid';
 
 /**
  * Maximum consecutive failed sync attempts per record. After this many
@@ -518,9 +519,7 @@ export class SyncCoordinator implements Coordinator {
         // concurrent sync paths and writeback during read phase is racy.
         // The next legitimate edit to this row (or another sync cycle) will
         // re-trigger this fallback, which is acceptable for the recovery path.
-        const fallbackKey = `cod:${(typeof crypto !== 'undefined' && crypto.randomUUID)
-          ? crypto.randomUUID()
-          : `${Date.now()}-${Math.random()}`}`;
+        const fallbackKey = `cod:${uuid.v4()}`;
         console.warn(
           `[localRowToSyncRecord] payment row ${row.id} missing idempotencyKey — ` +
           `generating fallback "${fallbackKey}". This indicates a data integrity ` +
@@ -588,10 +587,14 @@ export class SyncCoordinator implements Coordinator {
     if (byId) return byId;
 
     // Fallback: match by idempotencyKey from serverData (payment-specific)
-    if (ack.entityType !== 'payment' || !ack.serverData?.idempotencyKey) {
+    if (ack.entityType !== 'payment') {
       return null;
     }
-    const idempotencyKey = ack.serverData.idempotencyKey;
+    const serverData = ack.serverData;
+    if (!serverData || !('idempotencyKey' in serverData)) {
+      return null;
+    }
+    const idempotencyKey = (serverData as { idempotencyKey: string }).idempotencyKey;
     const dirtyRows = await collection
       .query(
         Q.where('_status', Q.notEq('synced')),
