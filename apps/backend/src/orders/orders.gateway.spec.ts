@@ -264,13 +264,16 @@ describe('OrdersGateway', () => {
   });
 
   describe('emitOrderRejected', () => {
-    test('broadcasts to customerId room', () => {
+    test('broadcasts to customerId room with CONFIRMED status (reassign-able, not terminal)', () => {
+      // FIX (2026-09): status was 'CANCELLED' in old test — reject now goes
+      // back to CONFIRMED (same as cancel) so order can be reassigned.
+      // See orders.service.ts rejectOrder() + orders.gateway.ts emitOrderRejected.
       gateway.emitOrderRejected('customer-uuid', 'order-123', 2);
 
       expect(mockServer.to).toHaveBeenCalledWith('customer-uuid');
       expect(mockServer.emit).toHaveBeenCalledWith('order:rejected', {
         orderId: 'order-123',
-        status: 'CANCELLED',
+        status: 'CONFIRMED',
         version: 2,
       });
     });

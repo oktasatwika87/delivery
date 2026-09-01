@@ -6,7 +6,7 @@
  * 2. Customer ditolak akses accept (403)
  * 3. Order tidak dalam status ASSIGNED → 400
  * 4. Order sudah di-assign driver lain → 409 Conflict
- * 5. Driver reject order ASSIGNED → CANCELLED
+ * 5. Driver reject order ASSIGNED → CONFIRMED (FIX 2026-09: was CANCELLED)
  * 6. Race condition: 2 driver accept bersamaan → cuma 1 sukses, 1 dapat 409
  */
 
