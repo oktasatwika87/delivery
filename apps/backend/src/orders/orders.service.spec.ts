@@ -35,6 +35,7 @@ describe('OrdersService', () => {
       findUnique: jest.Mock;
       findUniqueOrThrow: jest.Mock;
       update: jest.Mock;
+      create: jest.Mock;
     };
     $executeRaw: jest.Mock;
   };
@@ -59,6 +60,7 @@ describe('OrdersService', () => {
         findUnique: jest.fn(),
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
+        create: jest.fn(),
       },
       $executeRaw: jest.fn(),
     };
@@ -242,6 +244,276 @@ describe('OrdersService', () => {
       await expect(
         service.acceptOrder(orderId, version, driverId),
       ).rejects.toThrow('Order was modified by another request');
+    });
+  });
+
+  // ===== create() tests =====
+
+  describe('create()', () => {
+    const validInput = {
+      items: [
+        { productId: 'prod-1', name: 'Nasi Goreng', quantity: 2, unitPriceCents: 25000 },
+      ],
+      deliveryAddress: {
+        recipientName: 'Budi',
+        phone: '081234567890',
+        street: 'Jl. Merdeka No. 1',
+        city: 'Jakarta',
+        postalCode: '10110',
+      },
+    };
+
+    const mockCreatedOrder = {
+      id: 'new-order-id',
+      customerId,
+      driverId: null,
+      status: OrderStatusDb.PENDING,
+      itemsJson: validInput.items,
+      addressJson: validInput.deliveryAddress,
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      version: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      cancelledBy: null,
+      cancelReason: null,
+    };
+
+    test('berhasil create order dengan input valid', async () => {
+      mockPrisma.order.create.mockResolvedValue(mockCreatedOrder);
+
+      const result = await service.create(validInput, customerId);
+
+      expect(result.id).toBe('new-order-id');
+      expect(result.status).toBe('PENDING');
+      expect(result.totalCents).toBe(50000);
+      expect(mockPrisma.order.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          customerId,
+          itemsJson: validInput.items,
+          addressJson: validInput.deliveryAddress,
+          totalCents: 50000,
+          currency: 'IDR',
+        }),
+      });
+    });
+
+    test('gagal: items array kosong → BadRequestException', async () => {
+      await expect(
+        service.create({ ...validInput, items: [] }, customerId),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.create({ ...validInput, items: [] }, customerId),
+      ).rejects.toThrow('At least one item is required');
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('gagal: items null → BadRequestException', async () => {
+      await expect(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        service.create({ ...validInput, items: null as any }, customerId),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('gagal: quantity = 0 → BadRequestException', async () => {
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            items: [{ ...validInput.items[0], quantity: 0 }],
+          },
+          customerId,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            items: [{ ...validInput.items[0], quantity: 0 }],
+          },
+          customerId,
+        ),
+      ).rejects.toThrow('Quantity must be at least 1');
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('gagal: quantity negatif → BadRequestException', async () => {
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            items: [{ ...validInput.items[0], quantity: -5 }],
+          },
+          customerId,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            items: [{ ...validInput.items[0], quantity: -5 }],
+          },
+          customerId,
+        ),
+      ).rejects.toThrow('Quantity must be at least 1');
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('gagal: unitPriceCents = 0 → BadRequestException', async () => {
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            items: [{ ...validInput.items[0], unitPriceCents: 0 }],
+          },
+          customerId,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            items: [{ ...validInput.items[0], unitPriceCents: 0 }],
+          },
+          customerId,
+        ),
+      ).rejects.toThrow('Unit price must be at least 1 cent');
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('gagal: unitPriceCents negatif → BadRequestException', async () => {
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            items: [{ ...validInput.items[0], unitPriceCents: -1000 }],
+          },
+          customerId,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('gagal: deliveryAddress kosong → BadRequestException', async () => {
+      await expect(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        service.create({ ...validInput, deliveryAddress: null as any }, customerId),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        service.create({ ...validInput, deliveryAddress: null as any }, customerId),
+      ).rejects.toThrow('Delivery address is required');
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('gagal: recipientName kosong → BadRequestException', async () => {
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            deliveryAddress: { ...validInput.deliveryAddress, recipientName: '' },
+          },
+          customerId,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            deliveryAddress: { ...validInput.deliveryAddress, recipientName: '   ' },
+          },
+          customerId,
+        ),
+      ).rejects.toThrow('Recipient name is required');
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('gagal: phone kosong → BadRequestException', async () => {
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            deliveryAddress: { ...validInput.deliveryAddress, phone: '' },
+          },
+          customerId,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            deliveryAddress: { ...validInput.deliveryAddress, phone: '' },
+          },
+          customerId,
+        ),
+      ).rejects.toThrow('Phone number is required');
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('gagal: street kosong → BadRequestException', async () => {
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            deliveryAddress: { ...validInput.deliveryAddress, street: '' },
+          },
+          customerId,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('gagal: city kosong → BadRequestException', async () => {
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            deliveryAddress: { ...validInput.deliveryAddress, city: '' },
+          },
+          customerId,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('gagal: postalCode kosong → BadRequestException', async () => {
+      await expect(
+        service.create(
+          {
+            ...validInput,
+            deliveryAddress: { ...validInput.deliveryAddress, postalCode: '' },
+          },
+          customerId,
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.order.create).not.toHaveBeenCalled();
+    });
+
+    test('totalCents dihitung dari quantity × unitPriceCents', async () => {
+      mockPrisma.order.create.mockResolvedValue({
+        ...mockCreatedOrder,
+        totalCents: 150000,
+      });
+
+      await service.create(
+        {
+          items: [
+            { productId: 'p1', name: 'Item 1', quantity: 3, unitPriceCents: 50000 },
+          ],
+          deliveryAddress: validInput.deliveryAddress,
+        },
+        customerId,
+      );
+
+      expect(mockPrisma.order.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            totalCents: 150000,
+          }),
+        }),
+      );
     });
   });
 

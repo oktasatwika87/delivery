@@ -13,7 +13,7 @@
  * dari tracking langsung ke home (bukan balik ke form create).
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -79,6 +79,11 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
   const [loading, setLoading] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
 
+  // Synchronous guard untuk prevent double-tap race condition.
+  // useState update is async — tidak aman untuk inflight guard.
+  // useRef provides synchronous access to current value.
+  const isSubmitting = useRef(false);
+
   const updateField = (field: keyof FormData, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
     // Clear error saat user mulai ketik ulang
@@ -125,10 +130,16 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
   };
 
   const handleSubmit = async (): Promise<void> => {
+    // Synchronous guard: prevent double-tap race condition
+    if (isSubmitting.current) {
+      return;
+    }
+
     if (!validate()) {
       return;
     }
 
+    isSubmitting.current = true;
     setLoading(true);
     setGlobalError(null);
 
@@ -171,6 +182,7 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
       setGlobalError(message);
     } finally {
       setLoading(false);
+      isSubmitting.current = false;
     }
   };
 

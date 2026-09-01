@@ -65,6 +65,78 @@ describe('OrderCreateScreen', () => {
     expect(createOrder).not.toHaveBeenCalled();
   });
 
+  it('qty = 0 → validasi block dengan pesan "Jumlah harus lebih dari 0"', async () => {
+    const onBack = jest.fn();
+    const { getByText, getByPlaceholderText } = render(<OrderCreateScreen onBack={onBack} />);
+
+    // Isi form dengan qty = 0
+    fireEvent.changeText(getByPlaceholderText('Nama Penerima'), 'Budi');
+    fireEvent.changeText(getByPlaceholderText('No. Telepon'), '081234567890');
+    fireEvent.changeText(getByPlaceholderText('Alamat / Jalan'), 'Jl. Test');
+    fireEvent.changeText(getByPlaceholderText('Kota'), 'Jakarta');
+    fireEvent.changeText(getByPlaceholderText('Kode Pos'), '10110');
+    fireEvent.changeText(getByPlaceholderText('Nama Barang'), 'Item');
+    fireEvent.changeText(getByPlaceholderText('Jumlah'), '0');
+    fireEvent.changeText(getByPlaceholderText('Harga (IDR)'), '10000');
+
+    fireEvent.press(getByText('Buat Order'));
+
+    await waitFor(() => {
+      expect(getByText('Jumlah harus lebih dari 0')).toBeTruthy();
+    });
+
+    const { createOrder } = require('../sync/client');
+    expect(createOrder).not.toHaveBeenCalled();
+  });
+
+  it('qty negatif → validasi block dengan pesan "Jumlah harus lebih dari 0"', async () => {
+    const onBack = jest.fn();
+    const { getByText, getByPlaceholderText } = render(<OrderCreateScreen onBack={onBack} />);
+
+    // Isi form dengan qty negatif
+    fireEvent.changeText(getByPlaceholderText('Nama Penerima'), 'Budi');
+    fireEvent.changeText(getByPlaceholderText('No. Telepon'), '081234567890');
+    fireEvent.changeText(getByPlaceholderText('Alamat / Jalan'), 'Jl. Test');
+    fireEvent.changeText(getByPlaceholderText('Kota'), 'Jakarta');
+    fireEvent.changeText(getByPlaceholderText('Kode Pos'), '10110');
+    fireEvent.changeText(getByPlaceholderText('Nama Barang'), 'Item');
+    fireEvent.changeText(getByPlaceholderText('Jumlah'), '-5');
+    fireEvent.changeText(getByPlaceholderText('Harga (IDR)'), '10000');
+
+    fireEvent.press(getByText('Buat Order'));
+
+    await waitFor(() => {
+      expect(getByText('Jumlah harus lebih dari 0')).toBeTruthy();
+    });
+
+    const { createOrder } = require('../sync/client');
+    expect(createOrder).not.toHaveBeenCalled();
+  });
+
+  it('harga = 0 → validasi block dengan pesan "Harga satuan harus lebih dari 0"', async () => {
+    const onBack = jest.fn();
+    const { getByText, getByPlaceholderText } = render(<OrderCreateScreen onBack={onBack} />);
+
+    // Isi form dengan harga = 0
+    fireEvent.changeText(getByPlaceholderText('Nama Penerima'), 'Budi');
+    fireEvent.changeText(getByPlaceholderText('No. Telepon'), '081234567890');
+    fireEvent.changeText(getByPlaceholderText('Alamat / Jalan'), 'Jl. Test');
+    fireEvent.changeText(getByPlaceholderText('Kota'), 'Jakarta');
+    fireEvent.changeText(getByPlaceholderText('Kode Pos'), '10110');
+    fireEvent.changeText(getByPlaceholderText('Nama Barang'), 'Item');
+    fireEvent.changeText(getByPlaceholderText('Jumlah'), '2');
+    fireEvent.changeText(getByPlaceholderText('Harga (IDR)'), '0');
+
+    fireEvent.press(getByText('Buat Order'));
+
+    await waitFor(() => {
+      expect(getByText('Harga satuan harus lebih dari 0')).toBeTruthy();
+    });
+
+    const { createOrder } = require('../sync/client');
+    expect(createOrder).not.toHaveBeenCalled();
+  });
+
   it('submit dengan field lengkap → createOrder dipanggil dengan payload benar', async () => {
     const { createOrder } = require('../sync/client');
     createOrder.mockResolvedValueOnce({
@@ -239,5 +311,57 @@ describe('OrderCreateScreen', () => {
 
     // Form tidak ke-reset (nama masih ada)
     expect(getByPlaceholderText('Nama Penerima').props.value).toBe('Budi');
+  });
+
+  it('double-tap race condition → order hanya di-create sekali', async () => {
+    const { createOrder } = require('../sync/client');
+    // Simulasi response lambat
+    let resolveOrder: (value: unknown) => void;
+    createOrder.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveOrder = resolve;
+        })
+    );
+
+    const onBack = jest.fn();
+    const { getByPlaceholderText, getByText } = render(
+      <OrderCreateScreen onBack={onBack} />
+    );
+
+    // Isi form
+    fireEvent.changeText(getByPlaceholderText('Nama Penerima'), 'Budi');
+    fireEvent.changeText(getByPlaceholderText('No. Telepon'), '081234567890');
+    fireEvent.changeText(getByPlaceholderText('Alamat / Jalan'), 'Jl. Test');
+    fireEvent.changeText(getByPlaceholderText('Kota'), 'Jakarta');
+    fireEvent.changeText(getByPlaceholderText('Kode Pos'), '10110');
+    fireEvent.changeText(getByPlaceholderText('Nama Barang'), 'Item');
+    fireEvent.changeText(getByPlaceholderText('Jumlah'), '2');
+    fireEvent.changeText(getByPlaceholderText('Harga (IDR)'), '10000');
+
+    // Get the submit button BEFORE tapping (button text changes to "Mengirim..." after first tap)
+    const submitButton = getByText('Buat Order');
+
+    // Double-tap: 2x press dalam waktu singkat
+    fireEvent.press(submitButton);
+    fireEvent.press(submitButton);
+
+    // createOrder harus dipanggil HANYA 1 kali despite double-tap
+    // Karena state loading = true setelah tap pertama, tap kedua diabaikan
+    expect(createOrder).toHaveBeenCalledTimes(1);
+
+    // Resolve the order to clean up
+    resolveOrder!({
+      id: 'order-123',
+      status: 'PENDING',
+      customerId: 'user-1',
+      items: [],
+      deliveryAddress: {},
+      totalCents: 20000,
+      currency: 'IDR',
+      version: 1,
+      createdAt: '2026-08-30T00:00:00Z',
+      updatedAt: '2026-08-30T00:00:00Z',
+    });
   });
 });
