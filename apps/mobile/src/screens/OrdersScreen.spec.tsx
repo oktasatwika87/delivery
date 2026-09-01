@@ -88,6 +88,13 @@ jest.mock('../sync', () => ({
   },
 }));
 
+// ─── Mock outbox ──────────────────────────────────────────────────────────────
+const mockHasPendingAction = jest.fn().mockResolvedValue(false);
+jest.mock('../sync/outbox', () => ({
+  __esModule: true,
+  hasPendingAction: (...args: unknown[]) => mockHasPendingAction(...args),
+}));
+
 // ─── Mock WatermelonDB ──────────────────────────────────────────────────────
 const mockOrdersCollection = {
   query: jest.fn().mockReturnValue({

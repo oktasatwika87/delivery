@@ -19,6 +19,7 @@ import { getCurrentUserId } from '../sync/session';
 import { fetchAvailableOrders, UnauthorizedError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
+import { hasPendingAction } from '../sync/outbox';
 import { locationService } from '../map/location';
 import { networkMonitor } from '../map/networkMonitor';
 import { RouteService } from '../map/routeService';
@@ -40,6 +41,7 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
   const [poolOrders, setPoolOrders] = useState<OrderModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [pendingOrderIds, setPendingOrderIds] = useState<Set<string>>(new Set());
   const [removedNotice, setRemovedNotice] = useState<{ visible: boolean; orderId: string | null }>({
     visible: false,
     orderId: null,
@@ -140,6 +142,28 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
     fetchPool();
   }, [fetchPool]);
 
+  // ─── Check pending actions for myOrders ─────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    const checkPending = async () => {
+      if (!myOrders?.length) return;
+      try {
+        const results = await Promise.all(myOrders.map((o) => hasPendingAction(o.id)));
+        if (!cancelled) {
+          const pending = new Set<string>();
+          myOrders.forEach((o, i) => {
+            if (results[i]) pending.add(o.id);
+          });
+          setPendingOrderIds(pending);
+        }
+      } catch (err) {
+        console.warn('[OrdersScreen] failed to check pending actions:', err);
+      }
+    };
+    checkPending();
+    return () => { cancelled = true; };
+  }, [myOrders]);
+
   // ─── Socket subscription ───────────────────────────────────────────────────
   useEffect(() => {
     // Clear previous unsubscribes
@@ -208,8 +232,21 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchPool();
+    // Re-check pending actions after pool refresh
+    if (myOrders?.length) {
+      try {
+        const results = await Promise.all(myOrders.map((o) => hasPendingAction(o.id)));
+        const pending = new Set<string>();
+        myOrders.forEach((o, i) => {
+          if (results[i]) pending.add(o.id);
+        });
+        setPendingOrderIds(pending);
+      } catch (err) {
+        console.warn('[OrdersScreen] onRefresh: failed to check pending actions:', err);
+      }
+    }
     setRefreshing(false);
-  }, [fetchPool]);
+  }, [fetchPool, myOrders]);
 
   // ─── Accept order ───────────────────────────────────────────────────────────
   const handleAccept = useCallback(
@@ -262,6 +299,8 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
 
   const renderItem = ({ item, section }: { item: OrderModel; section: SectionData }) => {
     const isPool = section.title === 'Tersedia';
+    const isMyOrder = section.title === 'Order Saya';
+    const hasPending = isMyOrder && pendingOrderIds.has(item.id);
     return (
       <TouchableOpacity
         style={styles.card}
@@ -272,6 +311,9 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
           <Text style={styles.cardMeta}>
             {item.status} · {item.totalCents} {item.currency}
           </Text>
+          {hasPending && (
+            <Text style={styles.pendingBadge}>Menunggu sinkronisasi</Text>
+          )}
         </View>
         {isPool && (
           <TouchableOpacity
@@ -391,6 +433,16 @@ const styles = StyleSheet.create({
   cardMain: { flex: 1 },
   cardTitle: { fontWeight: '600', fontSize: 16 },
   cardMeta: { marginTop: 4, color: '#71717a' },
+  pendingBadge: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#1e40af',
+    backgroundColor: '#dbeafe',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+  },
   acceptButton: {
     backgroundColor: '#22c55e',
     paddingHorizontal: 12,
