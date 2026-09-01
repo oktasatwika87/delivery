@@ -36,7 +36,13 @@ interface Props {
   myOrders: OrderModel[];
 }
 
-function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.JSX.Element {
+// Exported (in addition to the default HOC-wrapped OrdersScreen below) so
+// tests can render it directly with plain-object props, bypassing the
+// withDatabase/withObservables HOC chain entirely — that chain is mocked as
+// an identity function in OrdersScreen.spec.tsx and doesn't actually compute
+// myOrders, so testing badge/render behavior through the wrapped export isn't
+// possible without a much more elaborate observable mock.
+export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.JSX.Element {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Orders'>>();
   const [poolOrders, setPoolOrders] = useState<OrderModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);

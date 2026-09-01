@@ -120,8 +120,23 @@ const mockDatabase = {
 };
 
 // ─── Import after mocks ───────────────────────────────────────────────────────
-import { OrdersScreen } from './OrdersScreen';
+import { OrdersScreen, OrdersScreenBase } from './OrdersScreen';
 import { fetchAvailableOrders } from '../sync/client';
+
+// Plain-object order stand-ins for OrdersScreenBase's myOrders prop — the
+// component only reads plain properties (id/status/totalCents/currency) in
+// renderItem, no WatermelonDB model methods, so these don't need to be real
+// OrderModel instances.
+function makeOrder(overrides: Partial<{ id: string; status: string; totalCents: number; currency: string; driverId: string }> = {}) {
+  return {
+    id: 'order-1',
+    status: 'ASSIGNED',
+    totalCents: 25000,
+    currency: 'IDR',
+    driverId: 'driver-123',
+    ...overrides,
+  };
+}
 
 describe('OrdersScreen smoke test', () => {
   beforeEach(() => {
@@ -275,5 +290,87 @@ describe('OrdersScreen smoke test', () => {
     expect(mockBatch).toHaveBeenCalledWith(
       expect.objectContaining({ _preparedState: 'create' }),
     );
+  });
+});
+
+// ─── Pending action badge (Fase 2 outbox wiring) ───────────────────────────
+//
+// Rendered via OrdersScreenBase directly (bypassing the withDatabase/
+// withObservables-wrapped OrdersScreen export) because the
+// '@nozbe/watermelondb/react' mock above treats withObservables as an
+// identity HOC that never actually computes myOrders — so myOrders is
+// always undefined through the wrapped export in this test file. Testing
+// the base component with plain-object props sidesteps that without having
+// to build a more elaborate observable mock just for this.
+describe('pending action badge', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue([]);
+    mockHasPendingAction.mockResolvedValue(false);
+  });
+
+  test('shows badge for a myOrders item with a pending action, not for one without', async () => {
+    mockHasPendingAction.mockImplementation((orderId: string) =>
+      Promise.resolve(orderId === 'order-pending'),
+    );
+    const myOrders = [makeOrder({ id: 'order-pending' }), makeOrder({ id: 'order-normal' })];
+
+    const { queryAllByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+    );
+
+    await waitFor(() => {
+      expect(mockHasPendingAction).toHaveBeenCalledWith('order-pending');
+      expect(mockHasPendingAction).toHaveBeenCalledWith('order-normal');
+    });
+
+    await waitFor(() => {
+      expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(1);
+    });
+  });
+
+  test('shows no badge when nothing is pending', async () => {
+    const myOrders = [makeOrder({ id: 'order-a' }), makeOrder({ id: 'order-b' })];
+
+    const { queryAllByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+    );
+
+    await waitFor(() => {
+      expect(mockHasPendingAction).toHaveBeenCalled();
+    });
+
+    expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(0);
+  });
+
+  test('never shows in the pool ("Tersedia") section, even if a pool item id would otherwise resolve pending=true', async () => {
+    // Pool orders come from poolOrders state (via fetchAvailableOrders), not
+    // myOrders — renderItem gates the badge on section.title === 'Order
+    // Saya', so a pool item must never show it, and hasPendingAction should
+    // never even be called for a pool item's id.
+    mockHasPendingAction.mockResolvedValue(true);
+    const sharedId = 'order-shared-id';
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue([
+      { orderId: sharedId, totalCents: 25000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z' },
+    ]);
+    const myOrders = [makeOrder({ id: 'order-mine' })];
+
+    const { queryAllByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+    );
+
+    await waitFor(() => {
+      expect(fetchAvailableOrders).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(mockHasPendingAction).toHaveBeenCalledWith('order-mine');
+    });
+
+    // "Order Saya" item shows the badge...
+    await waitFor(() => {
+      expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(1);
+    });
+    // ...and hasPendingAction was never asked about the pool item's id at all.
+    expect(mockHasPendingAction).not.toHaveBeenCalledWith(sharedId);
   });
 });

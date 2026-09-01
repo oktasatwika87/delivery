@@ -55,7 +55,65 @@ const Switch = makeComponent('Switch');
 const ScrollView = makeComponent('ScrollView');
 const Modal = makeComponent('Modal');
 const TouchableOpacity = makeComponent('TouchableOpacity');
-const SectionList = makeComponent('SectionList');
+// SectionList stub — makeComponent() alone only renders props.children, but
+// the real SectionList takes no children: it renders `sections` itself via
+// renderItem/renderSectionHeader. A dumb passthrough stub silently renders
+// NOTHING for every section/item, which made every OrdersScreen.spec.tsx
+// assertion on rendered card/badge text pass or fail vacuously regardless of
+// actual component state (root cause of the badge test failures — see
+// OrdersScreen.spec.tsx "pending action badge" describe block). This stub
+// actually walks sections/data and calls renderItem/renderSectionHeader,
+// same as the real component would, so RNTL queries can find the output.
+function SectionList(props: any) {
+  const {
+    sections = [],
+    renderItem,
+    renderSectionHeader,
+    keyExtractor,
+    ListEmptyComponent,
+    ...rest
+  } = props;
+  const totalItems = sections.reduce(
+    (sum: number, section: any) => sum + (section.data ? section.data.length : 0),
+    0,
+  );
+  const children: any[] = [];
+  if (totalItems === 0 && ListEmptyComponent) {
+    children.push(
+      React.isValidElement(ListEmptyComponent)
+        ? ListEmptyComponent
+        : React.createElement(ListEmptyComponent, { key: 'empty' }),
+    );
+  } else {
+    sections.forEach((section: any, sectionIndex: number) => {
+      if (renderSectionHeader) {
+        children.push(
+          React.createElement(
+            React.Fragment,
+            { key: `section-header-${sectionIndex}` },
+            renderSectionHeader({ section }),
+          ),
+        );
+      }
+      (section.data || []).forEach((item: any, itemIndex: number) => {
+        const key = keyExtractor
+          ? keyExtractor(item, itemIndex)
+          : `section-${sectionIndex}-item-${itemIndex}`;
+        if (renderItem) {
+          children.push(
+            React.createElement(
+              React.Fragment,
+              { key },
+              renderItem({ item, index: itemIndex, section }),
+            ),
+          );
+        }
+      });
+    });
+  }
+  return React.createElement(View, rest, children);
+}
+SectionList.displayName = 'SectionList';
 const RefreshControl = makeComponent('RefreshControl');
 const Button = (props) => {
   const { title, ...rest } = props;
