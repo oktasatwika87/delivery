@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
-  Alert,
   RefreshControl,
   SectionList,
   StyleSheet,
@@ -40,20 +39,11 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Orders'>>();
   const [poolOrders, setPoolOrders] = useState<OrderModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [isOnline, setIsOnline] = useState<boolean>(networkMonitor.getStatus() === 'online');
   const [connected, setConnected] = useState(false);
   const [removedNotice, setRemovedNotice] = useState<{ visible: boolean; orderId: string | null }>({
     visible: false,
     orderId: null,
   });
-
-  // ─── Network monitor subscription ─────────────────────────────────────────
-  useEffect(() => {
-    const unsubscribe = networkMonitor.subscribe((status) => {
-      setIsOnline(status === 'online');
-    });
-    return unsubscribe;
-  }, []);
 
   // ─── GPS location state ─────────────────────────────────────────────────────
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -224,15 +214,6 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
   // ─── Accept order ───────────────────────────────────────────────────────────
   const handleAccept = useCallback(
     async (order: OrderModel): Promise<void> => {
-      // Online check: accept order butuh koneksi biar nggak bentrok sama driver lain
-      if (networkMonitor.getStatus() !== 'online') {
-        Alert.alert(
-          'Butuh Koneksi',
-          'Terima order butuh koneksi internet biar nggak bentrok sama driver lain.',
-        );
-        return;
-      }
-
       const userId = await getCurrentUserId();
       if (!userId) {
         console.warn('[OrdersScreen] handleAccept: no userId');
@@ -294,11 +275,10 @@ function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.J
         </View>
         {isPool && (
           <TouchableOpacity
-            style={[styles.acceptButton, !isOnline && styles.acceptButtonDisabled]}
+            style={styles.acceptButton}
             onPress={() => handleAccept(item)}
-            disabled={!isOnline}
           >
-            <Text style={[styles.acceptButtonText, !isOnline && styles.acceptButtonTextDisabled]}>Terima Order</Text>
+            <Text style={styles.acceptButtonText}>Terima Order</Text>
           </TouchableOpacity>
         )}
       </TouchableOpacity>
@@ -418,12 +398,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginLeft: 12,
   },
-  acceptButtonDisabled: {
-    backgroundColor: '#a3a3a3',
-    opacity: 0.6,
-  },
   acceptButtonText: { color: '#fff', fontWeight: '600', fontSize: 14 },
-  acceptButtonTextDisabled: { color: '#d4d4d4' },
   empty: { padding: 32, alignItems: 'center' },
   loading: { padding: 32, alignItems: 'center' },
   notice: {

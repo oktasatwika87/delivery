@@ -10,8 +10,10 @@
  */
 
 import { Q } from '@nozbe/watermelondb';
+import reactNativeUUID from 'react-native-uuid';
 import type { Database } from '@nozbe/watermelondb';
 import type {
+  Payment,
   SyncPullResponse,
   SyncRecordPull,
   SyncRecordPush,
@@ -24,7 +26,7 @@ import { loadCursor, saveCursor } from './cursor';
 import { getDeviceId } from './device';
 import { getCurrentUserId } from './session';
 import { syncEvents } from './syncEvents';
-import uuid from 'react-native-uuid';
+import { networkMonitor } from '../map/networkMonitor';
 
 /**
  * Maximum consecutive failed sync attempts per record. After this many
@@ -58,6 +60,10 @@ export class SyncCoordinator implements Coordinator {
   private syncInterval: ReturnType<typeof setInterval> | null = null;
   /** Guards against concurrent start() calls — set BEFORE any await, reset in finally. */
   private isStarting = false;
+  /** Unsubscribe from networkMonitor — stored so we can clean up on stop(). */
+  private networkUnsubscribe: (() => void) | null = null;
+  /** Track last known network status to detect reconnect events. */
+  private lastNetworkStatus: 'online' | 'offline' | 'unknown' = 'unknown';
 
   async start(db: Database): Promise<void> {
     // Always update db reference FIRST — even if this call gets skipped due to
@@ -87,6 +93,9 @@ export class SyncCoordinator implements Coordinator {
 
     console.log('[SyncCoordinator] start() called');
 
+    // Subscribe to network changes — drain pending actions on reconnect
+    this.setupNetworkListener();
+
     // First sync: full pull (cursor null)
     // Bungkus try/catch supaya kegagalan pull pertama tidak menghalangi periodic sync
     try {
@@ -103,6 +112,47 @@ export class SyncCoordinator implements Coordinator {
     // Periodic sync setiap 30 detik
     console.log('[SyncCoordinator] Starting periodic sync interval');
     this.syncInterval = setInterval(() => this.syncTick(), 30_000);
+  }
+
+  /**
+   * Subscribe to networkMonitor for reconnect events.
+   * When device goes offline -> online, trigger drain of pending actions.
+   */
+  private async setupNetworkListener(): Promise<void> {
+    // Clean up any existing subscription
+    if (this.networkUnsubscribe) {
+      this.networkUnsubscribe();
+    }
+
+    // Initialize lastNetworkStatus from current state
+    this.lastNetworkStatus = networkMonitor.getStatus();
+
+    this.networkUnsubscribe = networkMonitor.subscribe(async (status) => {
+      if (this.stopped) return;
+
+      console.log(`[SyncCoordinator] Network status changed: ${this.lastNetworkStatus} -> ${status}`);
+
+      // Detect reconnect: was offline, now online
+      if (this.lastNetworkStatus === 'offline' && status === 'online') {
+        console.log('[SyncCoordinator] Reconnected — draining pending actions...');
+        try {
+          // Dynamic import to avoid circular dependency with WatermelonDB
+          const { drainPendingActions } = await import('./outbox');
+          const results = await drainPendingActions(this.db!);
+          const succeeded = results.filter((r: { status: string }) => r.status === 'success').length;
+          const conflicts = results.filter((r: { status: string }) => r.status === 'conflict').length;
+          const orphaned = results.filter((r: { status: string }) => r.status === 'orphaned').length;
+          const failed = results.filter((r: { status: string }) => r.status === 'failed').length;
+          console.log(
+            `[SyncCoordinator] Drain complete: ${succeeded} success, ${conflicts} conflicts, ${orphaned} orphaned, ${failed} failed`
+          );
+        } catch (err) {
+          console.error('[SyncCoordinator] Error draining pending actions:', err);
+        }
+      }
+
+      this.lastNetworkStatus = status;
+    });
   }
 
   private async syncTick(): Promise<void> {
@@ -124,6 +174,10 @@ export class SyncCoordinator implements Coordinator {
     if (this.syncInterval) {
       clearInterval(this.syncInterval);
       this.syncInterval = null;
+    }
+    if (this.networkUnsubscribe) {
+      this.networkUnsubscribe();
+      this.networkUnsubscribe = null;
     }
     this.db = null;
   }
@@ -519,7 +573,7 @@ export class SyncCoordinator implements Coordinator {
         // concurrent sync paths and writeback during read phase is racy.
         // The next legitimate edit to this row (or another sync cycle) will
         // re-trigger this fallback, which is acceptable for the recovery path.
-        const fallbackKey = `cod:${uuid.v4()}`;
+        const fallbackKey = `cod:${reactNativeUUID.v4()}`;
         console.warn(
           `[localRowToSyncRecord] payment row ${row.id} missing idempotencyKey — ` +
           `generating fallback "${fallbackKey}". This indicates a data integrity ` +
@@ -587,14 +641,10 @@ export class SyncCoordinator implements Coordinator {
     if (byId) return byId;
 
     // Fallback: match by idempotencyKey from serverData (payment-specific)
-    if (ack.entityType !== 'payment') {
+    if (ack.entityType !== 'payment' || !(ack.serverData as Payment)?.idempotencyKey) {
       return null;
     }
-    const serverData = ack.serverData;
-    if (!serverData || !('idempotencyKey' in serverData)) {
-      return null;
-    }
-    const idempotencyKey = (serverData as { idempotencyKey: string }).idempotencyKey;
+    const idempotencyKey = (ack.serverData as Payment).idempotencyKey;
     const dirtyRows = await collection
       .query(
         Q.where('_status', Q.notEq('synced')),

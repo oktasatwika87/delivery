@@ -9,6 +9,7 @@ import { schemaMigrations, createTable, addColumns } from '@nozbe/watermelondb/S
  * v4 -> v5: Tambah failed_sync_attempts ke orders/payments/chat_messages
  *           (cap retry agar record yang gagal sync tidak stuck retry forever)
  * v5 -> v6: Tambah cancelled_by & cancel_reason ke orders (cancel offline)
+ * v6 -> v7: Tambah tabel pending_actions (offline-first driver actions outbox)
  */
 export const watermelonMigrations = schemaMigrations({
   migrations: [
@@ -116,6 +117,26 @@ export const watermelonMigrations = schemaMigrations({
           columns: [
             { name: 'cancelled_by', type: 'string', isOptional: true },
             { name: 'cancel_reason', type: 'string', isOptional: true },
+          ],
+        }),
+      ],
+    },
+    // v6 -> v7: pending_actions — outbox untuk offline-first driver actions
+    // (reject, cancel, collect_cod). Diproses FIFO saat device online.
+    {
+      toVersion: 7,
+      steps: [
+        createTable({
+          name: 'pending_actions',
+          columns: [
+            { name: 'action_type', type: 'string' },
+            { name: 'target_order_id', type: 'string' },
+            { name: 'expected_version', type: 'number' },
+            { name: 'idempotency_key', type: 'string' },
+            { name: 'payload_json', type: 'string', isOptional: true },
+            { name: 'status', type: 'string' },
+            { name: 'created_at', type: 'number' },
+            { name: 'updated_at', type: 'number' },
           ],
         }),
       ],

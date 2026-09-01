@@ -321,3 +321,141 @@ export async function getOrderById(orderId: string): Promise<Order> {
     throw err;
   }
 }
+
+// ─── Driver Actions ──────────────────────────────────────────────────────────
+
+/**
+ * Response from driver action endpoints (reject, cancel, collect-cod).
+ */
+export interface DriverActionResponse {
+  id: string;
+  status: string;
+  version: number;
+  driverId?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Error response from driver action endpoints.
+ */
+export interface DriverActionError {
+  statusCode: number;
+  message: string;
+  error: string;
+}
+
+/**
+ * Driver rejects an assigned order.
+ * Order must be in status ASSIGNED.
+ */
+export async function rejectOrder(orderId: string, version: number): Promise<DriverActionResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await fetchWithAuth(`${API_BASE}/orders/${orderId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ version }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.status === 401) {
+      throw new UnauthorizedError();
+    }
+
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`[rejectOrder] Failed: status=${res.status}, body=${body}`);
+      throw new Error(`rejectOrder failed: ${res.status} - ${body}`);
+    }
+
+    return res.json() as Promise<DriverActionResponse>;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      console.warn('[rejectOrder] Request aborted due to 8s timeout');
+    }
+    throw err;
+  }
+}
+
+/**
+ * Driver cancels order mid-delivery.
+ * Order must be in status ASSIGNED, PREPARING, or OUT_FOR_DELIVERY.
+ */
+export async function cancelOrder(
+  orderId: string,
+  version: number,
+  reason?: string
+): Promise<DriverActionResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await fetchWithAuth(`${API_BASE}/orders/${orderId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ version, reason }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.status === 401) {
+      throw new UnauthorizedError();
+    }
+
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`[cancelOrder] Failed: status=${res.status}, body=${body}`);
+      throw new Error(`cancelOrder failed: ${res.status} - ${body}`);
+    }
+
+    return res.json() as Promise<DriverActionResponse>;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      console.warn('[cancelOrder] Request aborted due to 8s timeout');
+    }
+    throw err;
+  }
+}
+
+/**
+ * Driver collects COD (cash on delivery) for an order.
+ * Uses idempotency key to prevent double-collection.
+ */
+export async function collectCodOrder(
+  orderId: string,
+  amountCents: number,
+  idempotencyKey: string
+): Promise<DriverActionResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await fetchWithAuth(`${API_BASE}/payments/${orderId}/collect-cod`, {
+      method: 'POST',
+      body: JSON.stringify({ amountCents, idempotencyKey }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.status === 401) {
+      throw new UnauthorizedError();
+    }
+
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`[collectCodOrder] Failed: status=${res.status}, body=${body}`);
+      throw new Error(`collectCodOrder failed: ${res.status} - ${body}`);
+    }
+
+    return res.json() as Promise<DriverActionResponse>;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      console.warn('[collectCodOrder] Request aborted due to 8s timeout');
+    }
+    throw err;
+  }
+}

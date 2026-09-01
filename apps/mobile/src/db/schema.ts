@@ -7,7 +7,7 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 export const schema = appSchema({
-  version: 6,
+  version: 7,
   tables: [
     tableSchema({
       name: 'users',
@@ -86,6 +86,21 @@ export const schema = appSchema({
         { name: 'dest_lng', type: 'string' },
         { name: 'geometry_json', type: 'string' },
         { name: 'fetched_at', type: 'number', isIndexed: true },
+        { name: 'created_at', type: 'number' },
+        { name: 'updated_at', type: 'number' },
+      ],
+    }),
+    // v7 — pending_actions: outbox untuk offline-first driver actions
+    // (reject, cancel, collect_cod). Diproses FIFO saat device online.
+    tableSchema({
+      name: 'pending_actions',
+      columns: [
+        { name: 'action_type', type: 'string', isIndexed: true },
+        { name: 'target_order_id', type: 'string', isIndexed: true },
+        { name: 'expected_version', type: 'number' },
+        { name: 'idempotency_key', type: 'string' },
+        { name: 'payload_json', type: 'string', isOptional: true },
+        { name: 'status', type: 'string', isIndexed: true },
         { name: 'created_at', type: 'number' },
         { name: 'updated_at', type: 'number' },
       ],

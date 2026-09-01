@@ -15,6 +15,7 @@ import { PaymentModel } from './models/PaymentModel';
 import { ChatMessageModel } from './models/ChatMessageModel';
 import { UserModel } from './models/UserModel';
 import { RouteSnapshotModel } from './models/RouteSnapshotModel';
+import { PendingActionModel } from './models/PendingActionModel';
 
 const adapter = new SQLiteAdapter({
   schema,
@@ -30,5 +31,5 @@ const adapter = new SQLiteAdapter({
 
 export const database = new Database({
   adapter,
-  modelClasses: [UserModel, OrderModel, PaymentModel, ChatMessageModel, RouteSnapshotModel],
+  modelClasses: [UserModel, OrderModel, PaymentModel, ChatMessageModel, RouteSnapshotModel, PendingActionModel],
 });

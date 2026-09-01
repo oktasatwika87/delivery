@@ -22,7 +22,7 @@
  *   with 2^122 collision space.
  */
 
-import uuid from 'react-native-uuid';
+import reactNativeUUID from 'react-native-uuid';
 
 /**
  * RFC 4122 v4 UUID regex. Matches a 36-character hyphenated UUID with
@@ -40,7 +40,7 @@ const COD_UUID_REGEX =
  * the existing call site at `OrderDetailScreen.tsx:219`.
  */
 export async function generateCodIdempotencyKey(_orderId: string): Promise<string> {
-  return `cod:${uuid.v4()}`;
+  return `cod:${reactNativeUUID.v4()}`;
 }
 
 /**
