@@ -402,7 +402,9 @@ class OrdersSocketManager {
 
   /**
    * Subscribe ke order:rejected event (customer-side).
-   * Fire ketika driver reject — order status CANCELLED.
+   * Fire ketika driver reject — order balik ke CONFIRMED untuk di-reassign
+   * ke driver lain. BUKAN CANCELLED (reject sebelumnya membunuh order, sudah
+   * difix supaya konsisten dengan cancel).
    */
   onOrderRejected(callback: (payload: OrderRejectedPayload) => void): () => void {
     return this.on<OrderRejectedPayload>('orderRejected', callback);
