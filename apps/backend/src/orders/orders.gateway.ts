@@ -7,7 +7,15 @@ import {
 import { Socket, Server } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 
-import { UserRole, type Order } from '@delivery/shared';
+import {
+  UserRole,
+  type Order,
+  type OrderAvailablePayload,
+  type OrderUnavailablePayload,
+  type OrderAcceptedPayload,
+  type OrderRejectedPayload,
+  type OrderCancelledPayload,
+} from '@delivery/shared';
 
 /**
  * WebSocket Gateway untuk order events.
@@ -86,12 +94,13 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Emit event ke customer saat order di-accept oleh driver.
    */
   emitOrderAccepted(customerId: string, orderId: string, driverId: string, newVersion: number): void {
-    this.server.to(customerId).emit('order:accepted', {
+    const payload: OrderAcceptedPayload = {
       orderId,
       driverId,
       status: 'PREPARING',
       version: newVersion,
-    });
+    };
+    this.server.to(customerId).emit('order:accepted', payload);
   }
 
   /**
@@ -101,25 +110,32 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * fix di OrdersService.rejectOrder() (CANCELLED itu status terminal,
    * membunuh order permanen; reject sekarang balik ke CONFIRMED, sama seperti
    * cancel, supaya order bisa di-assign ulang). Lihat orders.service.ts.
+   *
+   * Payload sekarang di-type dari @delivery/shared (OrderRejectedPayload) —
+   * ini yang bikin `status` di sini nggak bisa diam-diam balik ke 'CANCELLED'
+   * lagi tanpa compile error di sisi mobile juga (lihat order-events.ts untuk
+   * riwayat lengkap kenapa ini penting).
    */
   emitOrderRejected(customerId: string, orderId: string, newVersion: number): void {
-    this.server.to(customerId).emit('order:rejected', {
+    const payload: OrderRejectedPayload = {
       orderId,
       status: 'CONFIRMED',
       version: newVersion,
-    });
+    };
+    this.server.to(customerId).emit('order:rejected', payload);
   }
 
   /**
    * Emit event ke customer saat driver cancel mid-delivery.
    */
   emitOrderCancelled(customerId: string, orderId: string, newVersion: number, reason?: string): void {
-    this.server.to(customerId).emit('order:cancelled', {
+    const payload: OrderCancelledPayload = {
       orderId,
       status: 'CONFIRMED',
       version: newVersion,
       reason,
-    });
+    };
+    this.server.to(customerId).emit('order:cancelled', payload);
   }
 
   // ===== Driver-targeted emits (new) =====
@@ -129,14 +145,15 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Payload SANGAT minimal — driver tap untuk lihat full detail.
    */
   emitOrderAvailable(order: Order): void {
-    this.server.to(OrdersGateway.DRIVERS_AVAILABLE_ROOM).emit('order:available', {
+    const payload: OrderAvailablePayload = {
       orderId: order.id,
       totalCents: order.totalCents,
       currency: order.currency,
       itemsCount: order.items.length,
       city: order.deliveryAddress?.city,
       createdAt: order.createdAt,
-    });
+    };
+    this.server.to(OrdersGateway.DRIVERS_AVAILABLE_ROOM).emit('order:available', payload);
   }
 
   /**
@@ -147,9 +164,7 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
     orderId: string,
     reason: 'accepted' | 'rejected' | 'reassigned',
   ): void {
-    this.server.to(OrdersGateway.DRIVERS_AVAILABLE_ROOM).emit('order:unavailable', {
-      orderId,
-      reason,
-    });
+    const payload: OrderUnavailablePayload = { orderId, reason };
+    this.server.to(OrdersGateway.DRIVERS_AVAILABLE_ROOM).emit('order:unavailable', payload);
   }
 }

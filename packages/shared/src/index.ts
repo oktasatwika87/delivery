@@ -13,6 +13,7 @@
  */
 
 export * from './order.js';
+export * from './order-events.js';
 export * from './payment.js';
 export * from './chat.js';
 export * from './sync.js';

@@ -30,6 +30,13 @@
 
 import { io, Socket } from 'socket.io-client';
 import Config from 'react-native-config';
+import type {
+  OrderAvailablePayload,
+  OrderUnavailablePayload,
+  OrderAcceptedPayload,
+  OrderRejectedPayload,
+  OrderCancelledPayload,
+} from '@delivery/shared';
 
 import { getCurrentToken } from './session';
 import { syncEvents } from './syncEvents';
@@ -40,58 +47,21 @@ const WS_BASE = Config.API_BASE_URL;
 /** Namespace untuk orders WebSocket */
 const ORDERS_NAMESPACE = '/orders';
 
-/** Payload for order available event */
-export interface OrderAvailablePayload {
-  orderId: string;
-  totalCents: number;
-  currency: string;
-  itemsCount: number;
-  city?: string;
-  createdAt: string;
-}
-
-/** Payload for order unavailable event */
-export interface OrderUnavailablePayload {
-  orderId: string;
-  reason: 'accepted' | 'rejected' | 'reassigned';
-}
-
 /**
- * Payload for order:accepted event (driver accept → customer terima update).
- * Status hardcoded 'PREPARING' oleh server (lihat orders.gateway.ts emitOrderAccepted).
+ * Payload types di-import dari @delivery/shared (packages/shared/src/order-events.ts)
+ * dan di-re-export di sini supaya konsumen existing (import dari './ordersSocket')
+ * nggak perlu berubah. Sebelumnya 5 interface ini didefinisikan lokal DAN
+ * terpisah di orders.gateway.ts (backend) — duplikasi itu yang bikin literal
+ * status 'CONFIRMED' vs 'CANCELLED' bisa drift tanpa ketahuan compiler,
+ * lihat riwayat lengkap di order-events.ts.
  */
-export interface OrderAcceptedPayload {
-  orderId: string;
-  driverId: string;
-  status: 'PREPARING';
-  version: number;
-}
-
-/**
- * Payload for order:rejected event (driver reject → order balik ke
- * CONFIRMED, di-reassign nanti). Status hardcoded 'CONFIRMED' oleh server.
- *
- * FIX (2026-09): sebelumnya 'CANCELLED' — diubah mengikuti fix di backend
- * OrdersService.rejectOrder() (CANCELLED itu status terminal; reject sekarang
- * konsisten dengan cancel, balik ke CONFIRMED, bukan membunuh order). Lihat
- * apps/backend/src/orders/orders.service.ts dan orders.gateway.ts.
- */
-export interface OrderRejectedPayload {
-  orderId: string;
-  status: 'CONFIRMED';
-  version: number;
-}
-
-/**
- * Payload for order:cancelled event (driver cancel mid-delivery → order
- * balik ke CONFIRMED, di-reassign nanti). Status hardcoded 'CONFIRMED'.
- */
-export interface OrderCancelledPayload {
-  orderId: string;
-  status: 'CONFIRMED';
-  version: number;
-  reason?: string;
-}
+export type {
+  OrderAvailablePayload,
+  OrderUnavailablePayload,
+  OrderAcceptedPayload,
+  OrderRejectedPayload,
+  OrderCancelledPayload,
+};
 
 /** Event yang bisa di-listen */
 export type OrdersSocketEvent =
@@ -402,9 +372,7 @@ class OrdersSocketManager {
 
   /**
    * Subscribe ke order:rejected event (customer-side).
-   * Fire ketika driver reject — order balik ke CONFIRMED untuk di-reassign
-   * ke driver lain. BUKAN CANCELLED (reject sebelumnya membunuh order, sudah
-   * difix supaya konsisten dengan cancel).
+   * Fire ketika driver reject — order status CANCELLED.
    */
   onOrderRejected(callback: (payload: OrderRejectedPayload) => void): () => void {
     return this.on<OrderRejectedPayload>('orderRejected', callback);
