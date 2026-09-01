@@ -17,10 +17,10 @@ import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
 import { PaymentModel } from '../db/models/PaymentModel';
 import { getCurrentUserId } from '../sync/session';
-import { generateCodIdempotencyKey } from '../sync/idempotency';
 import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
+import { enqueueCancel, enqueueCollectCod, hasPendingAction, drainPendingActions } from '../sync/outbox';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -183,6 +183,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [payments, setPayments] = useState<PaymentModel[]>([]);
   const [failedBannerDismissed, setFailedBannerDismissed] = useState(false);
   const [conflictEvent, setConflictEvent] = useState<OrderConflictEvent | null>(null);
+  const [hasPending, setHasPending] = useState(false);
   // Use ref for synchronous inflight guard (state updates are async, refs are sync)
   const inflightCollectRef = useRef(false);
 
@@ -283,6 +284,22 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     };
   }, [orderId, order?.status]);
 
+  // Check for pending actions on mount and when orderId changes
+  useEffect(() => {
+    if (!orderId) return;
+    let cancelled = false;
+    const checkPending = async () => {
+      try {
+        const pending = await hasPendingAction(orderId);
+        if (!cancelled) setHasPending(pending);
+      } catch (err) {
+        console.warn('[OrderDetail] failed to check pending action:', err);
+      }
+    };
+    checkPending();
+    return () => { cancelled = true; };
+  }, [orderId]);
+
   /**
    * Check if the current driver can cancel this order.
    * Driver can cancel if:
@@ -313,9 +330,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   };
 
   /**
-   * Handle COD collection.
-   * Writes a CAPTURED payment locally to WatermelonDB.
-   * SyncCoordinator will pick up the dirty record and push to server.
+   * Handle COD collection via outbox.
+   * Enqueues a pending action that will be synced when online.
    */
   const handleCollectCod = async (orderToCollect: OrderModel) => {
     const amount = formatCurrency(orderToCollect.totalCents, orderToCollect.currency);
@@ -332,23 +348,34 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
             if (inflightCollectRef.current) return;
             inflightCollectRef.current = true;
             try {
-              const idempotencyKey = await generateCodIdempotencyKey(orderToCollect.id);
-              const paymentsCollection = database.get<PaymentModel>('payments');
-              await database.write(async () => {
-                await paymentsCollection.create((record) => {
-                  record.orderId = orderToCollect.id;
-                  record.idempotencyKey = idempotencyKey;
-                  record.method = PaymentMethod.CASH;
-                  record.status = PaymentStatus.CAPTURED;
-                  record.amountCents = orderToCollect.totalCents;
-                  record.currency = orderToCollect.currency;
-                  record.kind = 'PAYMENT';
-                  record.failedSyncAttempts = 0;
-                });
-              });
+              const result = await enqueueCollectCod(orderToCollect.id, orderToCollect.totalCents);
+              if (!result.success) {
+                Alert.alert('Gagal', result.error ?? 'Tidak bisa mencatat payment. Coba lagi.');
+                return;
+              }
+              // Optimistic UI: show as collected immediately
               setHasCodPayment(true);
+              setHasPending(true);
+              // Try to drain immediately in case we're already online — the
+              // coordinator's own drain only fires on an offline->online
+              // transition, so an action enqueued while already online would
+              // otherwise sit pending until the next real disconnect/reconnect.
+              // NOTE: outbox.ts is already statically imported above (for
+              // enqueueCancel/enqueueCollectCod/hasPendingAction), so there's
+              // no module-load-time-WatermelonDB concern here the way there
+              // is in coordinator.ts (which does NOT otherwise import outbox.ts) —
+              // a dynamic import isn't needed, and dynamic import() inside a
+              // .tsx file isn't supported by this project's Jest config anyway
+              // (throws without --experimental-vm-modules), so it would be
+              // untestable here even if it worked at runtime.
+              try {
+                await drainPendingActions(database);
+              } catch (err) {
+                // If drain fails (offline), that's expected — action stays pending
+                console.log('[OrderDetail] drain attempt while offline, action queued');
+              }
             } catch (err) {
-              console.error('[OrderDetail] failed to record COD:', err);
+              console.error('[OrderDetail] failed to enqueue COD:', err);
               Alert.alert('Gagal', 'Tidak bisa mencatat payment. Coba lagi.');
             } finally {
               inflightCollectRef.current = false;
@@ -360,9 +387,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   };
 
   /**
-   * Handle cancel order action.
-   * Writes CANCELLED status locally to WatermelonDB.
-   * SyncCoordinator will pick up the dirty record and push to server.
+   * Handle cancel order action via outbox.
+   * Enqueues a pending action that will be synced when online.
    */
   const handleCancelOrder = async (orderToCancel: OrderModel) => {
     Alert.alert(
@@ -375,14 +401,33 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
           style: 'destructive',
           onPress: async () => {
             try {
-              await database.write(async () => {
-                await orderToCancel.update((record) => {
-                  record.status = OrderStatus.CANCELLED;
-                  record.cancelledBy = currentUserId ?? undefined;
-                });
-              });
+              const result = await enqueueCancel(orderToCancel.id, orderToCancel.serverVersion);
+              if (!result.success) {
+                Alert.alert('Gagal', result.error ?? 'Tidak bisa membatalkan order. Coba lagi.');
+                return;
+              }
+              // Optimistic UI: order stays visible, pending indicator shows sync status
+              setHasPending(true);
+              // Try to drain immediately in case we're already online — the
+              // coordinator's own drain only fires on an offline->online
+              // transition, so an action enqueued while already online would
+              // otherwise sit pending until the next real disconnect/reconnect.
+              // NOTE: outbox.ts is already statically imported above (for
+              // enqueueCancel/enqueueCollectCod/hasPendingAction), so there's
+              // no module-load-time-WatermelonDB concern here the way there
+              // is in coordinator.ts (which does NOT otherwise import outbox.ts) —
+              // a dynamic import isn't needed, and dynamic import() inside a
+              // .tsx file isn't supported by this project's Jest config anyway
+              // (throws without --experimental-vm-modules), so it would be
+              // untestable here even if it worked at runtime.
+              try {
+                await drainPendingActions(database);
+              } catch (err) {
+                // If drain fails (offline), that's expected — action stays pending
+                console.log('[OrderDetail] drain attempt while offline, action queued');
+              }
             } catch (err) {
-              console.error('[OrderDetail] failed to cancel order:', err);
+              console.error('[OrderDetail] failed to enqueue cancel:', err);
               Alert.alert('Gagal', 'Tidak bisa membatalkan order. Coba lagi.');
             }
           },
@@ -425,6 +470,13 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         event={conflictEvent}
         onDismiss={() => setConflictEvent(null)}
       />
+
+      {/* Pending Action Indicator */}
+      {hasPending && (
+        <View style={styles.pendingBanner}>
+          <Text style={styles.pendingBannerText}>Menunggu sinkronisasi...</Text>
+        </View>
+      )}
 
       {/* Header */}
       <View style={styles.header}>
@@ -492,8 +544,10 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         <Text style={styles.mapButtonText}>Lihat Rute Pengiriman</Text>
       </TouchableOpacity>
 
-      {/* Cancel Button — only visible if driver can cancel this order */}
-      {order && currentUserId && canDriverCancel(order) && (
+      {/* Cancel Button — only visible if driver can cancel this order and there's
+          no cancel already queued (prevents re-tapping and enqueueing duplicate
+          cancel actions while offline, same guard pattern as the COD button below) */}
+      {order && currentUserId && canDriverCancel(order) && !hasPending && (
         <TouchableOpacity
           style={styles.cancelButton}
           onPress={() => handleCancelOrder(order)}
@@ -728,5 +782,18 @@ const styles = StyleSheet.create({
   conflictBannerDismissText: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  // Pending Action Banner
+  pendingBanner: {
+    backgroundColor: '#dbeafe',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#93c5fd',
+  },
+  pendingBannerText: {
+    fontSize: 13,
+    color: '#1e40af',
+    textAlign: 'center',
   },
 });

@@ -1,5 +1,5 @@
 /**
- * Unit tests untuk OrderDetailScreen — cancel button visibility + behavior.
+ * Unit tests untuk OrderDetailScreen — cancel button visibility + behavior + outbox wiring.
  */
 
 import React from 'react';
@@ -29,15 +29,30 @@ jest.mock('../sync/session', () => ({
   getCurrentUserId: () => mockGetCurrentUserId(),
 }));
 
-// generateCodIdempotencyKey mock
-const mockGenerateCodIdempotencyKey = jest.fn();
-jest.mock('../sync/idempotency', () => ({
-  generateCodIdempotencyKey: (...args: any[]) => mockGenerateCodIdempotencyKey(...args),
+// ─── Outbox mocks ───────────────────────────────────────────────────────────────
+// These are defined at module level so they can be referenced in tests
+const mockEnqueueCancel = jest.fn();
+const mockEnqueueCollectCod = jest.fn();
+const mockHasPendingAction = jest.fn();
+const mockDrainPendingActions = jest.fn();
+
+// NOTE: __esModule: true is required here — OrderDetailScreen.tsx uses a
+// dynamic `await import('../sync/outbox')` for drainPendingActions (to avoid
+// pulling the WatermelonDB native module in statically, see coordinator.ts
+// for the same pattern). Without __esModule: true, Babel's dynamic-import
+// interop wraps this mock differently than a static import does, and named
+// destructuring off the dynamic import silently resolves to undefined.
+jest.mock('../sync/outbox', () => ({
+  __esModule: true,
+  enqueueCancel: (...args: unknown[]) => mockEnqueueCancel(...args),
+  enqueueCollectCod: (...args: unknown[]) => mockEnqueueCollectCod(...args),
+  hasPendingAction: (...args: unknown[]) => mockHasPendingAction(...args),
+  drainPendingActions: (...args: unknown[]) => mockDrainPendingActions(...args),
 }));
 
-// WatermelonDB mock
+// ─── WatermelonDB mock ─────────────────────────────────────────────────────────
 const mockOrderUpdate = jest.fn();
-const mockOrder: any = {
+const mockOrder = {
   id: 'order-123',
   driverId: 'driver-456',
   status: OrderStatus.ASSIGNED,
@@ -183,17 +198,19 @@ describe('cancel button visibility', () => {
   });
 });
 
-// ─── Tests: Behavior ────────────────────────────────────────────
+// ─── Tests: Cancel Button Behavior (Outbox) ──────────────────────────
 
-describe('cancel button behavior', () => {
+describe('cancel button behavior (outbox wiring)', () => {
   let alertSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
     alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     mockGetCurrentUserId.mockResolvedValue('driver-456');
-    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
-    mockOrderUpdate.mockImplementation(async (updater: any) => { updater(mockOrder); });
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456', serverVersion: 1 });
+    mockHasPendingAction.mockResolvedValue(false);
+    mockEnqueueCancel.mockResolvedValue({ success: true, pendingActionId: 'pending-123' });
+    mockDrainPendingActions.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -218,7 +235,7 @@ describe('cancel button behavior', () => {
     );
   });
 
-  test('pressing Ya writes CANCELLED status to WatermelonDB', async () => {
+  test('pressing Ya calls enqueueCancel with order id and serverVersion', async () => {
     const { getByText } = renderScreen();
     await waitFor(() => {
       expect(getByText('Batalkan Order')).toBeTruthy();
@@ -237,34 +254,10 @@ describe('cancel button behavior', () => {
       yaButton?.onPress?.();
     });
 
-    expect(mockOrderUpdate).toHaveBeenCalled();
-    const updater = mockOrderUpdate.mock.calls[0][0];
-    updater(mockOrder);
-    expect(mockOrder.status).toBe(OrderStatus.CANCELLED);
+    expect(mockEnqueueCancel).toHaveBeenCalledWith('order-123', 1);
   });
 
-  test('pressing Tidak does NOT write to database', async () => {
-    const { getByText } = renderScreen();
-    await waitFor(() => {
-      expect(getByText('Batalkan Order')).toBeTruthy();
-    });
-    await act(async () => {
-      fireEvent.press(getByText('Batalkan Order'));
-    });
-
-    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
-    const alertArgs = alertCalls[0];
-    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
-    const tidakButton = buttons.find((b) => b.text === 'Tidak');
-
-    await act(async () => {
-      tidakButton?.onPress?.();
-    });
-
-    expect(mockOrderUpdate).not.toHaveBeenCalled();
-  });
-
-  test('cancelledBy is set to current driver ID on confirm', async () => {
+  test('drain is called after successful enqueue', async () => {
     const { getByText } = renderScreen();
     await waitFor(() => {
       expect(getByText('Batalkan Order')).toBeTruthy();
@@ -282,10 +275,80 @@ describe('cancel button behavior', () => {
       yaButton?.onPress?.();
     });
 
-    expect(mockOrderUpdate).toHaveBeenCalled();
-    const updater = mockOrderUpdate.mock.calls[0][0];
-    updater(mockOrder);
-    expect(mockOrder.cancelledBy).toBe('driver-456');
+    // Drain should be called (dynamic import was resolved)
+    expect(mockDrainPendingActions).toHaveBeenCalled();
+  });
+
+  test('button disappears after a successful cancel enqueue (prevents duplicate taps queueing 2+ cancels)', async () => {
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Batalkan Order')).toBeTruthy();
+    });
+    await act(async () => {
+      fireEvent.press(getByText('Batalkan Order'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya, Batalkan');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    // order.status is unchanged by the outbox path (no local optimistic write
+    // of CANCELLED) — the button must instead be gated on hasPending, or a
+    // driver could tap it again while offline and enqueue duplicate cancels.
+    await waitFor(() => {
+      expect(queryByText('Batalkan Order')).toBeNull();
+    });
+    expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
+  });
+
+  test('shows error alert when enqueueCancel fails', async () => {
+    mockEnqueueCancel.mockResolvedValue({ success: false, error: 'Not authenticated' });
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Batalkan Order')).toBeTruthy();
+    });
+    await act(async () => {
+      fireEvent.press(getByText('Batalkan Order'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya, Batalkan');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    // Should show error alert
+    expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Not authenticated');
+  });
+
+  test('pressing Tidak does NOT call enqueueCancel', async () => {
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Batalkan Order')).toBeTruthy();
+    });
+    await act(async () => {
+      fireEvent.press(getByText('Batalkan Order'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const tidakButton = buttons.find((b) => b.text === 'Tidak');
+
+    await act(async () => {
+      tidakButton?.onPress?.();
+    });
+
+    expect(mockEnqueueCancel).not.toHaveBeenCalled();
   });
 });
 
@@ -296,7 +359,7 @@ describe('COD button visibility', () => {
     jest.clearAllMocks();
     mockGetCurrentUserId.mockResolvedValue('driver-456');
     mockPayments.length = 0; // reset payments
-    mockGenerateCodIdempotencyKey.mockResolvedValue('cod:order-123:device-abc:1234567890');
+    mockHasPendingAction.mockResolvedValue(false);
   });
 
   test('appears for OUT_FOR_DELIVERY status with matching driver when no COD exists', async () => {
@@ -357,9 +420,9 @@ describe('COD button visibility', () => {
   });
 });
 
-// ─── Tests: COD Button Behavior ─────────────────────────────────────
+// ─── Tests: COD Button Behavior (Outbox) ────────────────────────────────
 
-describe('COD button behavior', () => {
+describe('COD button behavior (outbox wiring)', () => {
   let alertSpy: jest.SpyInstance;
 
   beforeEach(() => {
@@ -368,7 +431,9 @@ describe('COD button behavior', () => {
     mockGetCurrentUserId.mockResolvedValue('driver-456');
     mockPayments.length = 0; // reset payments
     Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
-    mockGenerateCodIdempotencyKey.mockResolvedValue('cod:order-123:device-abc:1234567890');
+    mockHasPendingAction.mockResolvedValue(false);
+    mockEnqueueCollectCod.mockResolvedValue({ success: true, pendingActionId: 'cod-pending-123' });
+    mockDrainPendingActions.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -393,7 +458,7 @@ describe('COD button behavior', () => {
     );
   });
 
-  test('writes CAPTURED payment with correct fields on confirm', async () => {
+  test('calls enqueueCollectCod with order id and amount on confirm', async () => {
     const { getByText } = renderScreen();
     await waitFor(() => {
       expect(getByText('Terima Cash (COD)')).toBeTruthy();
@@ -411,20 +476,10 @@ describe('COD button behavior', () => {
       yaButton?.onPress?.();
     });
 
-    expect(mockPaymentsCollection.create).toHaveBeenCalled();
-    const createArg = mockPaymentsCollection.create.mock.calls[0][0];
-    const createdPayment: any = {};
-    createArg(createdPayment);
-    expect(createdPayment.orderId).toBe('order-123');
-    expect(createdPayment.method).toBe(PaymentMethod.CASH);
-    expect(createdPayment.status).toBe(PaymentStatus.CAPTURED);
-    expect(createdPayment.amountCents).toBe(50000);
-    expect(createdPayment.currency).toBe('IDR');
-    expect(createdPayment.kind).toBe('PAYMENT');
-    expect(createdPayment.failedSyncAttempts).toBe(0);
+    expect(mockEnqueueCollectCod).toHaveBeenCalledWith('order-123', 50000);
   });
 
-  test('generates idempotency key with correct order ID', async () => {
+  test('drain is called after successful enqueue', async () => {
     const { getByText } = renderScreen();
     await waitFor(() => {
       expect(getByText('Terima Cash (COD)')).toBeTruthy();
@@ -442,11 +497,13 @@ describe('COD button behavior', () => {
       yaButton?.onPress?.();
     });
 
-    expect(mockGenerateCodIdempotencyKey).toHaveBeenCalledWith('order-123');
+    expect(mockDrainPendingActions).toHaveBeenCalled();
   });
 
-  test('hides button after successful COD collection', async () => {
-    const { getByText, queryByText } = renderScreen();
+  test('shows error alert when enqueueCollectCod fails', async () => {
+    mockEnqueueCollectCod.mockResolvedValue({ success: false, error: 'Not authenticated' });
+
+    const { getByText } = renderScreen();
     await waitFor(() => {
       expect(getByText('Terima Cash (COD)')).toBeTruthy();
     });
@@ -463,9 +520,30 @@ describe('COD button behavior', () => {
       yaButton?.onPress?.();
     });
 
+    expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Not authenticated');
+  });
+
+  test('double-tap is prevented by inflight guard', async () => {
+    const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(queryByText('Terima Cash (COD)')).toBeNull();
+      expect(getByText('Terima Cash (COD)')).toBeTruthy();
     });
+    await act(async () => {
+      fireEvent.press(getByText('Terima Cash (COD)'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya, Terima');
+
+    await act(async () => {
+      yaButton?.onPress?.(); // First call
+      yaButton?.onPress?.(); // Second call - should be blocked
+    });
+
+    // Only one enqueue call despite two taps
+    expect(mockEnqueueCollectCod).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -478,7 +556,7 @@ describe('Failed Payment Banner', () => {
     mockPayments.length = 0; // reset payments
     paymentsSubscriptionCallback = null; // reset subscription
     mockPaymentsQuery = null; // reset query mock
-    mockGenerateCodIdempotencyKey.mockResolvedValue('cod:order-123:device-abc:1234567890');
+    mockHasPendingAction.mockResolvedValue(false);
   });
 
   test('shows banner when payment status is FAILED', async () => {
@@ -651,7 +729,9 @@ describe('Double-tap prevention', () => {
     paymentsSubscriptionCallback = null;
     mockPaymentsQuery = null;
     Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
-    mockGenerateCodIdempotencyKey.mockResolvedValue('cod:order-123:device-abc:1234567890');
+    mockHasPendingAction.mockResolvedValue(false);
+    mockEnqueueCollectCod.mockResolvedValue({ success: true, pendingActionId: 'cod-pending-123' });
+    mockDrainPendingActions.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -663,9 +743,6 @@ describe('Double-tap prevention', () => {
     await waitFor(() => {
       expect(getByText('Terima Cash (COD)')).toBeTruthy();
     });
-
-    // Spy on the database write to verify only one call
-    const writeSpy = jest.spyOn(mockDatabase, 'write');
 
     // First tap - opens confirmation dialog
     await act(async () => {
@@ -682,25 +759,23 @@ describe('Double-tap prevention', () => {
     expect(yaButton?.onPress).toBeDefined();
 
     // Clear previous calls
-    writeSpy.mockClear();
-    mockPaymentsCollection.create.mockClear();
+    mockEnqueueCollectCod.mockClear();
 
     // Call onPress TWICE synchronously (same event loop tick, no await between)
-    // The first call starts the async write
-    // The second call should be blocked by the guard (if guard is inside onPress)
-    // OR should see hasCodPayment=true (if guard is outside onPress)
+    // The first call starts the async enqueue
+    // The second call should be blocked by the inflight guard
     act(() => {
-      yaButton?.onPress?.(); // First call - starts write
+      yaButton?.onPress?.(); // First call - starts enqueue
       yaButton?.onPress?.(); // Second call - should be no-op
     });
 
     // Wait for async operations to complete
     await waitFor(() => {
-      expect(mockPaymentsCollection.create).toHaveBeenCalled();
+      expect(mockEnqueueCollectCod).toHaveBeenCalled();
     });
 
-    // Only ONE write should have been initiated despite two onPress calls
+    // Only ONE enqueue should have been initiated despite two onPress calls
     // If the guard is working, only the first call executes
-    expect(mockPaymentsCollection.create).toHaveBeenCalledTimes(1);
+    expect(mockEnqueueCollectCod).toHaveBeenCalledTimes(1);
   });
 });
