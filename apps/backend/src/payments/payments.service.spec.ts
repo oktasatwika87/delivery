@@ -6,6 +6,8 @@
  * 2. collectCod - idempotency key replay (return existing record, no double-create)
  * 3. collectCod - gagal: driver bukan owner (403 Forbidden)
  * 4. collectCod - gagal: order tidak ditemukan (404 NotFound)
+ * 5. collectCod - berhasil emit order:cod_collected ke customer (via OrdersGateway)
+ * 6. collectCod - idempotency replay TIDAK emit ulang (no duplicate customer notification)
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
@@ -13,6 +15,7 @@ import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
 import { PaymentsService } from './payments.service';
+import { OrdersGateway } from '../orders/orders.gateway';
 
 describe('PaymentsService', () => {
   let service: PaymentsService;
@@ -25,6 +28,7 @@ describe('PaymentsService', () => {
       findUnique: jest.Mock;
     };
   };
+  let mockOrdersGateway: { emitOrderCodCollected: jest.Mock };
 
   // Test data
   const orderId = 'order-uuid-123';
@@ -44,6 +48,9 @@ describe('PaymentsService', () => {
         findUnique: jest.fn(),
       },
     };
+    mockOrdersGateway = {
+      emitOrderCodCollected: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -51,6 +58,10 @@ describe('PaymentsService', () => {
         {
           provide: PrismaClient,
           useValue: mockPrisma,
+        },
+        {
+          provide: OrdersGateway,
+          useValue: mockOrdersGateway,
         },
       ],
     }).compile();
@@ -124,6 +135,24 @@ describe('PaymentsService', () => {
       // create should have been called once (and failed), findUnique called once to get existing
       expect(mockPrisma.payment.create).toHaveBeenCalledTimes(1);
       expect(mockPrisma.payment.findUnique).toHaveBeenCalledTimes(1);
+      // Replay path must NOT re-notify the customer — they were already
+      // notified on the original successful collection.
+      expect(mockOrdersGateway.emitOrderCodCollected).not.toHaveBeenCalled();
+    });
+
+    test('berhasil emit order:cod_collected ke customer via OrdersGateway', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(mockOrder);
+      mockPrisma.payment.create.mockResolvedValue(mockPayment);
+
+      await service.collectCod(orderId, driverId, amountCents, idempotencyKey);
+
+      expect(mockOrdersGateway.emitOrderCodCollected).toHaveBeenCalledTimes(1);
+      expect(mockOrdersGateway.emitOrderCodCollected).toHaveBeenCalledWith(
+        customerId,
+        orderId,
+        amountCents,
+        'IDR',
+      );
     });
 
     test('gagal: driver bukan owner (403 Forbidden)', async () => {

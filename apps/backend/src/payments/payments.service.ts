@@ -3,9 +3,14 @@ import { PrismaClient } from '@prisma/client';
 
 import type { CreatePaymentInput, Payment } from '@delivery/shared';
 
+import { OrdersGateway } from '../orders/orders.gateway';
+
 @Injectable()
 export class PaymentsService {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly ordersGateway: OrdersGateway,
+  ) {}
 
   async create(input: CreatePaymentInput, userId: string): Promise<Payment> {
     // Verify user owns the order
@@ -79,7 +84,10 @@ export class PaymentsService {
         },
       });
     } catch (err) {
-      // Unique constraint violation on idempotencyKey → record already exists
+      // Unique constraint violation on idempotencyKey → record already exists.
+      // Deliberately NOT emitting order:cod_collected here — this branch is
+      // reached by an outbox retry replaying the same collection, and the
+      // customer was already notified on the original successful create.
       const error = err as { code?: string };
       if (error.code === 'P2002') {
         const existing = await this.prisma.payment.findUnique({
@@ -91,6 +99,12 @@ export class PaymentsService {
       }
       throw err;
     }
+
+    // Live confirmation to the customer — order status itself doesn't change
+    // (see OrdersGateway.emitOrderCodCollected doc comment), so this is a
+    // notify-only emit, not a state-sync one.
+    this.ordersGateway.emitOrderCodCollected(order.customerId, orderId, amountCents, order.currency);
+
     return this.toDomain(row);
   }
 

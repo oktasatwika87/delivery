@@ -68,3 +68,22 @@ export interface OrderCancelledPayload {
   version: number;
   reason?: string;
 }
+
+/**
+ * order:cod_collected — customer-targeted. Fired when a driver collects
+ * cash-on-delivery for an order (see PaymentsService.collectCod() and
+ * OrdersGateway.emitOrderCodCollected).
+ *
+ * Deliberately has NO `status`/`version` field: collecting COD does not
+ * change the order's status (it stays wherever it was, e.g. DELIVERING) —
+ * this event is a live payment confirmation only, not a state-sync event.
+ * Emitted once, from the successful-create branch of collectCod() only —
+ * NOT on idempotency-key replay — so an outbox retry after a flaky network
+ * response never double-notifies the customer for the same collection.
+ */
+export interface OrderCodCollectedPayload {
+  orderId: string;
+  amountCents: number;
+  currency: string;
+  collectedAt: string;
+}

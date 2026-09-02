@@ -17,6 +17,11 @@
  *     di-assign ulang — lihat fix di orders.service.ts rejectOrder(),
  *     sebelumnya keliru CANCELLED, sudah dibetulkan)
  *   - order:cancelled → status CONFIRMED + cancelReason
+ *   - order:cod_collected → TIDAK mengubah status order (lihat catatan di
+ *     PaymentsService.collectCod()/OrdersGateway.emitOrderCodCollected —
+ *     status order memang tidak berubah saat COD di-collect). Ini murni
+ *     live receipt: tampilkan banner konfirmasi pembayaran, dismissable,
+ *     terpisah dari state `order` itu sendiri.
  *
  * Connection banner muncul saat socket disconnect (network drop / airplane
  * mode / background). State order TIDAK hilang — banner hanya indikator.
@@ -83,6 +88,12 @@ function formatCurrency(cents: number, currency: string): string {
   }).format(amount);
 }
 
+interface CodReceipt {
+  amountCents: number;
+  currency: string;
+  collectedAt: string;
+}
+
 export function OrderTrackingScreen({
   orderId,
   onBack,
@@ -92,6 +103,7 @@ export function OrderTrackingScreen({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryTrigger, setRetryTrigger] = useState(0);
+  const [codReceipt, setCodReceipt] = useState<CodReceipt | null>(null);
 
   const unsubRef = useRef<Array<() => void>>([]);
 
@@ -173,6 +185,18 @@ export function OrderTrackingScreen({
       );
     });
 
+    // Live payment receipt only — order status/version TIDAK berubah di sini
+    // (lihat doc comment di atas), jadi ini update state terpisah, bukan
+    // patch ke `order`.
+    const unsubCodCollected = ordersSocket.onOrderCodCollected((payload) => {
+      if (!matchesOrder(payload)) return;
+      setCodReceipt({
+        amountCents: payload.amountCents,
+        currency: payload.currency,
+        collectedAt: payload.collectedAt,
+      });
+    });
+
     const unsubConnect = ordersSocket.on('connect', () => setConnected(true));
     const unsubDisconnect = ordersSocket.on('disconnect', () =>
       setConnected(false),
@@ -182,6 +206,7 @@ export function OrderTrackingScreen({
       unsubAccepted,
       unsubRejected,
       unsubCancelled,
+      unsubCodCollected,
       unsubConnect,
       unsubDisconnect,
     ];
@@ -240,6 +265,21 @@ export function OrderTrackingScreen({
           <Text style={styles.bannerText}>
             Koneksi terputus, mencoba reconnect...
           </Text>
+        </View>
+      )}
+
+      {codReceipt && (
+        <View style={styles.codBanner} testID="cod-collected-banner">
+          <Text style={styles.codBannerTitle}>Pembayaran tunai diterima</Text>
+          <Text style={styles.codBannerText}>
+            Driver telah menerima pembayaran COD sebesar{' '}
+            {formatCurrency(codReceipt.amountCents, codReceipt.currency)}.
+          </Text>
+          <Button
+            title="Tutup"
+            onPress={() => setCodReceipt(null)}
+            color="#065f46"
+          />
         </View>
       )}
 
@@ -331,6 +371,27 @@ const styles = StyleSheet.create({
     color: '#92400e',
     fontSize: 14,
     textAlign: 'center',
+  },
+  codBanner: {
+    backgroundColor: '#d1fae5',
+    borderColor: '#059669',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  codBannerTitle: {
+    color: '#065f46',
+    fontSize: 15,
+    fontWeight: '600',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  codBannerText: {
+    color: '#065f46',
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 8,
   },
   title: {
     fontSize: 24,

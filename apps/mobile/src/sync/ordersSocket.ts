@@ -36,6 +36,7 @@ import type {
   OrderAcceptedPayload,
   OrderRejectedPayload,
   OrderCancelledPayload,
+  OrderCodCollectedPayload,
 } from '@delivery/shared';
 
 import { getCurrentToken } from './session';
@@ -61,6 +62,7 @@ export type {
   OrderAcceptedPayload,
   OrderRejectedPayload,
   OrderCancelledPayload,
+  OrderCodCollectedPayload,
 };
 
 /** Event yang bisa di-listen */
@@ -70,6 +72,7 @@ export type OrdersSocketEvent =
   | 'orderAccepted'
   | 'orderRejected'
   | 'orderCancelled'
+  | 'orderCodCollected'
   | 'connect'
   | 'disconnect'
   | 'connect_error';
@@ -288,6 +291,12 @@ class OrdersSocketManager {
       this.socket.on('order:cancelled', (payload: OrderCancelledPayload) => {
         this.emit('orderCancelled', payload);
       });
+
+      // Live payment confirmation only — order status doesn't change, so
+      // there's no version field to reconcile here (see order-events.ts).
+      this.socket.on('order:cod_collected', (payload: OrderCodCollectedPayload) => {
+        this.emit('orderCodCollected', payload);
+      });
     } catch (err) {
       // Stale check: jangan reject promise yang udah bukan punya kita.
       if (gen !== this.generation) return;
@@ -372,7 +381,8 @@ class OrdersSocketManager {
 
   /**
    * Subscribe ke order:rejected event (customer-side).
-   * Fire ketika driver reject — order status CANCELLED.
+   * Fire ketika driver reject — order balik ke CONFIRMED (reassign-able),
+   * BUKAN CANCELLED (lihat order-events.ts untuk riwayat lengkap kenapa).
    */
   onOrderRejected(callback: (payload: OrderRejectedPayload) => void): () => void {
     return this.on<OrderRejectedPayload>('orderRejected', callback);
@@ -385,6 +395,16 @@ class OrdersSocketManager {
    */
   onOrderCancelled(callback: (payload: OrderCancelledPayload) => void): () => void {
     return this.on<OrderCancelledPayload>('orderCancelled', callback);
+  }
+
+  /**
+   * Subscribe ke order:cod_collected event (customer-side).
+   * Fire ketika driver collect COD — order status TIDAK berubah, ini murni
+   * live confirmation pembayaran (mis. tampilkan toast/receipt di tracking
+   * screen), bukan sinyal untuk update status order.
+   */
+  onOrderCodCollected(callback: (payload: OrderCodCollectedPayload) => void): () => void {
+    return this.on<OrderCodCollectedPayload>('orderCodCollected', callback);
   }
 
   /**

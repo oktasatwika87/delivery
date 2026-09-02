@@ -11,6 +11,10 @@
  * 7. Disconnect → tampil banner; Connect → hilang
  * 8. Event untuk orderId lain di-ignore (filter)
  * 9. Cleanup: subscribers di-remove saat unmount
+ * 10. order:cod_collected event → tampil banner receipt dengan jumlah benar
+ * 11. order:cod_collected untuk orderId lain di-ignore
+ * 12. Tombol "Tutup" pada cod banner dismiss banner
+ * 13. order:cod_collected TIDAK mengubah status order (bukan state-sync event)
  */
 
 import React from 'react';
@@ -25,6 +29,7 @@ var mockDisconnectSubscribers: Array<() => void> = [];
 var mockAcceptedSubscribers: Array<(p: any) => void> = [];
 var mockRejectedSubscribers: Array<(p: any) => void> = [];
 var mockCancelledSubscribers: Array<(p: any) => void> = [];
+var mockCodCollectedSubscribers: Array<(p: any) => void> = [];
 
 jest.mock('../sync/ordersSocket', () => ({
   ordersSocket: {
@@ -45,6 +50,12 @@ jest.mock('../sync/ordersSocket', () => ({
       mockCancelledSubscribers.push(cb);
       return () => {
         mockCancelledSubscribers = mockCancelledSubscribers.filter((s) => s !== cb);
+      };
+    },
+    onOrderCodCollected: (cb: (p: any) => void): (() => void) => {
+      mockCodCollectedSubscribers.push(cb);
+      return () => {
+        mockCodCollectedSubscribers = mockCodCollectedSubscribers.filter((s) => s !== cb);
       };
     },
     on: (event: string, cb: () => void): (() => void) => {
@@ -86,6 +97,7 @@ function resetSubscribers(): void {
   mockAcceptedSubscribers = [];
   mockRejectedSubscribers = [];
   mockCancelledSubscribers = [];
+  mockCodCollectedSubscribers = [];
 }
 
 function triggerConnect(): void {
@@ -102,6 +114,9 @@ function triggerRejected(payload: any): void {
 }
 function triggerCancelled(payload: any): void {
   mockCancelledSubscribers.forEach((cb) => cb(payload));
+}
+function triggerCodCollected(payload: any): void {
+  mockCodCollectedSubscribers.forEach((cb) => cb(payload));
 }
 
 const MOCK_ORDER = {
@@ -320,6 +335,89 @@ describe('OrderTrackingScreen', () => {
     expect(queryByText('Driver sedang menyiapkan')).toBeNull();
   });
 
+  it('order:cod_collected event → tampil banner receipt dengan jumlah benar', async () => {
+    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+
+    const { getByText, queryByTestId, getByTestId } = render(
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
+    });
+
+    expect(queryByTestId('cod-collected-banner')).toBeNull();
+
+    act(() => {
+      triggerCodCollected({
+        orderId: 'order-abc-123',
+        amountCents: 50000,
+        currency: 'IDR',
+        collectedAt: '2026-09-02T08:00:00.000Z',
+      });
+    });
+
+    await waitFor(() => {
+      expect(getByTestId('cod-collected-banner')).toBeTruthy();
+      expect(getByText('Pembayaran tunai diterima')).toBeTruthy();
+    });
+
+    // Status order TIDAK berubah — event ini bukan state-sync, murni receipt
+    expect(getByText('Menunggu konfirmasi')).toBeTruthy();
+  });
+
+  it('order:cod_collected untuk orderId LAIN di-ignore', async () => {
+    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+
+    const { getByText, queryByTestId } = render(
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
+    });
+
+    act(() => {
+      triggerCodCollected({
+        orderId: 'order-LAIN-999',
+        amountCents: 50000,
+        currency: 'IDR',
+        collectedAt: '2026-09-02T08:00:00.000Z',
+      });
+    });
+
+    expect(queryByTestId('cod-collected-banner')).toBeNull();
+  });
+
+  it('tombol "Tutup" pada cod banner dismiss banner', async () => {
+    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+
+    const { getByText, queryByTestId, getByTestId } = render(
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
+    });
+
+    act(() => {
+      triggerCodCollected({
+        orderId: 'order-abc-123',
+        amountCents: 50000,
+        currency: 'IDR',
+        collectedAt: '2026-09-02T08:00:00.000Z',
+      });
+    });
+
+    await waitFor(() => {
+      expect(getByTestId('cod-collected-banner')).toBeTruthy();
+    });
+
+    fireEvent.press(getByText('Tutup'));
+
+    expect(queryByTestId('cod-collected-banner')).toBeNull();
+  });
+
   it('disconnect → tampil banner; connect → hilang', async () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
@@ -359,6 +457,7 @@ describe('OrderTrackingScreen', () => {
       expect(mockAcceptedSubscribers.length).toBeGreaterThan(0);
       expect(mockRejectedSubscribers.length).toBeGreaterThan(0);
       expect(mockCancelledSubscribers.length).toBeGreaterThan(0);
+      expect(mockCodCollectedSubscribers.length).toBeGreaterThan(0);
       expect(mockConnectSubscribers.length).toBeGreaterThan(0);
       expect(mockDisconnectSubscribers.length).toBeGreaterThan(0);
     });
@@ -366,6 +465,7 @@ describe('OrderTrackingScreen', () => {
     const acceptedBefore = mockAcceptedSubscribers.length;
     const rejectedBefore = mockRejectedSubscribers.length;
     const cancelledBefore = mockCancelledSubscribers.length;
+    const codCollectedBefore = mockCodCollectedSubscribers.length;
     const connectBefore = mockConnectSubscribers.length;
     const disconnectBefore = mockDisconnectSubscribers.length;
 
@@ -374,6 +474,7 @@ describe('OrderTrackingScreen', () => {
     expect(mockAcceptedSubscribers.length).toBe(acceptedBefore - 1);
     expect(mockRejectedSubscribers.length).toBe(rejectedBefore - 1);
     expect(mockCancelledSubscribers.length).toBe(cancelledBefore - 1);
+    expect(mockCodCollectedSubscribers.length).toBe(codCollectedBefore - 1);
     expect(mockConnectSubscribers.length).toBe(connectBefore - 1);
     expect(mockDisconnectSubscribers.length).toBe(disconnectBefore - 1);
   });

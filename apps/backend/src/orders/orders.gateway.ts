@@ -15,6 +15,7 @@ import {
   type OrderAcceptedPayload,
   type OrderRejectedPayload,
   type OrderCancelledPayload,
+  type OrderCodCollectedPayload,
 } from '@delivery/shared';
 
 /**
@@ -136,6 +137,31 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
       reason,
     };
     this.server.to(customerId).emit('order:cancelled', payload);
+  }
+
+  /**
+   * Emit event ke customer saat driver collect COD (cash on delivery).
+   *
+   * Beda dari accept/reject/cancel: order status TIDAK berubah saat COD
+   * di-collect, jadi payload ini sengaja tidak punya `status`/`version` —
+   * ini murni live confirmation pembayaran, bukan state-sync event. Lihat
+   * PaymentsService.collectCod() (dipanggil hanya di successful-create
+   * branch, tidak di idempotency-replay branch, supaya retry outbox
+   * offline-first tidak double-notify customer untuk collection yang sama).
+   */
+  emitOrderCodCollected(
+    customerId: string,
+    orderId: string,
+    amountCents: number,
+    currency: string,
+  ): void {
+    const payload: OrderCodCollectedPayload = {
+      orderId,
+      amountCents,
+      currency,
+      collectedAt: new Date().toISOString(),
+    };
+    this.server.to(customerId).emit('order:cod_collected', payload);
   }
 
   // ===== Driver-targeted emits (new) =====

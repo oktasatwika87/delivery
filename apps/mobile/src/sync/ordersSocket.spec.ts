@@ -680,4 +680,48 @@ describe('OrdersSocketManager', () => {
       expect(cb).not.toHaveBeenCalled();
     });
   });
+
+  describe('order:cod_collected event (customer-targeted)', () => {
+    test('onOrderCodCollected callback invoked with correct payload, no status/version field', async () => {
+      var cb = jest.fn();
+      ordersSocket.onOrderCodCollected(cb);
+
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await promise;
+
+      var payload = {
+        orderId: 'order-jkl',
+        amountCents: 50000,
+        currency: 'IDR',
+        collectedAt: '2026-09-02T08:00:00.000Z',
+      };
+      trigger('order:cod_collected', payload);
+
+      expect(cb).toHaveBeenCalledWith(payload);
+    });
+
+    test('unsubscribe removes listener', async () => {
+      var cb = jest.fn();
+      var unsubscribe = ordersSocket.onOrderCodCollected(cb);
+
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await promise;
+
+      unsubscribe();
+      trigger('order:cod_collected', {
+        orderId: 'order-jkl',
+        amountCents: 50000,
+        currency: 'IDR',
+        collectedAt: '2026-09-02T08:00:00.000Z',
+      });
+
+      expect(cb).not.toHaveBeenCalled();
+    });
+  });
 });

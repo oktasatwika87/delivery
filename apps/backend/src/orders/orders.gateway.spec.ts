@@ -10,6 +10,7 @@
  * 6. handleDisconnect - last socket deleted → remove map entry
  * 7. emitOrderAvailable - broadcasts to room with minimal payload
  * 8. emitOrderUnavailable - broadcasts with correct reason enum
+ * 9. emitOrderCodCollected - broadcasts to customer, no status/version field
  */
 
 import { JwtService } from '@nestjs/jwt';
@@ -290,6 +291,24 @@ describe('OrdersGateway', () => {
         version: 3,
         reason: 'Kendaraan mogok',
       });
+    });
+  });
+
+  describe('emitOrderCodCollected', () => {
+    test('broadcasts to customerId room, no status/version field', () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-09-02T08:00:00.000Z'));
+
+      gateway.emitOrderCodCollected('customer-uuid', 'order-123', 50000, 'IDR');
+
+      expect(mockServer.to).toHaveBeenCalledWith('customer-uuid');
+      expect(mockServer.emit).toHaveBeenCalledWith('order:cod_collected', {
+        orderId: 'order-123',
+        amountCents: 50000,
+        currency: 'IDR',
+        collectedAt: '2026-09-02T08:00:00.000Z',
+      });
+
+      jest.useRealTimers();
     });
   });
 });
