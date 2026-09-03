@@ -459,3 +459,46 @@ export async function collectCodOrder(
     throw err;
   }
 }
+
+/**
+ * Flag COD as orphaned to server — driver collected COD offline but order
+ * was reassigned before sync. Fire-and-forget: network failure here is
+ * acceptable because the local `orphaned_needs_review` status is the fallback.
+ */
+export async function flagOrphanedCod(
+  orderId: string,
+  amountCents: number,
+  idempotencyKey: string
+): Promise<void> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await fetchWithAuth(`${API_BASE}/payments/${orderId}/flag-orphaned`, {
+      method: 'POST',
+      body: JSON.stringify({ amountCents, idempotencyKey }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.status === 401) {
+      throw new UnauthorizedError();
+    }
+
+    if (!res.ok) {
+      const body = await res.text();
+      console.warn(`[flagOrphanedCod] Server rejected: status=${res.status}, body=${body}`);
+      // Non-fatal — local orphan status is the fallback
+    } else {
+      console.log(`[flagOrphanedCod] Orphan flagged for order ${orderId}`);
+    }
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      console.warn('[flagOrphanedCod] Request aborted due to 8s timeout — non-fatal');
+    } else {
+      console.warn('[flagOrphanedCod] Network error — non-fatal, local orphan status preserved:', err.message);
+    }
+    // Fire-and-forget: throw is intentionally suppressed
+  }
+}

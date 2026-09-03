@@ -119,6 +119,11 @@ model Payment {
   kind           String // 'PAYMENT' | 'TIP' | 'REFUND'
   externalRef    String?         @map("external_ref")
 
+  // Timestamp when COD was flagged as orphaned (driver collected COD offline,
+  // but order was reassigned/cancelled before sync). Server-side flag via
+  // POST /payments/:orderId/flag-orphaned.
+  orphanedAt     DateTime?       @map("orphaned_at")
+
   version   Int       @default(1) @map("server_version")
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")

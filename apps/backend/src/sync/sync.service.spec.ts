@@ -54,6 +54,9 @@ describe('SyncService.applyOne', () => {
               upsert: jest.fn(),
               update: jest.fn(),
             },
+            user: {
+              updateMany: jest.fn(),
+            },
           },
         },
       ],
@@ -408,6 +411,9 @@ describe('applyOne — order update validation', () => {
               findUnique: jest.fn(),
               upsert: jest.fn(),
               update: jest.fn(),
+            },
+            user: {
+              updateMany: jest.fn(),
             },
           },
         },
@@ -857,6 +863,9 @@ describe('SyncService.pullSince', () => {
             },
             syncCursor: {
               upsert: jest.fn(),
+            },
+            user: {
+              updateMany: jest.fn(),
             },
           },
         },

@@ -65,6 +65,7 @@ jest.mock('./client', () => ({
   rejectOrder: jest.fn(),
   cancelOrder: jest.fn(),
   collectCodOrder: jest.fn(),
+  flagOrphanedCod: jest.fn().mockResolvedValue(undefined),
   UnauthorizedError: class extends Error {
     constructor() { super('Unauthorized'); this.name = 'UnauthorizedError'; }
   },

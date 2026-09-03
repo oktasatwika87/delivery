@@ -4,12 +4,14 @@ import { PrismaClient } from '@prisma/client';
 import type { CreatePaymentInput, Payment } from '@delivery/shared';
 
 import { OrdersGateway } from '../orders/orders.gateway';
+import { EmailService } from '../email/email.service';
 
 @Injectable()
 export class PaymentsService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly ordersGateway: OrdersGateway,
+    private readonly emailService: EmailService,
   ) {}
 
   async create(input: CreatePaymentInput, userId: string): Promise<Payment> {
@@ -108,6 +110,86 @@ export class PaymentsService {
     return this.toDomain(row);
   }
 
+  /**
+   * Flag COD as orphaned — driver collected COD offline but order was reassigned
+   * before sync. Finds existing pending payment record (by idempotencyKey) and
+   * marks it orphaned, then notifies HSIN via email.
+   *
+   * This is a server-side record flag only — the mobile app already has the
+   * local `orphaned_needs_review` status. This endpoint syncs that state to server
+   * so HSIN gets notified automatically.
+   */
+  async flagOrphanedCod(
+    orderId: string,
+    driverId: string,
+    amountCents: number,
+    idempotencyKey: string,
+  ): Promise<Payment> {
+    // Verify driver exists and has the role
+    const driver = await this.prisma.user.findUnique({ where: { id: driverId } });
+    if (!driver) {
+      throw new NotFoundException('Driver not found');
+    }
+
+    // Find existing payment record by idempotencyKey
+    const existing = await this.prisma.payment.findUnique({
+      where: { idempotencyKey },
+    });
+
+    const now = new Date();
+
+    if (existing) {
+      // Update existing record with orphanedAt
+      const updated = await this.prisma.payment.update({
+        where: { id: existing.id },
+        data: { orphanedAt: now, version: { increment: 1 } },
+      });
+
+      // Fire-and-forget email notification to HSIN
+      this.emailService.sendOrphanedCodNotification({
+        orderId,
+        amountCents,
+        currency: existing.currency,
+        driverId,
+        driverName: driver.name,
+        happenedAt: now,
+      });
+
+      return this.toDomain(updated);
+    } else {
+      // No existing payment record — create one marked as orphaned.
+      // This handles the case where the outbox detected orphan before any
+      // payment record was ever created (e.g., collect-cod never succeeded).
+      const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+      const currency = order?.currency ?? 'IDR';
+
+      const row = await this.prisma.payment.create({
+        data: {
+          orderId,
+          idempotencyKey,
+          method: 'CASH',
+          status: 'PENDING',
+          amountCents,
+          currency,
+          kind: 'PAYMENT',
+          orphanedAt: now,
+        },
+      });
+
+      // Fire-and-forget email notification to HSIN
+      this.emailService.sendOrphanedCodNotification({
+        orderId,
+        amountCents,
+        currency,
+        driverId,
+        driverName: driver.name,
+        happenedAt: now,
+      });
+
+      return this.toDomain(row);
+    }
+  }
+
   private toDomain(row: {
     id: string;
     orderId: string;
@@ -118,6 +200,7 @@ export class PaymentsService {
     currency: string;
     kind: string;
     externalRef: string | null;
+    orphanedAt: Date | null;
     version: number;
     createdAt: Date;
     updatedAt: Date;
@@ -132,6 +215,7 @@ export class PaymentsService {
       currency: row.currency,
       kind: row.kind as Payment['kind'],
       externalRef: row.externalRef ?? undefined,
+      orphanedAt: row.orphanedAt?.toISOString() ?? undefined,
       version: row.version,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),

@@ -54,6 +54,13 @@ export interface Payment {
   /** Untuk split payment: 'PAYMENT' (utama), 'TIP', 'REFUND'. */
   kind: 'PAYMENT' | 'TIP' | 'REFUND';
 
+  /**
+   * Timestamp when COD was flagged as orphaned (driver collected COD offline,
+   * but order was reassigned/cancelled before sync). Server-side flag via
+   * POST /payments/:orderId/flag-orphaned.
+   */
+  orphanedAt?: string;
+
   createdAt: string;
   updatedAt: string;
   version: number;

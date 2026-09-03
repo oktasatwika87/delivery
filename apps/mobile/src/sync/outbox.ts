@@ -28,7 +28,7 @@ import { PendingActionModel, type CancelPayload, type CollectCodPayload } from '
 import { OrderModel } from '../db/models/OrderModel';
 import { syncEvents } from './syncEvents';
 import { getCurrentUserId } from './session';
-import { rejectOrder, cancelOrder, collectCodOrder } from './client';
+import { rejectOrder, cancelOrder, collectCodOrder, flagOrphanedCod } from './client';
 import { generateCodIdempotencyKey } from './idempotency';
 import { syncCoordinator } from './coordinator';
 
@@ -378,6 +378,14 @@ async function processCollectCod(action: PendingActionModel, db: Database): Prom
     if (isOrphanedCod(err)) {
       console.warn(`[outbox] Orphaned COD detected for order ${action.targetOrderId}`);
       await markActionOrphaned(action, db);
+
+      // Fire-and-forget: notify server so HSIN gets email
+      // If this also fails, local orphan status is the fallback
+      if (payload) {
+        flagOrphanedCod(action.targetOrderId, payload.amountCents, action.idempotencyKey)
+          .catch((e) => console.warn('[outbox] flagOrphanedCod non-fatal error:', e.message));
+      }
+
       return { pendingActionId: action.id, status: 'orphaned', error: 'Order reassigned/cancelled' };
     }
 
@@ -385,6 +393,13 @@ async function processCollectCod(action: PendingActionModel, db: Database): Prom
     if (isVersionConflict(err)) {
       console.warn(`[outbox] Version conflict for COD on order ${action.targetOrderId} — treating as orphaned`);
       await markActionOrphaned(action, db);
+
+      // Fire-and-forget: notify server so HSIN gets email
+      if (payload) {
+        flagOrphanedCod(action.targetOrderId, payload.amountCents, action.idempotencyKey)
+          .catch((e) => console.warn('[outbox] flagOrphanedCod non-fatal error:', e.message));
+      }
+
       return { pendingActionId: action.id, status: 'orphaned', error: 'Version conflict (order changed)' };
     }
 
