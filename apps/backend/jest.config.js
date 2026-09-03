@@ -3,7 +3,7 @@ module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
   roots: ['<rootDir>/src', '<rootDir>/test'],
-  testMatch: ['**/*.spec.ts', '**/*.e2e-spec.ts'],
+  testMatch: ['**/*.spec.ts'],
   moduleNameMapper: {
     '^@delivery/shared$': '<rootDir>/src/__mocks__/@delivery/shared.ts',
     '^@nestjs/schedule$': '<rootDir>/src/__mocks__/@nestjs/schedule.ts',

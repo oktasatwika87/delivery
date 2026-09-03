@@ -10,6 +10,10 @@
  * 6. Race condition: 2 driver accept bersamaan → cuma 1 sukses, 1 dapat 409
  */
 
+// E2E tests boot real AppModule — unmock @nestjs/schedule so ScheduleModule.forRoot()
+// returns the real class, not the string-only mock (which causes WeakMap error in DI).
+jest.unmock('@nestjs/schedule');
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';

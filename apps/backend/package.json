@@ -16,6 +16,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "test": "jest",
+    "test:e2e": "jest --config jest.e2e.config.js",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage"
   },
