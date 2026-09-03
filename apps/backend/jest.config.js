@@ -6,6 +6,7 @@ module.exports = {
   testMatch: ['**/*.spec.ts', '**/*.e2e-spec.ts'],
   moduleNameMapper: {
     '^@delivery/shared$': '<rootDir>/src/__mocks__/@delivery/shared.ts',
+    '^@nestjs/schedule$': '<rootDir>/src/__mocks__/@nestjs/schedule.ts',
   },
   transform: {
     '^.+\\.tsx?$': [

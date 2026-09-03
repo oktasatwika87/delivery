@@ -28,6 +28,10 @@ model User {
   // bcrypt hash — null saat register pre-migrasi atau akun lama. Endpoint login
   // treat null hash sebagai invalid (otomatis reject), jadi aman set optional.
   passwordHash String? @map("password_hash")
+  // Di-update setiap kali device driver berhasil sync ke server.
+  // Dipakai oleh ReassignmentService untuk deteksi driver macet
+  // (nggak ada kontak ke server setelah N menit).
+  lastSeenAt DateTime? @map("last_seen_at")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

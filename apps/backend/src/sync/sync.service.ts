@@ -107,6 +107,13 @@ export class SyncService {
       });
     }
 
+    // Update driver lastSeenAt setiap kali device berhasil sync.
+    // Ini yang dipakai ReassignmentService untuk deteksi driver macet.
+    await this.prisma.user.updateMany({
+      where: { id: userId },
+      data: { lastSeenAt: new Date() },
+    });
+
     return {
       nextCursor: lastUpdatedAt ? lastUpdatedAt.toISOString() : since,
       records,
