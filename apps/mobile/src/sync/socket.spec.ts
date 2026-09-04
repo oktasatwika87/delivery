@@ -29,7 +29,8 @@ interface MockSocket {
   emit: any;
 }
 
-// @ts-expect-error - mockSocket declared later to avoid Jest hoisting conflict
+// @ts-expect-error - Jest hoists jest.mock() factory; TS sees mockSocket inside factory as an implicit
+// declaration with type Mock<...> from jest.fn(), conflicting with explicit MockSocket interface
 var mockSocket: MockSocket = {
   get connected() { return isConnected; },
   id: 'mock-socket-id',
