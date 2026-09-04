@@ -264,12 +264,32 @@ describe('SyncCoordinator', () => {
       // @ts-expect-error - accessing private method for testing
       await coordinator.applyPull(pullResponse, mockDb);
 
-      // Verifikasi: row ter-create di collection orders
+      // Verifikasi: row ter-create di collection orders dengan semua field order
+      // Deepened dari 3 ke full-field assertion biar sama rigor dengan
+      // payment/chat_message create-path tests (yang udah full-field dari awal).
       const records = state.records.get('orders');
       const created = records?.get('order-new-1');
       expect(created).toBeDefined();
       expect(created!.serverVersion).toBe(1);
+      expect(created!.customerId).toBe('cust-1');
+      expect(created!.driverId).toBeNull();
       expect(created!.status).toBe('CONFIRMED');
+      // JSON columns — items + deliveryAddress di-serialize via @json decorator,
+      // tapi mock ini assign raw object langsung (lihat buildRawRowForCreate).
+      expect(created!.itemsJson).toEqual([
+        { id: 'item-1', name: 'Nasi Goreng', priceCents: 25000, quantity: 1 },
+      ]);
+      expect(created!.addressJson).toEqual({
+        street: 'Jl Sudirman No. 1',
+        city: 'Jakarta',
+      });
+      expect(created!.totalCents).toBe(25000);
+      expect(created!.currency).toBe('IDR');
+      expect(created!.notes).toBe('Pedesin');
+      // cancelledBy/cancelReason absent dari pull data → fallback null
+      // (buildRawRowForCreate order branch: (d as any).cancelledBy ?? null).
+      expect(created!.cancelledBy).toBeNull();
+      expect(created!.cancelReason).toBeNull();
       expect(created!._raw._status).toBe('synced');
     });
 
