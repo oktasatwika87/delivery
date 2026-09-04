@@ -29,8 +29,6 @@ interface MockSocket {
   emit: any;
 }
 
-// @ts-expect-error - Jest hoists jest.mock() factory; TS sees mockSocket inside factory as an implicit
-// declaration with type Mock<...> from jest.fn(), conflicting with explicit MockSocket interface
 var mockSocket: MockSocket = {
   get connected() { return isConnected; },
   id: 'mock-socket-id',
@@ -72,8 +70,7 @@ jest.mock('./session', function() {
   return { getCurrentToken: getCurrentTokenMock };
 });
 
-function trigger(event: string) {
-  var args = Array.prototype.slice.call(arguments, 1);
+function trigger(event: string, ...args: any[]) {
   var handlers = mockHandlers[event];
   if (handlers) handlers.forEach(function(h) { h.apply(null, args); });
   // Simulate socket state changes for 'connect' event
@@ -395,7 +392,7 @@ describe('ChatSocketManager', function() {
 
       // Verify once('reconnect_failed') was called during initial connect
       var reconnectFailedCallsInitial = mockSocket.once.mock.calls.filter(
-        function(call) { return call[0] === 'reconnect_failed'; }
+        function(call: any[]) { return call[0] === 'reconnect_failed'; }
       );
       expect(reconnectFailedCallsInitial.length).toBe(1);
 
@@ -412,7 +409,7 @@ describe('ChatSocketManager', function() {
 
       // Count of once('reconnect_failed') calls after reconnect
       var reconnectFailedCallsAfter = mockSocket.once.mock.calls.filter(
-        function(call) { return call[0] === 'reconnect_failed'; }
+        function(call: any[]) { return call[0] === 'reconnect_failed'; }
       );
       var onceCallCountAfterReconnect = reconnectFailedCallsAfter.length;
 
@@ -421,3 +418,11 @@ describe('ChatSocketManager', function() {
     });
   });
 });
+
+// File ini script (no top-level imports/exports) secara default → TS2393
+// duplicate function implementation bakal fire waktu ada file script
+// lain di project yang declare function dengan nama sama (e.g.
+// ordersSocket.spec.ts juga punya `function trigger`). export {} di
+// bawah ini bikin file jadi module → function jadi module-scoped, gak
+// collision lagi. Test body gak berubah.
+export {};
