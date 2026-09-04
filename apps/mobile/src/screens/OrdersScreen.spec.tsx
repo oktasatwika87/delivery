@@ -415,7 +415,7 @@ describe('stale pending action badge', () => {
     mockHasPendingAction.mockImplementation((orderId: string) =>
       Promise.resolve(orderId === 'order-fresh'),
     );
-    mockHasStalePendingAction.mockImplementation((orderId: string) =>
+    mockHasStalePendingAction.mockImplementation((_orderId: string) =>
       Promise.resolve(false), // not stale
     );
     const myOrders = [makeOrder({ id: 'order-fresh' })];
@@ -445,7 +445,7 @@ describe('stale pending action badge', () => {
     );
     const myOrders = [makeOrder({ id: 'order-stale' }), makeOrder({ id: 'order-fresh' })];
 
-    const { getByText, queryByText } = render(
+    const { getByText } = render(
       <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
     );
 
