@@ -106,6 +106,47 @@ function OrderConflictBanner({ event, onDismiss }: OrderConflictBannerProps): Re
   );
 }
 
+// ─── Last Conflict Banner (Skenario A) ─────────────────────────────────────
+
+interface LastConflictBannerProps {
+  order: OrderModel;
+  isDismissed: boolean;
+  onDismiss: () => void;
+}
+
+const CONFLICT_BANNER_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function LastConflictBanner({ order, isDismissed, onDismiss }: LastConflictBannerProps): React.JSX.Element | null {
+  // Auto-expire: 24 hours dari last_conflict_at
+  const isExpired = !order.lastConflictAt ||
+    (Date.now() - new Date(order.lastConflictAt).getTime()) > CONFLICT_BANNER_TTL_MS;
+
+  if (isDismissed || isExpired || !order.lastConflictReason) return null;
+
+  const getMessage = () => {
+    switch (order.lastConflictReason) {
+      case 'accepted-by-other':
+        return 'Order yang Anda batalkan ternyata sudah di-accept driver lain. Silakan cek status terbaru.';
+      case 'reassigned':
+        return 'Order yang Anda batalkan ternyata sudah diselesaikan. Status order sudah tidak bisa dibatalkan.';
+      case 'order-status-conflict':
+      default:
+        return 'Order yang Anda batalkan ternyata sudah tidak bisa dibatalkan — server sudah ubah status. Silakan cek status terbaru.';
+    }
+  };
+
+  return (
+    <View style={styles.conflictBanner}>
+      <Text style={styles.conflictBannerText}>
+        ⚠️ {getMessage()}
+      </Text>
+      <TouchableOpacity onPress={onDismiss} style={styles.conflictBannerDismiss}>
+        <Text style={styles.conflictBannerDismissText}>✕</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 // ─── Status Badge ───────────────────────────────────────────────────────────
 
 const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
@@ -183,6 +224,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [payments, setPayments] = useState<PaymentModel[]>([]);
   const [failedBannerDismissed, setFailedBannerDismissed] = useState(false);
   const [conflictEvent, setConflictEvent] = useState<OrderConflictEvent | null>(null);
+  // Skenario A: dismiss state untuk LastConflictBanner (persisted signal)
+  const [lastConflictDismissed, setLastConflictDismissed] = useState(false);
   const [hasPending, setHasPending] = useState(false);
   const [isPendingStale, setIsPendingStale] = useState(false);
   // Use ref for synchronous inflight guard (state updates are async, refs are sync)
@@ -480,6 +523,13 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
       <OrderConflictBanner
         event={conflictEvent}
         onDismiss={() => setConflictEvent(null)}
+      />
+
+      {/* Last Conflict Banner (Skenario A, persisted) */}
+      <LastConflictBanner
+        order={order}
+        isDismissed={lastConflictDismissed}
+        onDismiss={() => setLastConflictDismissed(true)}
       />
 
       {/* Pending Action Indicator */}
