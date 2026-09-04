@@ -25,19 +25,25 @@
  * Module ini di-resolve via moduleNameMapper di jest.config.js.
  */
 
+// File ini ditulis CommonJS style (require/module.exports) supaya jest runtime
+// bisa load via moduleNameMapper. TS module=ESNext tidak bawa `module`
+// secara default (`@types/node` tidak di-include di tsconfig types), jadi
+// declare di sini untuk typecheck only. Runtime pakai Node globals asli.
+declare const module: { exports: any };
+
 const React = require('react');
 
 // ─── Helpers ────────────────────────────────────────────────────────
-function makeComponent(displayName) {
-  const Component = (props) => React.createElement(displayName, props, props.children);
+function makeComponent(displayName: string) {
+  const Component = (props: any) => React.createElement(displayName, props, props.children);
   Component.displayName = displayName;
   return Component;
 }
 
 // ─── StyleSheet ─────────────────────────────────────────────────────
 const StyleSheet = {
-  create: (styles) => styles,
-  flatten: (style) => {
+  create: (styles: any) => styles,
+  flatten: (style: any) => {
     if (style == null) return undefined;
     if (!Array.isArray(style)) return style;
     return Object.assign({}, ...style.filter(Boolean));
@@ -115,7 +121,7 @@ function SectionList(props: any) {
 }
 SectionList.displayName = 'SectionList';
 const RefreshControl = makeComponent('RefreshControl');
-const Button = (props) => {
+const Button = (props: any) => {
   const { title, ...rest } = props;
   // Render as Text inside View so getByText can find the title
   return React.createElement(View, rest,
@@ -143,7 +149,7 @@ class Linking {
 // ─── Platform (cukup untuk unit test) ────────────────────────────────
 const Platform = {
   OS: 'android',
-  select: (obj) => obj.android || obj.default,
+  select: (obj: any) => obj.android || obj.default,
   Version: 35,
 };
 
