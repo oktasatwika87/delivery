@@ -30,11 +30,12 @@ const makeLocation = (lat: number, lng: number): Location => ({
   coords: {
     latitude: lat,
     longitude: lng,
-    altitude: null,
+    // Coordinates type uses `?: number` (number | undefined), bukan
+    // number | null. Pakai undefined biar match type.
+    altitude: undefined,
     accuracy: 10,
-    altitudeAccuracy: null,
-    heading: null,
-    speed: null,
+    heading: undefined,
+    speed: undefined,
   },
   timestamp: 1000,
 });
@@ -54,7 +55,7 @@ describe('locationService', () => {
 
     // Mock state-only reset: locationListeners Set + call history.
     // Implementation (default fan-out) dipertahankan.
-    LocationManager._reset();
+    (LocationManager as any)._reset();
   });
 
   afterEach(() => {
@@ -91,7 +92,7 @@ describe('locationService', () => {
   describe('unsubscribe (return function dari subscribe)', () => {
     test('memanggil LocationManager.removeListener() dengan benar', async () => {
       const unsubscribe = await subscribe(() => {});
-      LocationManager.removeListener.mockClear();
+      (LocationManager.removeListener as jest.Mock).mockClear();
 
       unsubscribe();
 
@@ -101,7 +102,7 @@ describe('locationService', () => {
     test('removeListener dipanggil dengan listener yang sama dengan addListener', async () => {
       const unsubscribe = await subscribe(() => {});
       const bridgeListener = (LocationManager.addListener as jest.Mock).mock.calls[0][0];
-      LocationManager.removeListener.mockClear();
+      (LocationManager.removeListener as jest.Mock).mockClear();
 
       unsubscribe();
 
@@ -131,7 +132,7 @@ describe('locationService', () => {
       const unsub3 = await subscribe((loc) => locations3.push(loc));
 
       const mockLocation = makeLocation(-6.175, 106.827);
-      LocationManager._emitLocation(mockLocation);
+      (LocationManager as any)._emitLocation(mockLocation);
 
       expect(locations1).toHaveLength(1);
       expect(locations2).toHaveLength(1);
@@ -157,7 +158,7 @@ describe('locationService', () => {
       unsub1();
 
       const mockLocation = makeLocation(-6.2, 106.85);
-      LocationManager._emitLocation(mockLocation);
+      (LocationManager as any)._emitLocation(mockLocation);
 
       expect(locations1).toHaveLength(0);
       expect(locations2).toHaveLength(1);
@@ -181,7 +182,7 @@ describe('locationService', () => {
       ];
 
       for (const p of points) {
-        LocationManager._emitLocation(p);
+        (LocationManager as any)._emitLocation(p);
       }
 
       expect(locations1).toHaveLength(3);
