@@ -65,7 +65,7 @@ describe('GraphHopperRoutingProvider', () => {
         json: () => Promise.resolve(validGraphHopperResponse),
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       const route = await provider.getRoute(mockRequest);
 
@@ -97,7 +97,7 @@ describe('GraphHopperRoutingProvider', () => {
         typeof fetch
       >;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await expect(provider.getRoute(mockRequest)).rejects.toThrow('Network error');
 
@@ -112,7 +112,7 @@ describe('GraphHopperRoutingProvider', () => {
         Object.assign(new Error('Aborted'), { name: 'AbortError' }),
       ) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await expect(provider.getRoute(mockRequest)).rejects.toThrow('timeout');
 
@@ -128,7 +128,7 @@ describe('GraphHopperRoutingProvider', () => {
         statusText: 'Unauthorized',
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await expect(provider.getRoute(mockRequest)).rejects.toThrow(InvalidConfigError);
       await expect(provider.getRoute(mockRequest)).rejects.toThrow('HTTP 401');
@@ -143,7 +143,7 @@ describe('GraphHopperRoutingProvider', () => {
         statusText: 'Forbidden',
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await expect(provider.getRoute(mockRequest)).rejects.toThrow(InvalidConfigError);
       await expect(provider.getRoute(mockRequest)).rejects.toThrow('HTTP 403');
@@ -159,7 +159,7 @@ describe('GraphHopperRoutingProvider', () => {
         statusText: 'Internal Server Error',
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await expect(provider.getRoute(mockRequest)).rejects.toThrow('HTTP 500');
       await expect(provider.getRoute(mockRequest)).rejects.not.toThrow(InvalidConfigError);
@@ -176,7 +176,7 @@ describe('GraphHopperRoutingProvider', () => {
           }),
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await expect(provider.getRoute(mockRequest)).rejects.toThrow('Invalid API key');
     });
@@ -192,7 +192,7 @@ describe('GraphHopperRoutingProvider', () => {
           }),
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await expect(provider.getRoute(mockRequest)).rejects.toThrow('Too many requests');
     });
@@ -205,7 +205,7 @@ describe('GraphHopperRoutingProvider', () => {
         json: () => Promise.resolve({ paths: [] }),
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await expect(provider.getRoute(mockRequest)).rejects.toThrow('No route found');
     });
@@ -218,7 +218,7 @@ describe('GraphHopperRoutingProvider', () => {
         json: () => Promise.reject(new Error('Parse error')),
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await expect(provider.getRoute(mockRequest)).rejects.toThrow('bukan valid JSON');
     });
@@ -231,7 +231,7 @@ describe('GraphHopperRoutingProvider', () => {
         json: () => Promise.resolve(validGraphHopperResponse),
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await provider.getRoute({ ...mockRequest, profile: 'driving' });
 
@@ -249,7 +249,7 @@ describe('GraphHopperRoutingProvider', () => {
         json: () => Promise.resolve(validGraphHopperResponse),
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await provider.getRoute({ ...mockRequest, profile: 'walking' });
 
@@ -267,7 +267,7 @@ describe('GraphHopperRoutingProvider', () => {
         json: () => Promise.resolve(validGraphHopperResponse),
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       await provider.getRoute({ ...mockRequest, profile: 'cycling' });
 
@@ -289,7 +289,7 @@ describe('GraphHopperRoutingProvider', () => {
         json: () => Promise.resolve(validGraphHopperResponse),
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       const route = await provider.getRoute(mockRequest);
 
@@ -320,7 +320,7 @@ describe('GraphHopperRoutingProvider', () => {
           }),
       }) as jest.MockedFunction<typeof fetch>;
 
-      jest.spyOn(global, 'fetch').mockImplementation(mockFetch);
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
 
       const route = await provider.getRoute(mockRequest);
 

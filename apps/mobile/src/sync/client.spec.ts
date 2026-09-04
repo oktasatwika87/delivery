@@ -8,10 +8,10 @@ import type { CreateOrderInput, Order } from '@delivery/shared';
 import * as clientModule from './client';
 
 describe('createOrder', () => {
-  const originalFetch = global.fetch;
+  const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
-    global.fetch = jest.fn();
+    globalThis.fetch = jest.fn();
     // Mock getCurrentToken untuk return token test
     jest.doMock('./session', () => ({
       getCurrentToken: jest.fn().mockResolvedValue('test-token'),
@@ -19,7 +19,7 @@ describe('createOrder', () => {
   });
 
   afterEach(() => {
-    global.fetch = originalFetch;
+    globalThis.fetch = originalFetch;
     jest.clearAllMocks();
     jest.resetModules();
   });
@@ -48,7 +48,7 @@ describe('createOrder', () => {
       updatedAt: '2026-08-30T00:00:00.000Z',
     };
 
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
       status: 201,
       ok: true,
       json: () => Promise.resolve(mockOrder),
@@ -70,7 +70,7 @@ describe('createOrder', () => {
     const result = await createOrder(input);
 
     expect(result).toEqual(mockOrder);
-    expect(global.fetch).toHaveBeenCalledWith(
+    expect(globalThis.fetch).toHaveBeenCalledWith(
       'http://localhost:3000/orders',
       expect.objectContaining({
         method: 'POST',
@@ -82,7 +82,7 @@ describe('createOrder', () => {
   it('throw error dengan pesan jelas saat 4xx', async () => {
     const { createOrder } = clientModule;
 
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
       status: 403,
       ok: false,
       text: () => Promise.resolve('Only customers can create orders'),
@@ -99,7 +99,7 @@ describe('createOrder', () => {
   it('throw error dengan pesan jelas saat 5xx', async () => {
     const { createOrder } = clientModule;
 
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
       status: 500,
       ok: false,
       text: () => Promise.resolve('Internal Server Error'),
