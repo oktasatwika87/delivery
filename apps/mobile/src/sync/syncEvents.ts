@@ -8,7 +8,7 @@
  */
 export interface OrderConflictEvent {
   orderId: string;
-  reason: 'reassigned' | 'order-status-conflict' | 'accepted-by-other' | 'rejected-oc';
+  reason: 'reassigned' | 'order-status-conflict' | 'accepted-by-other' | 'rejected-oc' | 'cancelled-by-server';
   serverStatus: string;
   serverChangedAt: string;
   ackReason?: string; // dari server, kalau ada
