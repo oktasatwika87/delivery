@@ -11,13 +11,26 @@
  * - disconnect() rejection doesn't propagate cleanly via toThrow matcher
  */
 
-var mockHandlers = {};
+var mockHandlers: Record<string, Set<Function>> = {};
 var isConnected = false;
 
 // Track io() call arguments — array of [url, options] pairs per call
-var ioCallHistory = [];
+var ioCallHistory: Array<{ url: string; options: any }> = [];
 
-var mockSocket = {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+interface MockSocket {
+  readonly connected: boolean;
+  id: string;
+  readonly handlers: Record<string, Set<Function>>;
+  on: any;
+  once: any;
+  off: any;
+  disconnect: any;
+  emit: any;
+}
+
+// @ts-expect-error - mockSocket declared later to avoid Jest hoisting conflict
+var mockSocket: MockSocket = {
   get connected() { return isConnected; },
   id: 'mock-socket-id',
   get handlers() { return mockHandlers; },
@@ -58,7 +71,7 @@ jest.mock('./session', function() {
   return { getCurrentToken: getCurrentTokenMock };
 });
 
-function trigger(event) {
+function trigger(event: string) {
   var args = Array.prototype.slice.call(arguments, 1);
   var handlers = mockHandlers[event];
   if (handlers) handlers.forEach(function(h) { h.apply(null, args); });
@@ -69,8 +82,8 @@ function trigger(event) {
 }
 
 describe('ChatSocketManager', function() {
-  var chatSocket;
-  var getCurrentTokenMock;
+  var chatSocket: any;
+  var getCurrentTokenMock: any;
 
   beforeEach(function() {
     // 1. Reset module cache — ini penting karena chatSocket adalah singleton
