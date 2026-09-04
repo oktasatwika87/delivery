@@ -130,6 +130,20 @@ jest.mock('../db', () => ({
           mockState.records.set(row.id, row);
           return attachMethods(row);
         },
+        prepareCreateFromDirtyRaw(dirtyRaw: any) {
+          // Return a mock prepared record that batch() can process
+          const row = {
+            id: dirtyRaw.id,
+            _raw: { id: dirtyRaw.id, _status: dirtyRaw._status },
+            actionType: dirtyRaw.actionType,
+            targetOrderId: dirtyRaw.targetOrderId,
+            expectedVersion: dirtyRaw.expectedVersion,
+            idempotencyKey: dirtyRaw.idempotencyKey,
+            payloadJson: dirtyRaw.payloadJson,
+            status: dirtyRaw.status,
+          };
+          return row;
+        },
       };
     },
     async write<T>(fn: () => Promise<T>): Promise<T> {
@@ -139,7 +153,14 @@ jest.mock('../db', () => ({
       mockState.batchOps = [];
       return fn();
     },
-    async batch(..._ops: unknown[]) {
+    async batch(...ops: unknown[]) {
+      // Process prepared records — store them in records map
+      for (const op of ops) {
+        const prepared = op as any;
+        if (prepared && prepared.id) {
+          mockState.records.set(prepared.id, prepared);
+        }
+      }
       mockState.batchOps = [];
     },
   },
@@ -214,6 +235,72 @@ describe('outbox', () => {
       expect(actions[0].actionType).toBe('collect_cod');
       expect(actions[0].payloadJson).toEqual({ amountCents: 50000 });
       expect(actions[0].idempotencyKey).toBe('cod:test-uuid-123');
+    });
+  });
+
+  describe('REGRESSION: prepareCreateFromDirtyRaw pattern', () => {
+    test('enqueueReject creates record with id from prepareCreateFromDirtyRaw', async () => {
+      const result = await enqueueReject('order-reg-reject', 3);
+
+      expect(result.success).toBe(true);
+      expect(result.pendingActionId).toBeDefined();
+
+      // Record should be in mockState.records with the returned pendingActionId
+      const actions = [...mockState.records.values()];
+      expect(actions.some(a => a.id === result.pendingActionId)).toBe(true);
+      expect(actions.some(a => a.actionType === 'reject')).toBe(true);
+    });
+
+    test('enqueueCancel creates record with id from prepareCreateFromDirtyRaw', async () => {
+      const result = await enqueueCancel('order-reg-cancel', 7, 'Alasan test');
+
+      expect(result.success).toBe(true);
+      expect(result.pendingActionId).toBeDefined();
+
+      // Record should be in mockState.records with the returned pendingActionId
+      const actions = [...mockState.records.values()];
+      expect(actions.some(a => a.id === result.pendingActionId)).toBe(true);
+      expect(actions.some(a => a.actionType === 'cancel')).toBe(true);
+    });
+
+    test('enqueueCollectCod creates record with id from prepareCreateFromDirtyRaw', async () => {
+      const result = await enqueueCollectCod('order-reg-cod', 75000);
+
+      expect(result.success).toBe(true);
+      expect(result.pendingActionId).toBeDefined();
+
+      // Record should be in mockState.records with the returned pendingActionId
+      const actions = [...mockState.records.values()];
+      expect(actions.some(a => a.id === result.pendingActionId)).toBe(true);
+      expect(actions.some(a => a.actionType === 'collect_cod')).toBe(true);
+    });
+
+    test('enqueueReject pendingActionId is valid UUID format', async () => {
+      const result = await enqueueReject('order-uuid-check', 1);
+
+      expect(result.success).toBe(true);
+      expect(result.pendingActionId).toBeDefined();
+      // UUID v4 format
+      expect(result.pendingActionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+
+      // The record in mockState should have this exact UUID as id
+      const record = mockState.records.get(result.pendingActionId!);
+      expect(record).toBeDefined();
+      expect(record.id).toBe(result.pendingActionId);
+    });
+
+    test('enqueueCancel pendingActionId is valid UUID format', async () => {
+      const result = await enqueueCancel('order-uuid-check-2', 2);
+
+      expect(result.success).toBe(true);
+      expect(result.pendingActionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    });
+
+    test('enqueueCollectCod pendingActionId is valid UUID format', async () => {
+      const result = await enqueueCollectCod('order-uuid-check-3', 100000);
+
+      expect(result.success).toBe(true);
+      expect(result.pendingActionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     });
   });
 

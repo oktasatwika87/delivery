@@ -61,19 +61,22 @@ export async function enqueueReject(orderId: string, expectedVersion: number): P
       return { success: false, error: 'Not authenticated' };
     }
 
-    let pendingActionId: string | undefined;
+    // Generate UUID dulu — prepareCreateFromDirtyRaw butuh ID yang sudah jadi.
+    const pendingActionId = generateUUID();
 
     await database.write(async () => {
-      const pendingAction = await database.get<PendingActionModel>('pending_actions').create((row) => {
-        row._raw.id = generateUUID();
-        row.actionType = 'reject';
-        row.targetOrderId = orderId;
-        row.expectedVersion = expectedVersion;
-        row.idempotencyKey = `reject:${orderId}:${userId}`;
-        row.payloadJson = null;
-        row.status = 'pending';
+      const preparedRecord = database.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
+        id: pendingActionId,
+        _status: 'synced',
+        _changed: '',
+        actionType: 'reject',
+        targetOrderId: orderId,
+        expectedVersion,
+        idempotencyKey: `reject:${orderId}:${userId}`,
+        payloadJson: null,
+        status: 'pending',
       });
-      pendingActionId = pendingAction.id;
+      await database.batch(preparedRecord);
 
       // Mark order with pending action flag
       const order = await database.get<OrderModel>('orders').find(orderId);
@@ -109,20 +112,22 @@ export async function enqueueCancel(
       return { success: false, error: 'Not authenticated' };
     }
 
-    let pendingActionId: string | undefined;
     const payload: CancelPayload = reason ? { reason } : {};
+    const pendingActionId = generateUUID();
 
     await database.write(async () => {
-      const pendingAction = await database.get<PendingActionModel>('pending_actions').create((row) => {
-        row._raw.id = generateUUID();
-        row.actionType = 'cancel';
-        row.targetOrderId = orderId;
-        row.expectedVersion = expectedVersion;
-        row.idempotencyKey = `cancel:${orderId}:${userId}:${Date.now()}`;
-        row.payloadJson = payload;
-        row.status = 'pending';
+      const preparedRecord = database.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
+        id: pendingActionId,
+        _status: 'synced',
+        _changed: '',
+        actionType: 'cancel',
+        targetOrderId: orderId,
+        expectedVersion,
+        idempotencyKey: `cancel:${orderId}:${userId}:${Date.now()}`,
+        payloadJson: payload,
+        status: 'pending',
       });
-      pendingActionId = pendingAction.id;
+      await database.batch(preparedRecord);
     });
 
     console.log(`[outbox] enqueued cancel action for order ${orderId}, reason=${reason}, pendingActionId=${pendingActionId}`);
@@ -155,20 +160,21 @@ export async function enqueueCollectCod(
     // Generate idempotency key NOW — must be stable across retries
     const idempotencyKey = await generateCodIdempotencyKey(orderId);
     const payload: CollectCodPayload = { amountCents };
-
-    let pendingActionId: string | undefined;
+    const pendingActionId = generateUUID();
 
     await database.write(async () => {
-      const pendingAction = await database.get<PendingActionModel>('pending_actions').create((row) => {
-        row._raw.id = generateUUID();
-        row.actionType = 'collect_cod';
-        row.targetOrderId = orderId;
-        row.expectedVersion = 0; // COD doesn't require version check
-        row.idempotencyKey = idempotencyKey;
-        row.payloadJson = payload;
-        row.status = 'pending';
+      const preparedRecord = database.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
+        id: pendingActionId,
+        _status: 'synced',
+        _changed: '',
+        actionType: 'collect_cod',
+        targetOrderId: orderId,
+        expectedVersion: 0, // COD doesn't require version check
+        idempotencyKey,
+        payloadJson: payload,
+        status: 'pending',
       });
-      pendingActionId = pendingAction.id;
+      await database.batch(preparedRecord);
     });
 
     console.log(`[outbox] enqueued collect_cod action for order ${orderId}, amount=${amountCents}, idempotencyKey=${idempotencyKey}`);
