@@ -7,7 +7,7 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb';
 
 export const schema = appSchema({
-  version: 7,
+  version: 8,
   tables: [
     tableSchema({
       name: 'users',
@@ -36,6 +36,9 @@ export const schema = appSchema({
         { name: 'failed_sync_attempts', type: 'number' },
         { name: 'cancelled_by', type: 'string', isOptional: true },
         { name: 'cancel_reason', type: 'string', isOptional: true },
+        // v8 — Skenario A: persisted banner signal untuk cancel-offline conflict
+        { name: 'last_conflict_reason', type: 'string', isOptional: true },
+        { name: 'last_conflict_at', type: 'number', isOptional: true, isIndexed: true },
         { name: 'created_at', type: 'number' },
         { name: 'updated_at', type: 'number' },
       ],

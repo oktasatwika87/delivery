@@ -10,6 +10,9 @@ import { schemaMigrations, createTable, addColumns } from '@nozbe/watermelondb/S
  *           (cap retry agar record yang gagal sync tidak stuck retry forever)
  * v5 -> v6: Tambah cancelled_by & cancel_reason ke orders (cancel offline)
  * v6 -> v7: Tambah tabel pending_actions (offline-first driver actions outbox)
+ * v7 -> v8: Tambah last_conflict_reason & last_conflict_at ke orders
+ *           (Skenario A — persisted banner signal untuk cancel-offline
+ *           conflict, survive app restart)
  */
 export const watermelonMigrations = schemaMigrations({
   migrations: [
@@ -137,6 +140,24 @@ export const watermelonMigrations = schemaMigrations({
             { name: 'status', type: 'string' },
             { name: 'created_at', type: 'number' },
             { name: 'updated_at', type: 'number' },
+          ],
+        }),
+      ],
+    },
+    // v7 -> v8: last_conflict_reason & last_conflict_at — persisted UI signal
+    // untuk Skenario A (cancel-offline-vs-server-changed). Saat resolveAcks()
+    // dapat 'conflict' ack dari server untuk record dengan pre-overwrite
+    // status='CANCELLED', tulis reason + timestamp ke 2 field ini. BannerC
+    // di OrderDetailScreen render berdasarkan field ini, survive app restart,
+    // auto-expire 24 jam atau manual dismiss.
+    {
+      toVersion: 8,
+      steps: [
+        addColumns({
+          table: 'orders',
+          columns: [
+            { name: 'last_conflict_reason', type: 'string', isOptional: true },
+            { name: 'last_conflict_at', type: 'number', isOptional: true, isIndexed: true },
           ],
         }),
       ],

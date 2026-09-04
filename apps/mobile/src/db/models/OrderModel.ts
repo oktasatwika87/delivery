@@ -20,6 +20,10 @@ export class OrderModel extends Model {
   @text('cancelled_by') cancelledBy?: string;
   @text('cancel_reason') cancelReason?: string;
 
+  // v8 — Skenario A: persisted banner signal untuk cancel-offline conflict
+  @text('last_conflict_reason') lastConflictReason?: string;
+  @date('last_conflict_at') lastConflictAt?: Date;
+
   @readonly @date('created_at') createdAt!: Date;
   @readonly @date('updated_at') updatedAt!: Date;
 }
