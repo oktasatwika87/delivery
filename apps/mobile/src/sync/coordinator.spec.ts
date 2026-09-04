@@ -158,6 +158,30 @@ function createCollection(name: string) {
       collectionRecords.set(id, row);
       return attachModelMethods(row);
     },
+    // Used by applyPull()'s create path (post-refactor). Mirrors the official
+    // WatermelonDB API: collection.prepareCreateFromDirtyRaw(dirtyRaw) returns
+    // a prepared record that becomes persisted via database.batch(). In this
+    // mock we collapse prepare+persist for simplicity (multi-collection state
+    // tracked here, not in batch()) — final state-equivalence is what tests
+    // verify, not the intermediate prepare/persist timeline. See same pattern
+    // in outbox.spec.ts as reference for the production API contract.
+    prepareCreateFromDirtyRaw(dirtyRaw: Record<string, unknown>): MockRow {
+      const id = dirtyRaw.id as string;
+      const row: MockRow = {
+        id,
+        _raw: { _status: (dirtyRaw._status as string) ?? 'synced' },
+      };
+      // Apply semua field dari dirtyRaw (Model camelCase keys, sama seperti
+      // how production code calls prepareCreateFromDirtyRaw — lihat
+      // buildRawRowForCreate di coordinator.ts).
+      for (const [k, v] of Object.entries(dirtyRaw)) {
+        if (k === '_raw') continue; // _raw udah di-set di atas
+        if (k === 'id') continue; // udah di-set di atas
+        (row as any)[k] = v;
+      }
+      collectionRecords.set(id, row);
+      return row;
+    },
   };
 }
 
@@ -212,7 +236,7 @@ describe('SyncCoordinator', () => {
   });
 
   describe('applyPull()', () => {
-    test('dengan record baru dari server -> row lokal ter-create dengan _status synced', async () => {
+    test('dengan record baru order dari server -> row lokal ter-create dengan field order, _status synced', async () => {
       const pullResponse: SyncPullResponse = {
         nextCursor: 'cursor-2',
         records: [
@@ -246,6 +270,104 @@ describe('SyncCoordinator', () => {
       expect(created).toBeDefined();
       expect(created!.serverVersion).toBe(1);
       expect(created!.status).toBe('CONFIRMED');
+      expect(created!._raw._status).toBe('synced');
+    });
+
+    test('dengan record baru payment dari server -> row lokal ter-create dengan field payment, _status synced', async () => {
+      // Coverage sebelum refactor: HANYA order create-path yang punya test.
+      // Sekarang payment create-path juga punya coverage — verify field mapping
+      // (idempotencyKey, amountCents, kind, dll) + _status synced.
+      const pullResponse: SyncPullResponse = {
+        nextCursor: 'cursor-3',
+        records: [
+          {
+            entityType: 'payment',
+            id: 'payment-new-1',
+            serverVersion: 1,
+            serverChangedAt: new Date().toISOString(),
+            deleted: false,
+            data: {
+              orderId: 'order-1',
+              idempotencyKey: 'cod:abc-123-uuid',
+              method: 'CASH',
+              status: 'CAPTURED',
+              amountCents: 50000,
+              currency: 'IDR',
+              kind: 'PAYMENT',
+              externalRef: null,
+            },
+          },
+        ],
+        serverTime: new Date().toISOString(),
+      };
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.applyPull(pullResponse, mockDb);
+
+      // Verifikasi: row ter-create di collection payments dengan field payment
+      const records = state.records.get('payments');
+      const created = records?.get('payment-new-1');
+      expect(created).toBeDefined();
+      expect(created!.serverVersion).toBe(1);
+      expect(created!.orderId).toBe('order-1');
+      expect(created!.idempotencyKey).toBe('cod:abc-123-uuid');
+      expect(created!.method).toBe('CASH');
+      expect(created!.status).toBe('CAPTURED');
+      expect(created!.amountCents).toBe(50000);
+      expect(created!.currency).toBe('IDR');
+      expect(created!.kind).toBe('PAYMENT');
+      expect(created!.externalRef).toBeNull();
+      expect(created!._raw._status).toBe('synced');
+    });
+
+    test('dengan record baru chat_message dari server -> row lokal ter-create dengan field chat, _status synced', async () => {
+      // Coverage sebelum refactor: HANYA order create-path yang punya test.
+      // Sekarang chat_message create-path juga punya coverage — verify field
+      // mapping (roomId, senderId, body, attachment, timestamp conversion).
+      const clientCreatedAtIso = '2026-09-04T10:00:00.000Z';
+      const serverCreatedAtIso = '2026-09-04T10:00:01.000Z';
+
+      const pullResponse: SyncPullResponse = {
+        nextCursor: 'cursor-4',
+        records: [
+          {
+            entityType: 'chat_message',
+            id: 'chat-new-1',
+            serverVersion: 1,
+            serverChangedAt: new Date().toISOString(),
+            deleted: false,
+            data: {
+              roomId: 'room-1',
+              senderId: 'user-1',
+              body: 'Hello world',
+              attachment: null,
+              status: 'SENT',
+              clientCreatedAt: clientCreatedAtIso,
+              serverCreatedAt: serverCreatedAtIso,
+            },
+          },
+        ],
+        serverTime: new Date().toISOString(),
+      };
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.applyPull(pullResponse, mockDb);
+
+      // Verifikasi: row ter-create di collection chat_messages dengan field chat
+      const records = state.records.get('chat_messages');
+      const created = records?.get('chat-new-1');
+      expect(created).toBeDefined();
+      expect(created!.serverVersion).toBe(1);
+      expect(created!.roomId).toBe('room-1');
+      expect(created!.senderId).toBe('user-1');
+      expect(created!.body).toBe('Hello world');
+      expect(created!.attachmentJson).toBeNull();
+      expect(created!.status).toBe('SENT');
+      // Timestamp fields harus di-convert dari ISO string ke number (epoch ms)
+      expect(typeof created!.clientCreatedAt).toBe('number');
+      expect(created!.clientCreatedAt).toBe(new Date(clientCreatedAtIso).getTime());
+      expect(typeof created!.serverCreatedAt).toBe('number');
+      expect(created!.serverCreatedAt).toBe(new Date(serverCreatedAtIso).getTime());
       expect(created!._raw._status).toBe('synced');
     });
 

@@ -368,14 +368,20 @@ export class SyncCoordinator implements Coordinator {
             r._raw._status = 'synced';
           }));
         } else {
-          batch.push(collection.prepareCreate((r: any) => {
-            // Set id via _raw because r.id is readonly in WatermelonDB Model
-            // Must use server's UUID so sync push back works correctly
-            r._raw.id = record.id;
-            this.applyServerDataToLocalRow(r, record);
-            // Mark as synced (prepareCreate dari pull server, bukan perubahan user)
-            r._raw._status = 'synced';
-          }));
+          // Gunakan prepareCreateFromDirtyRaw + database.batch() — official
+          // WatermelonDB API untuk record dengan custom ID (server UUID).
+          // Pola lama (collection.prepareCreate + r._raw.id = record.id)
+          // tidak didukung resmi WatermelonDB dan bisa bikin row korup.
+          // Pola ini sudah dipakai di OrdersScreen fetchPool (commit 17df140)
+          // dan outbox enqueue* (commit d63c55e) — sekarang applyPull catch up.
+          //
+          // Field mapping parallel dengan applyServerDataToLocalRow (update
+          // path). Lihat buildRawRowForCreate JSDoc untuk Decision rationale
+          // kenapa dua function terpisah, bukan shared mapping spec.
+          const preparedRecord = collection.prepareCreateFromDirtyRaw(
+            this.buildRawRowForCreate(record),
+          );
+          batch.push(preparedRecord);
         }
       }
     }
@@ -458,6 +464,82 @@ export class SyncCoordinator implements Coordinator {
         ? new Date((d as any).serverCreatedAt).getTime()
         : null;
     }
+  }
+
+  /**
+   * Build dirty raw object untuk prepareCreateFromDirtyRaw() dari server
+   * pull record. Mirror dari applyServerDataToLocalRow — field mapping
+   * sama, JSON decorator handling sama — tapi untuk create path.
+   *
+   * Beda API antara dua path:
+   * - Update path: `row.fooBar = value` (Model setter, camelCase)
+   * - Create path: prepareCreateFromDirtyRaw accepts raw row shape dengan
+   *   Model camelCase names + reserved keys (`id`, `_status`, `_changed`)
+   *
+   * Decision: pakai function terpisah, bukan shared mapping spec.
+   * Rationale: dua API ini secara struktural berbeda (Model setter vs
+   * raw object API). Shared spec bakal encode dua konvensi sekaligus
+   * tanpa benar-benar mengurangi duplication — extra abstraction layer
+   * tanpa payoff. Function terpisah lebih simple, local, dan visible
+   * side-by-side dengan sibling update-path function di file ini.
+   * Code reviewer bisa langsung compare untuk catch drift kalau
+   * field mapping server berubah.
+   */
+  private buildRawRowForCreate(record: SyncRecordPull): Record<string, unknown> {
+    const d = record.data;
+    const base: Record<string, unknown> = {
+      id: record.id,
+      // Pulled dari server, bukan perubahan user — langsung synced,
+      // gak akan di-pickup oleh collectDirty() berikutnya.
+      _status: 'synced',
+      _changed: '',
+      serverVersion: record.serverVersion,
+    };
+
+    if (record.entityType === 'order') {
+      return {
+        ...base,
+        customerId: (d as any).customerId,
+        driverId: (d as any).driverId ?? null,
+        status: (d as any).status,
+        // @json decorator auto-stringify on write — assign raw object
+        itemsJson: (d as any).items,
+        addressJson: (d as any).deliveryAddress,
+        totalCents: (d as any).totalCents,
+        currency: (d as any).currency,
+        notes: (d as any).notes ?? null,
+        cancelledBy: (d as any).cancelledBy ?? null,
+        cancelReason: (d as any).cancelReason ?? null,
+      };
+    } else if (record.entityType === 'payment') {
+      return {
+        ...base,
+        orderId: (d as any).orderId,
+        idempotencyKey: (d as any).idempotencyKey,
+        method: (d as any).method,
+        status: (d as any).status,
+        amountCents: (d as any).amountCents,
+        currency: (d as any).currency,
+        kind: (d as any).kind,
+        externalRef: (d as any).externalRef ?? null,
+      };
+    } else if (record.entityType === 'chat_message') {
+      return {
+        ...base,
+        roomId: (d as any).roomId,
+        senderId: (d as any).senderId,
+        body: (d as any).body,
+        // @json decorator auto-stringify on write — assign raw object
+        attachmentJson: (d as any).attachment ?? null,
+        status: (d as any).status,
+        clientCreatedAt: new Date((d as any).clientCreatedAt).getTime(),
+        serverCreatedAt: (d as any).serverCreatedAt
+          ? new Date((d as any).serverCreatedAt).getTime()
+          : null,
+      };
+    }
+
+    return base;
   }
 
   // ============ collectDirty ============
