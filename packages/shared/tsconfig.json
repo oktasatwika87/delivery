@@ -3,7 +3,7 @@
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "outDir": "./dist",
+    "outDir": "./dist/esm",
     "rootDir": "./src",
     "composite": true,
     "noEmit": false,

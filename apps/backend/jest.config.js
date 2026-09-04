@@ -5,7 +5,6 @@ module.exports = {
   roots: ['<rootDir>/src', '<rootDir>/test'],
   testMatch: ['**/*.spec.ts'],
   moduleNameMapper: {
-    '^@delivery/shared$': '<rootDir>/src/__mocks__/@delivery/shared.ts',
     '^@nestjs/schedule$': '<rootDir>/src/__mocks__/@nestjs/schedule.ts',
   },
   transform: {

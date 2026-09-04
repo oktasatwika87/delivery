@@ -4,34 +4,54 @@
   "private": true,
   "description": "Shared types & sync contracts used by mobile and backend",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "react-native": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
+      "types": "./dist/esm/index.d.ts",
+      "react-native": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "import": "./dist/esm/index.js",
+      "default": "./dist/cjs/index.js"
     },
     "./order": {
-      "types": "./dist/order.d.ts",
-      "import": "./dist/order.js"
+      "types": "./dist/esm/order.d.ts",
+      "require": "./dist/cjs/order.js",
+      "import": "./dist/esm/order.js"
     },
     "./payment": {
-      "types": "./dist/payment.d.ts",
-      "import": "./dist/payment.js"
+      "types": "./dist/esm/payment.d.ts",
+      "require": "./dist/cjs/payment.js",
+      "import": "./dist/esm/payment.js"
     },
     "./chat": {
-      "types": "./dist/chat.d.ts",
-      "import": "./dist/chat.js"
+      "types": "./dist/esm/chat.d.ts",
+      "require": "./dist/cjs/chat.js",
+      "import": "./dist/esm/chat.js"
     },
     "./sync": {
-      "types": "./dist/sync.d.ts",
-      "import": "./dist/sync.js"
+      "types": "./dist/esm/sync.d.ts",
+      "require": "./dist/cjs/sync.js",
+      "import": "./dist/esm/sync.js"
+    },
+    "./order-events": {
+      "types": "./dist/esm/order-events.d.ts",
+      "require": "./dist/cjs/order-events.js",
+      "import": "./dist/esm/order-events.js"
+    },
+    "./user": {
+      "types": "./dist/esm/user.d.ts",
+      "require": "./dist/cjs/user.js",
+      "import": "./dist/esm/user.js"
     }
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json', JSON.stringify({type:'commonjs'}))\" && tsc -p tsconfig.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json', JSON.stringify({type:'commonjs'}))\"",
+    "build:esm": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "clean": "rm -rf dist *.tsbuildinfo",
     "lint": "eslint .",
