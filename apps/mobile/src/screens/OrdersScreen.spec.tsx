@@ -89,10 +89,12 @@ jest.mock('../sync', () => ({
 }));
 
 // ─── Mock outbox ──────────────────────────────────────────────────────────────
-const mockHasPendingAction = jest.fn().mockResolvedValue(false);
+const mockHasPendingAction = jest.fn();
+const mockHasStalePendingAction = jest.fn();
 jest.mock('../sync/outbox', () => ({
   __esModule: true,
   hasPendingAction: (...args: unknown[]) => mockHasPendingAction(...args),
+  hasStalePendingAction: (...args: unknown[]) => mockHasStalePendingAction(...args),
 }));
 
 // ─── Mock WatermelonDB ──────────────────────────────────────────────────────
@@ -372,5 +374,91 @@ describe('pending action badge', () => {
     });
     // ...and hasPendingAction was never asked about the pool item's id at all.
     expect(mockHasPendingAction).not.toHaveBeenCalledWith(sharedId);
+  });
+});
+
+// ─── Stale pending action badge ───────────────────────────────────────────────
+describe('stale pending action badge', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue([]);
+    mockHasPendingAction.mockResolvedValue(false);
+    mockHasStalePendingAction.mockResolvedValue(false);
+  });
+
+  test('shows warning badge with stale message when pending action is older than 60 minutes', async () => {
+    mockHasPendingAction.mockImplementation((orderId: string) =>
+      Promise.resolve(orderId === 'order-stale'),
+    );
+    mockHasStalePendingAction.mockImplementation((orderId: string) =>
+      Promise.resolve(orderId === 'order-stale'),
+    );
+    const myOrders = [makeOrder({ id: 'order-stale' }), makeOrder({ id: 'order-normal' })];
+
+    const { queryAllByText, getByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+    );
+
+    await waitFor(() => {
+      expect(mockHasPendingAction).toHaveBeenCalledWith('order-stale');
+      expect(mockHasStalePendingAction).toHaveBeenCalledWith('order-stale');
+    });
+
+    await waitFor(() => {
+      expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
+    });
+    // Normal pending badge should NOT show for stale orders
+    expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(0);
+  });
+
+  test('shows normal badge for fresh pending action (< 60 minutes)', async () => {
+    mockHasPendingAction.mockImplementation((orderId: string) =>
+      Promise.resolve(orderId === 'order-fresh'),
+    );
+    mockHasStalePendingAction.mockImplementation((orderId: string) =>
+      Promise.resolve(false), // not stale
+    );
+    const myOrders = [makeOrder({ id: 'order-fresh' })];
+
+    const { queryAllByText, getByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+    );
+
+    await waitFor(() => {
+      expect(mockHasPendingAction).toHaveBeenCalledWith('order-fresh');
+      expect(mockHasStalePendingAction).toHaveBeenCalledWith('order-fresh');
+    });
+
+    await waitFor(() => {
+      expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
+    });
+    // Stale badge should NOT show for fresh orders
+    expect(queryAllByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toHaveLength(0);
+  });
+
+  test('mixed: one stale pending, one fresh pending, each shows correct badge', async () => {
+    mockHasPendingAction.mockImplementation((orderId: string) =>
+      Promise.resolve(orderId === 'order-stale' || orderId === 'order-fresh'),
+    );
+    mockHasStalePendingAction.mockImplementation((orderId: string) =>
+      Promise.resolve(orderId === 'order-stale'),
+    );
+    const myOrders = [makeOrder({ id: 'order-stale' }), makeOrder({ id: 'order-fresh' })];
+
+    const { getByText, queryByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+    );
+
+    await waitFor(() => {
+      expect(mockHasStalePendingAction).toHaveBeenCalledWith('order-stale');
+      expect(mockHasStalePendingAction).toHaveBeenCalledWith('order-fresh');
+    });
+
+    await waitFor(() => {
+      expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
+    });
   });
 });

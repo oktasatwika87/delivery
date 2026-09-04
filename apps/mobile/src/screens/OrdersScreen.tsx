@@ -19,7 +19,7 @@ import { getCurrentUserId } from '../sync/session';
 import { fetchAvailableOrders, UnauthorizedError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
-import { hasPendingAction } from '../sync/outbox';
+import { hasPendingAction, hasStalePendingAction } from '../sync/outbox';
 import { locationService } from '../map/location';
 import { networkMonitor } from '../map/networkMonitor';
 import { RouteService } from '../map/routeService';
@@ -48,6 +48,7 @@ export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): 
   const [refreshing, setRefreshing] = useState(false);
   const [connected, setConnected] = useState(false);
   const [pendingOrderIds, setPendingOrderIds] = useState<Set<string>>(new Set());
+  const [staleOrderIds, setStaleOrderIds] = useState<Set<string>>(new Set());
   const [removedNotice, setRemovedNotice] = useState<{ visible: boolean; orderId: string | null }>({
     visible: false,
     orderId: null,
@@ -154,13 +155,17 @@ export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): 
     const checkPending = async () => {
       if (!myOrders?.length) return;
       try {
-        const results = await Promise.all(myOrders.map((o) => hasPendingAction(o.id)));
+        const pendingResults = await Promise.all(myOrders.map((o) => hasPendingAction(o.id)));
+        const staleResults = await Promise.all(myOrders.map((o) => hasStalePendingAction(o.id)));
         if (!cancelled) {
           const pending = new Set<string>();
+          const stale = new Set<string>();
           myOrders.forEach((o, i) => {
-            if (results[i]) pending.add(o.id);
+            if (pendingResults[i]) pending.add(o.id);
+            if (staleResults[i]) stale.add(o.id);
           });
           setPendingOrderIds(pending);
+          setStaleOrderIds(stale);
         }
       } catch (err) {
         console.warn('[OrdersScreen] failed to check pending actions:', err);
@@ -241,12 +246,16 @@ export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): 
     // Re-check pending actions after pool refresh
     if (myOrders?.length) {
       try {
-        const results = await Promise.all(myOrders.map((o) => hasPendingAction(o.id)));
+        const pendingResults = await Promise.all(myOrders.map((o) => hasPendingAction(o.id)));
+        const staleResults = await Promise.all(myOrders.map((o) => hasStalePendingAction(o.id)));
         const pending = new Set<string>();
+        const stale = new Set<string>();
         myOrders.forEach((o, i) => {
-          if (results[i]) pending.add(o.id);
+          if (pendingResults[i]) pending.add(o.id);
+          if (staleResults[i]) stale.add(o.id);
         });
         setPendingOrderIds(pending);
+        setStaleOrderIds(stale);
       } catch (err) {
         console.warn('[OrdersScreen] onRefresh: failed to check pending actions:', err);
       }
@@ -307,6 +316,7 @@ export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): 
     const isPool = section.title === 'Tersedia';
     const isMyOrder = section.title === 'Order Saya';
     const hasPending = isMyOrder && pendingOrderIds.has(item.id);
+    const isStale = isMyOrder && staleOrderIds.has(item.id);
     return (
       <TouchableOpacity
         style={styles.card}
@@ -317,8 +327,13 @@ export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): 
           <Text style={styles.cardMeta}>
             {item.status} · {item.totalCents} {item.currency}
           </Text>
-          {hasPending && (
+          {hasPending && !isStale && (
             <Text style={styles.pendingBadge}>Menunggu sinkronisasi</Text>
+          )}
+          {isStale && (
+            <Text style={styles.stalePendingBadge}>
+              Belum tersinkron dari sejam lalu — cek koneksi internet kamu
+            </Text>
           )}
         </View>
         {isPool && (
@@ -444,6 +459,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#1e40af',
     backgroundColor: '#dbeafe',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+  },
+  stalePendingBadge: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#92400e',
+    backgroundColor: '#fef3c7',
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 4,

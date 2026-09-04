@@ -20,7 +20,7 @@ import { getCurrentUserId } from '../sync/session';
 import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
-import { enqueueCancel, enqueueCollectCod, hasPendingAction, drainPendingActions } from '../sync/outbox';
+import { enqueueCancel, enqueueCollectCod, hasPendingAction, drainPendingActions, isPendingActionStale, getPendingActionsForOrder } from '../sync/outbox';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -184,6 +184,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [failedBannerDismissed, setFailedBannerDismissed] = useState(false);
   const [conflictEvent, setConflictEvent] = useState<OrderConflictEvent | null>(null);
   const [hasPending, setHasPending] = useState(false);
+  const [isPendingStale, setIsPendingStale] = useState(false);
   // Use ref for synchronous inflight guard (state updates are async, refs are sync)
   const inflightCollectRef = useRef(false);
 
@@ -291,7 +292,17 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     const checkPending = async () => {
       try {
         const pending = await hasPendingAction(orderId);
-        if (!cancelled) setHasPending(pending);
+        if (cancelled) return;
+        setHasPending(pending);
+
+        // Also check if pending action is stale
+        if (pending) {
+          const actions = await getPendingActionsForOrder(orderId);
+          const stale = actions.some(isPendingActionStale);
+          if (!cancelled) setIsPendingStale(stale);
+        } else {
+          if (!cancelled) setIsPendingStale(false);
+        }
       } catch (err) {
         console.warn('[OrderDetail] failed to check pending action:', err);
       }
@@ -472,9 +483,18 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
       />
 
       {/* Pending Action Indicator */}
-      {hasPending && (
+      {hasPending && !isPendingStale && (
         <View style={styles.pendingBanner}>
           <Text style={styles.pendingBannerText}>Menunggu sinkronisasi...</Text>
+        </View>
+      )}
+
+      {/* Stale Pending Action Warning */}
+      {isPendingStale && (
+        <View style={styles.stalePendingBanner}>
+          <Text style={styles.stalePendingBannerText}>
+            Belum tersinkron dari sejam lalu — cek koneksi internet kamu
+          </Text>
         </View>
       )}
 
@@ -794,6 +814,19 @@ const styles = StyleSheet.create({
   pendingBannerText: {
     fontSize: 13,
     color: '#1e40af',
+    textAlign: 'center',
+  },
+  // Stale Pending Action Banner
+  stalePendingBanner: {
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#fcd34d',
+  },
+  stalePendingBannerText: {
+    fontSize: 13,
+    color: '#92400e',
     textAlign: 'center',
   },
 });

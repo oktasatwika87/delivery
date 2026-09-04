@@ -35,6 +35,8 @@ const mockEnqueueCancel = jest.fn();
 const mockEnqueueCollectCod = jest.fn();
 const mockHasPendingAction = jest.fn();
 const mockDrainPendingActions = jest.fn();
+const mockGetPendingActionsForOrder = jest.fn();
+const mockIsPendingActionStale = jest.fn();
 
 // NOTE: __esModule: true is required here — OrderDetailScreen.tsx uses a
 // dynamic `await import('../sync/outbox')` for drainPendingActions (to avoid
@@ -48,6 +50,8 @@ jest.mock('../sync/outbox', () => ({
   enqueueCollectCod: (...args: unknown[]) => mockEnqueueCollectCod(...args),
   hasPendingAction: (...args: unknown[]) => mockHasPendingAction(...args),
   drainPendingActions: (...args: unknown[]) => mockDrainPendingActions(...args),
+  getPendingActionsForOrder: (...args: unknown[]) => mockGetPendingActionsForOrder(...args),
+  isPendingActionStale: (...args: unknown[]) => mockIsPendingActionStale(...args),
 }));
 
 // ─── WatermelonDB mock ─────────────────────────────────────────────────────────
@@ -777,5 +781,77 @@ describe('Double-tap prevention', () => {
     // Only ONE enqueue should have been initiated despite two onPress calls
     // If the guard is working, only the first call executes
     expect(mockEnqueueCollectCod).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Tests: Stale Pending Action Banner ──────────────────────────────────────
+
+describe('Stale Pending Action Banner', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockHasPendingAction.mockResolvedValue(false);
+    mockGetPendingActionsForOrder.mockResolvedValue([]);
+    mockIsPendingActionStale.mockReturnValue(false);
+  });
+
+  test('shows normal pending banner when pending action is fresh', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    mockHasPendingAction.mockResolvedValue(true);
+    mockGetPendingActionsForOrder.mockResolvedValue([{ id: 'pending-1', createdAt: new Date() }]);
+    mockIsPendingActionStale.mockReturnValue(false);
+
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(queryByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeNull();
+    });
+  });
+
+  test('shows stale warning banner when pending action is older than 60 minutes', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    mockHasPendingAction.mockResolvedValue(true);
+    mockGetPendingActionsForOrder.mockResolvedValue([{ id: 'pending-stale', createdAt: new Date(Date.now() - 61 * 60 * 1000) }]);
+    mockIsPendingActionStale.mockReturnValue(true);
+
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
+    });
+  });
+
+  test('shows stale banner even when cancel button is hidden (pending action exists)', async () => {
+    // When there's a pending action, cancel button is hidden
+    // But if the pending action is stale, the warning banner should still show
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    mockHasPendingAction.mockResolvedValue(true);
+    mockGetPendingActionsForOrder.mockResolvedValue([{ id: 'pending-stale', createdAt: new Date(Date.now() - 120 * 60 * 1000) }]);
+    mockIsPendingActionStale.mockReturnValue(true);
+
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(queryByText('Batalkan Order')).toBeNull();
+    });
+  });
+
+  test('no banner when no pending actions', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    mockHasPendingAction.mockResolvedValue(false);
+
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
+    });
+    await waitFor(() => {
+      expect(queryByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeNull();
+    });
   });
 });

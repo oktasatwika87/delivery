@@ -153,6 +153,10 @@ import {
   hasPendingAction,
   drainPendingActions,
   getPendingActionsForOrder,
+  isPendingActionStale,
+  getPendingActionAgeMs,
+  hasStalePendingAction,
+  STALE_THRESHOLD_MS,
 } from './outbox';
 import { rejectOrder, cancelOrder, collectCodOrder } from './client';
 import { syncEvents } from './syncEvents';
@@ -272,25 +276,54 @@ describe('outbox', () => {
       expect(mockState.records.get('orphaned-action')!.status).toBe('orphaned_needs_review');
     });
 
-    test('network error: marks action failed, does not delete', async () => {
+    test('network error: keeps action as pending for retry (never gives up)', async () => {
       const action = makeRecord({ actionType: 'cancel', targetOrderId: 'order-network-fail', payloadJson: { reason: 'Test' }});
       mockState.records.set('network-action', action);
       attachMethods(action);
       mockCancelOrder.mockRejectedValue(new Error('Network request failed'));
       const results = await drainPendingActions();
       expect(results[0].status).toBe('failed');
-      expect(mockState.records.get('network-action')!.status).toBe('failed');
+      // CRITICAL: action must stay as 'pending' so it retries on next drain
+      expect(mockState.records.get('network-action')!.status).toBe('pending');
+    });
+
+    test('retry persists indefinitely: action is still picked up after multiple drain cycles', async () => {
+      const action = makeRecord({ actionType: 'reject', targetOrderId: 'order-retry', expectedVersion: 3 });
+      mockState.records.set('retry-action', action);
+      attachMethods(action);
+
+      // First drain: fail
+      mockRejectOrder.mockRejectedValue(new Error('fail'));
+      const results1 = await drainPendingActions();
+      expect(results1[0].status).toBe('failed');
+
+      // Simulate reconnect - drain again WITHOUT manually resetting status
+      mockRejectOrder.mockClear();
+      mockRejectOrder.mockRejectedValue(new Error('still failing'));
+      const results2 = await drainPendingActions();
+      expect(results2[0].status).toBe('failed');
+
+      // Third try - now succeed
+      mockRejectOrder.mockClear();
+      mockRejectOrder.mockResolvedValue({ id: 'order-retry', status: 'CONFIRMED', version: 4 } as any);
+      const results3 = await drainPendingActions();
+      expect(results3[0].status).toBe('success');
+      // Action should now be deleted
+      expect(mockState.records.has('retry-action')).toBe(false);
     });
 
     test('idempotency key stability: same key used on retry', async () => {
       const action = makeRecord({ actionType: 'collect_cod', targetOrderId: 'order-idempotent', idempotencyKey: 'cod:stable-key-123', payloadJson: { amountCents: 40000 } });
       mockState.records.set('idempotent-action', action);
       attachMethods(action);
-      mockCollectCodOrder.mockRejectedValueOnce(new Error('fail')).mockResolvedValueOnce({ id: 'order-idempotent', status: 'CAPTURED', version: 5 } as any);
+      // First try fails - action stays pending automatically
+      mockCollectCodOrder.mockRejectedValueOnce(new Error('fail'));
       const results1 = await drainPendingActions();
       expect(results1[0].status).toBe('failed');
-      const remaining = mockState.records.get('idempotent-action')!;
-      remaining.status = 'pending';
+      // Status was reset to 'pending' automatically by resetActionForRetry
+      expect(mockState.records.get('idempotent-action')!.status).toBe('pending');
+
+      // Second try succeeds - no manual status reset needed
       mockCollectCodOrder.mockClear();
       mockCollectCodOrder.mockResolvedValue({ id: 'order-idempotent', status: 'CAPTURED', version: 5 } as any);
       const results2 = await drainPendingActions();
@@ -310,6 +343,63 @@ describe('outbox', () => {
       const results = await drainPendingActions();
       expect(results).toHaveLength(2);
       expect(mockRejectOrder.mock.invocationCallOrder[0]).toBeLessThan(mockCancelOrder.mock.invocationCallOrder[0]);
+    });
+  });
+
+  describe('stale tracking', () => {
+    const STALE_MS = STALE_THRESHOLD_MS;
+
+    test('isPendingActionStale: returns false for recent action', () => {
+      const recentAction = { createdAt: new Date() } as any;
+      expect(isPendingActionStale(recentAction)).toBe(false);
+    });
+
+    test('isPendingActionStale: returns true for action older than 60 minutes', () => {
+      const staleAction = { createdAt: new Date(Date.now() - STALE_MS - 1000) } as any;
+      expect(isPendingActionStale(staleAction)).toBe(true);
+    });
+
+    test('isPendingActionStale: returns false for null', () => {
+      expect(isPendingActionStale(null)).toBe(false);
+    });
+
+    test('getPendingActionAgeMs: returns 0 for null', () => {
+      expect(getPendingActionAgeMs(null)).toBe(0);
+    });
+
+    test('getPendingActionAgeMs: returns correct age in ms', () => {
+      const oldDate = new Date(Date.now() - 300000); // 5 minutes ago
+      const action = { createdAt: oldDate } as any;
+      const age = getPendingActionAgeMs(action);
+      expect(age).toBeGreaterThanOrEqual(300000);
+      expect(age).toBeLessThan(310000);
+    });
+
+    test('hasStalePendingAction: returns true for order with stale pending action', async () => {
+      const staleAction = makeRecord({
+        targetOrderId: 'order-stale',
+        status: 'pending',
+        createdAt: Date.now() - STALE_MS - 1000,
+      });
+      mockState.records.set('stale-action', staleAction);
+      const result = await hasStalePendingAction('order-stale');
+      expect(result).toBe(true);
+    });
+
+    test('hasStalePendingAction: returns false for order with fresh pending action', async () => {
+      const freshAction = makeRecord({
+        targetOrderId: 'order-fresh',
+        status: 'pending',
+        createdAt: Date.now(),
+      });
+      mockState.records.set('fresh-action', freshAction);
+      const result = await hasStalePendingAction('order-fresh');
+      expect(result).toBe(false);
+    });
+
+    test('hasStalePendingAction: returns false for order with no pending actions', async () => {
+      const result = await hasStalePendingAction('order-none');
+      expect(result).toBe(false);
     });
   });
 });

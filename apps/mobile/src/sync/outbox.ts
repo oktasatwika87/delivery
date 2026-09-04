@@ -205,6 +205,50 @@ export async function getPendingActionsForOrder(orderId: string): Promise<Pendin
 }
 
 /**
+ * Threshold in milliseconds after which a pending action is considered "stale".
+ * 60 minutes.
+ */
+export const STALE_THRESHOLD_MS = 60 * 60 * 1000;
+
+/**
+ * Get the age of a pending action in milliseconds.
+ * Returns 0 if action is null or has no createdAt.
+ * Handles both Date objects and numeric timestamps.
+ */
+export function getPendingActionAgeMs(action: PendingActionModel | null): number {
+  if (!action?.createdAt) return 0;
+  const createdAt = action.createdAt;
+  // Support both Date objects and numeric timestamps
+  const timestamp = typeof createdAt.getTime === 'function' ? createdAt.getTime() : Number(createdAt);
+  return Date.now() - timestamp;
+}
+
+/**
+ * Check if a pending action is stale (older than STALE_THRESHOLD_MS).
+ * Stale actions indicate the driver has been offline for a while — UI
+ * should show a more prominent warning.
+ */
+export function isPendingActionStale(action: PendingActionModel | null): boolean {
+  return getPendingActionAgeMs(action) > STALE_THRESHOLD_MS;
+}
+
+/**
+ * Check if an order has any STALE pending actions.
+ * Used by UI to show warning styling for orders with old pending actions.
+ */
+export async function hasStalePendingAction(orderId: string): Promise<boolean> {
+  const pending = await database
+    .get<PendingActionModel>('pending_actions')
+    .query(
+      Q.where('target_order_id', orderId),
+      Q.where('status', Q.oneOf(['pending', 'syncing']))
+    )
+    .fetch();
+
+  return pending.some(isPendingActionStale);
+}
+
+/**
  * Drain all pending actions — process them FIFO.
  * Called when device comes online.
  *
@@ -262,7 +306,7 @@ async function processPendingAction(
         return await processCollectCod(action, db);
       default:
         console.warn(`[outbox] Unknown action type: ${(action as any).actionType}`);
-        await markActionFailed(action, db, 'Unknown action type');
+        await resetActionForRetry(action, db, 'Unknown action type');
         return {
           pendingActionId: action.id,
           status: 'failed',
@@ -271,7 +315,7 @@ async function processPendingAction(
     }
   } catch (err) {
     console.error(`[outbox] Error processing action ${action.id}:`, err);
-    await markActionFailed(action, db, String(err));
+    await resetActionForRetry(action, db, String(err));
     return {
       pendingActionId: action.id,
       status: 'failed',
@@ -308,7 +352,7 @@ async function processReject(action: PendingActionModel, db: Database): Promise<
       return { pendingActionId: action.id, status: 'conflict', error: 'Version conflict' };
     }
     console.error(`[outbox] Reject failed for order ${action.targetOrderId}:`, errorMsg);
-    await markActionFailed(action, db, errorMsg);
+    await resetActionForRetry(action, db, errorMsg);
     return { pendingActionId: action.id, status: 'failed', error: errorMsg };
   }
 }
@@ -342,7 +386,7 @@ async function processCancel(action: PendingActionModel, db: Database): Promise<
       return { pendingActionId: action.id, status: 'conflict', error: 'Version conflict' };
     }
     console.error(`[outbox] Cancel failed for order ${action.targetOrderId}:`, errorMsg);
-    await markActionFailed(action, db, errorMsg);
+    await resetActionForRetry(action, db, errorMsg);
     return { pendingActionId: action.id, status: 'failed', error: errorMsg };
   }
 }
@@ -354,7 +398,7 @@ async function processCancel(action: PendingActionModel, db: Database): Promise<
 async function processCollectCod(action: PendingActionModel, db: Database): Promise<ProcessResult> {
   const payload = action.payloadJson as CollectCodPayload | null;
   if (!payload) {
-    await markActionFailed(action, db, 'Missing payload');
+    await resetActionForRetry(action, db, 'Missing payload');
     return { pendingActionId: action.id, status: 'failed', error: 'Missing payload' };
   }
 
@@ -404,7 +448,7 @@ async function processCollectCod(action: PendingActionModel, db: Database): Prom
     }
 
     console.error(`[outbox] COD collection failed for order ${action.targetOrderId}:`, errorMsg);
-    await markActionFailed(action, db, errorMsg);
+    await resetActionForRetry(action, db, errorMsg);
     return { pendingActionId: action.id, status: 'failed', error: errorMsg };
   }
 }
@@ -487,14 +531,20 @@ async function markActionOrphaned(action: PendingActionModel, db: Database): Pro
 }
 
 /**
- * Mark a pending action as failed (permanent error).
+ * Reset a failed action back to 'pending' so it will be retried
+ * on the next drain trigger (reconnect or after enqueue).
+ *
+ * Outbox actions (reject/cancel/collectCod) represent physical driver actions
+ * that must eventually sync — we NEVER give up on them automatically.
+ * Unlike regular field sync which respects MAX_SYNC_ATTEMPTS, outbox actions
+ * keep retrying indefinitely until they succeed or the device goes away.
  */
-async function markActionFailed(action: PendingActionModel, db: Database, error: string): Promise<void> {
-  console.warn(`[outbox] Marking action ${action.id} as failed: ${error}`);
+async function resetActionForRetry(action: PendingActionModel, db: Database, error: string): Promise<void> {
+  console.warn(`[outbox] Action ${action.id} failed: ${error}. Will retry on next drain.`);
 
   await db.write(async () => {
     await action.update((row) => {
-      row.status = 'failed';
+      row.status = 'pending';
     });
   });
 }
