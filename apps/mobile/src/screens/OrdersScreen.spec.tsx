@@ -15,6 +15,17 @@ jest.mock('@nozbe/watermelondb/react', () => ({
   withObservables: (_trigger: any, _getObs: any) => (C: any) => C,
 }));
 
+// ─── Mock Alert ────────────────────────────────────────────────────────────────
+jest.mock('react-native', () => {
+  const RN = jest.requireActual('react-native');
+  return {
+    ...RN,
+    Alert: {
+      alert: jest.fn(),
+    },
+  };
+});
+
 jest.mock('@nozbe/watermelondb', () => ({
   Q: {
     where: jest.fn().mockReturnValue({ _where: 'test' }),
@@ -129,7 +140,7 @@ import { fetchAvailableOrders } from '../sync/client';
 // component only reads plain properties (id/status/totalCents/currency) in
 // renderItem, no WatermelonDB model methods, so these don't need to be real
 // OrderModel instances.
-function makeOrder(overrides: Partial<{ id: string; status: string; totalCents: number; currency: string; driverId: string }> = {}) {
+function makeOrder(overrides: Partial<{ id: string; status: string; totalCents: number; currency: string; driverId: string | null }> = {}) {
   return {
     id: 'order-1',
     status: 'ASSIGNED',
@@ -318,7 +329,7 @@ describe('pending action badge', () => {
     const myOrders = [makeOrder({ id: 'order-pending' }), makeOrder({ id: 'order-normal' })];
 
     const { queryAllByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
     );
 
     await waitFor(() => {
@@ -335,7 +346,7 @@ describe('pending action badge', () => {
     const myOrders = [makeOrder({ id: 'order-a' }), makeOrder({ id: 'order-b' })];
 
     const { queryAllByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
     );
 
     await waitFor(() => {
@@ -358,7 +369,7 @@ describe('pending action badge', () => {
     const myOrders = [makeOrder({ id: 'order-mine' })];
 
     const { queryAllByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
     );
 
     await waitFor(() => {
@@ -396,7 +407,7 @@ describe('stale pending action badge', () => {
     const myOrders = [makeOrder({ id: 'order-stale' }), makeOrder({ id: 'order-normal' })];
 
     const { queryAllByText, getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
     );
 
     await waitFor(() => {
@@ -421,7 +432,7 @@ describe('stale pending action badge', () => {
     const myOrders = [makeOrder({ id: 'order-fresh' })];
 
     const { queryAllByText, getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
     );
 
     await waitFor(() => {
@@ -446,7 +457,7 @@ describe('stale pending action badge', () => {
     const myOrders = [makeOrder({ id: 'order-stale' }), makeOrder({ id: 'order-fresh' })];
 
     const { getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} currentUserId="driver-123" myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
     );
 
     await waitFor(() => {
@@ -459,6 +470,126 @@ describe('stale pending action badge', () => {
     });
     await waitFor(() => {
       expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
+    });
+  });
+});
+
+// ─── Accept order online gating ──────────────────────────────────────────────
+describe('Accept order online gating', () => {
+  const { networkMonitor } = require('../map/networkMonitor');
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Reset networkMonitor to online by default
+    networkMonitor.getStatus.mockReturnValue('online');
+    networkMonitor.subscribe.mockReturnValue(jest.fn());
+    // Reset fetchAvailableOrders mock
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue([]);
+    // Reset pool query mock
+    mockOrdersCollection.query = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue([]),
+      observe: jest.fn().mockReturnValue({
+        subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
+      }),
+    });
+  });
+
+  test('shows alert and skips DB write when offline', async () => {
+    // Override to offline
+    networkMonitor.getStatus.mockReturnValue('offline');
+
+    // Set up pool orders so the Accept button appears
+    const poolOrderMock = makeOrder({ id: 'pool-order-1', status: 'ASSIGNED', driverId: null });
+    mockOrdersCollection.query = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue([poolOrderMock]),
+      observe: jest.fn().mockReturnValue({
+        subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
+      }),
+    });
+
+    const { getByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} />,
+    );
+
+    // Wait for pool to load
+    await waitFor(() => {
+      expect(fetchAvailableOrders).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    // Verify networkMonitor returns offline
+    expect(networkMonitor.getStatus()).toBe('offline');
+
+    // Verify the button is disabled when offline
+    const acceptButton = (getByText('Terima Order').parent as any)?.parent;
+    expect(acceptButton?.props.disabled).toBe(true);
+
+    // Reset mock write call count before testing guard behavior
+    mockDatabase.write.mockClear();
+
+    // Manually trigger handleAccept to test the guard (bypasses disabled prop)
+    await acceptButton?.props.onPress();
+
+    const Alert = require('react-native').Alert;
+    await waitFor(() => {
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Butuh Koneksi',
+        'Terima order butuh koneksi internet biar nggak bentrok sama driver lain.',
+      );
+    });
+
+    // DB write should NOT be called when guard triggers
+    expect(mockDatabase.write).not.toHaveBeenCalled();
+  });
+
+  test('accepts order normally when online', async () => {
+    // Already set to online in beforeEach
+
+    // Set up pool orders so the Accept button appears
+    const poolOrderMock = makeOrder({ id: 'pool-order-2', status: 'ASSIGNED', driverId: null });
+    mockOrdersCollection.query = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue([poolOrderMock]),
+      observe: jest.fn().mockReturnValue({
+        subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
+      }),
+    });
+    mockOrdersCollection.find = jest.fn().mockResolvedValue({
+      ...poolOrderMock,
+      update: jest.fn(),
+    });
+
+    const { getByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} />,
+    );
+
+    // Wait for pool to load
+    await waitFor(() => {
+      expect(fetchAvailableOrders).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    // Verify networkMonitor returns online
+    expect(networkMonitor.getStatus()).toBe('online');
+
+    // Tap Accept button
+    const acceptButton = (getByText('Terima Order').parent as any)?.parent;
+    acceptButton?.props.onPress();
+
+    const Alert = require('react-native').Alert;
+    await waitFor(() => {
+      // Alert should NOT be called when online
+      expect(Alert.alert).not.toHaveBeenCalled();
+    });
+
+    // DB write should be called
+    await waitFor(() => {
+      expect(mockDatabase.write).toHaveBeenCalled();
     });
   });
 });

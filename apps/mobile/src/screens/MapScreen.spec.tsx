@@ -255,7 +255,7 @@ describe('MapScreen', () => {
       );
 
       // Give some time for effects to run
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => globalThis.setTimeout(() => resolve(undefined), 50));
 
       expect(mockGetRoute).not.toHaveBeenCalled();
     });

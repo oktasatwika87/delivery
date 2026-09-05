@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
+  Alert,
   RefreshControl,
   SectionList,
   StyleSheet,
@@ -12,6 +13,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Q } from '@nozbe/watermelondb';
 import { withDatabase, withObservables } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
+import { of } from 'rxjs';
 
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
@@ -32,7 +34,6 @@ interface SectionData {
 
 interface Props {
   database: Database;
-  currentUserId: string | null;
   myOrders: OrderModel[];
 }
 
@@ -42,11 +43,11 @@ interface Props {
 // an identity function in OrdersScreen.spec.tsx and doesn't actually compute
 // myOrders, so testing badge/render behavior through the wrapped export isn't
 // possible without a much more elaborate observable mock.
-export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): React.JSX.Element {
+export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Element {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Orders'>>();
   const [poolOrders, setPoolOrders] = useState<OrderModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [connected, setConnected] = useState(false);
+  const [isOnline, setIsOnline] = useState<boolean>(networkMonitor.getStatus() === 'online');
   const [pendingOrderIds, setPendingOrderIds] = useState<Set<string>>(new Set());
   const [staleOrderIds, setStaleOrderIds] = useState<Set<string>>(new Set());
   const [removedNotice, setRemovedNotice] = useState<{ visible: boolean; orderId: string | null }>({
@@ -75,6 +76,14 @@ export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): 
       if (cancelled) unsub();
     });
     return () => { cancelled = true; };
+  }, []);
+
+  // ─── Network monitor subscription ─────────────────────────────────────────────
+  useEffect(() => {
+    const unsubscribe = networkMonitor.subscribe((status) => {
+      setIsOnline(status === 'online');
+    });
+    return unsubscribe;
   }, []);
 
   // ─── Route service instance ─────────────────────────────────────────────────
@@ -194,15 +203,9 @@ export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): 
     const unsubAvailable = ordersSocket.onOrderAvailable(onAvailable);
     const unsubUnavailable = ordersSocket.onOrderUnavailable(onUnavailable);
 
-    // on() also returns unsubscribe
-    const unsubConnect = ordersSocket.on('connect', () => setConnected(true));
-    const unsubDisconnect = ordersSocket.on('disconnect', () => setConnected(false));
-
     unsubscribeRef.current = [
       unsubAvailable,
       unsubUnavailable,
-      unsubConnect,
-      unsubDisconnect,
     ];
 
     return () => {
@@ -266,6 +269,14 @@ export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): 
   // ─── Accept order ───────────────────────────────────────────────────────────
   const handleAccept = useCallback(
     async (order: OrderModel): Promise<void> => {
+      if (networkMonitor.getStatus() !== 'online') {
+        Alert.alert(
+          'Butuh Koneksi',
+          'Terima order butuh koneksi internet biar nggak bentrok sama driver lain.',
+        );
+        return;
+      }
+
       const userId = await getCurrentUserId();
       if (!userId) {
         console.warn('[OrdersScreen] handleAccept: no userId');
@@ -338,10 +349,11 @@ export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): 
         </View>
         {isPool && (
           <TouchableOpacity
-            style={styles.acceptButton}
+            style={[styles.acceptButton, !isOnline && styles.acceptButtonDisabled]}
             onPress={() => handleAccept(item)}
+            disabled={!isOnline}
           >
-            <Text style={styles.acceptButtonText}>Terima Order</Text>
+            <Text style={[styles.acceptButtonText, !isOnline && styles.acceptButtonTextDisabled]}>Terima Order</Text>
           </TouchableOpacity>
         )}
       </TouchableOpacity>
@@ -389,9 +401,9 @@ export function OrdersScreenBase({ database, currentUserId, myOrders }: Props): 
 // currentUserId di-pass sebagai trigger prop ke withObservables.
 // Saat currentUserId berubah, observable myOrders akan re-query.
 const OrdersScreenWithObservables = withDatabase(
-  withObservables<{ database: Database; currentUserId: string | null }, Props>(
+  withObservables(
     ['currentUserId'],
-    ({ database, currentUserId }) => ({
+    ({ database, currentUserId }: { database: Database; currentUserId: string | null }) => ({
       myOrders: currentUserId
         ? database
             .get<OrderModel>('orders')
@@ -401,7 +413,7 @@ const OrdersScreenWithObservables = withDatabase(
               Q.sortBy('updated_at', Q.desc),
             )
             .observe()
-        : [],
+        : of<OrderModel[]>([]),
     }),
   )(OrdersScreenBase),
 );
@@ -481,7 +493,11 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginLeft: 12,
   },
+  acceptButtonDisabled: {
+    backgroundColor: '#a1a1aa',
+  },
   acceptButtonText: { color: '#fff', fontWeight: '600', fontSize: 14 },
+  acceptButtonTextDisabled: { color: '#d4d4d8' },
   empty: { padding: 32, alignItems: 'center' },
   loading: { padding: 32, alignItems: 'center' },
   notice: {
