@@ -1,27 +1,43 @@
-// Metro entry — RN 0.75 uses @react-native/metro-config
+// Metro entry - RN 0.75 pakai @react-native/metro-config
 const path = require('path');
 const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
 
-const defaultConfig = getDefaultConfig(__dirname);
+const projectRoot = __dirname;
+const monorepoRoot = path.resolve(projectRoot, '../..');
+
+const defaultConfig = getDefaultConfig(projectRoot);
+
+// Folder build yang tidak boleh ditonton Metro. Gradle bikin file sementara
+// di android/.gradle lalu menghapusnya di tengah build, dan watcher Metro
+// mati dengan ENOENT kalau ikut menonton ke situ.
+const blockList = new RegExp(
+  [
+    String.raw`[\\/]android[\\/]\.gradle[\\/]`,
+    String.raw`[\\/]android[\\/]\.cxx[\\/]`,
+    String.raw`[\\/]android[\\/]build[\\/]`,
+    String.raw`[\\/]android[\\/]app[\\/]build[\\/]`,
+    String.raw`[\\/]ios[\\/]build[\\/]`,
+    String.raw`[\\/]ios[\\/]Pods[\\/]`,
+    String.raw`[\\/]apps[\\/]backend[\\/]`,
+  ].join('|'),
+);
 
 const config = {
   resolver: {
-    // Force resolve react ke satu lokasi (prevent duplicate React instance)
+    blockList,
+    // Force resolve react ke satu lokasi (cegah instance React ganda)
     alias: {
-      'react': path.resolve(__dirname, 'node_modules/react'),
-      'react-native': path.resolve(__dirname, 'node_modules/react-native'),
+      react: path.resolve(projectRoot, 'node_modules/react'),
+      'react-native': path.resolve(projectRoot, 'node_modules/react-native'),
     },
-    // Include monorepo root for workspace packages
     nodeModulesPaths: [
-      path.resolve(__dirname, 'node_modules'),
-      path.resolve(__dirname, '../node_modules'),
+      path.resolve(projectRoot, 'node_modules'),
+      path.resolve(monorepoRoot, 'node_modules'),
     ],
   },
   watchFolders: [
-    // Watch entire monorepo root untuk resolve workspace packages
-    path.resolve(__dirname, '../..'),
-    // Workspace packages
-    path.resolve(__dirname, '../../packages/shared'),
+    path.resolve(monorepoRoot, 'node_modules'),
+    path.resolve(monorepoRoot, 'packages/shared'),
   ],
 };
 
