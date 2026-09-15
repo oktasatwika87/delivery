@@ -764,19 +764,6 @@ export class SyncCoordinator implements Coordinator {
 
         const existing = await this.findLocalPaymentByAck(collection, ack);
         if (existing) {
-          // Skenario A: capture pre-overwrite status untuk discriminator.
-          // prepareUpdate callback mutation deferred ke batch execution, jadi
-          // existing.status masih merefleksikan local state di titik ini.
-          const isCancelOfflineConflict = (existing as any).status === 'CANCELLED';
-
-          // Skenario A: hoist currentUserId computation agar accessible
-          // di prepareUpdate callback (callback tidak punya akses ke outer scope
-          // variables secara synchronous-safe).
-          let currentUserId: string | null = null;
-          if (ack.entityType === 'order') {
-            currentUserId = await getCurrentUserId();
-          }
-
           batch.push(existing.prepareUpdate((r: any) => {
             r.serverVersion = ack.serverVersion;
             this.applyServerDataToLocalRow(r, {
@@ -789,30 +776,16 @@ export class SyncCoordinator implements Coordinator {
             });
             // Mark as synced agar tidak dianggap dirty di collectDirty() berikutnya
             r._raw._status = 'synced';
-
-            // Skenario A: tulis persisted banner signal kalau conflict datang
-            // dari cancel-offline push (existing.status === 'CANCELLED' pre-overwrite).
-            if (ack.entityType === 'order' && isCancelOfflineConflict) {
-              const serverStatus = (ack.serverData as any).status as string;
-              const serverDriverId = (ack.serverData as any).driverId;
-              const isAcceptedByOther = serverDriverId != null && serverDriverId !== currentUserId;
-
-              // Compute reason untuk lastConflictReason field
-              let reason: 'accepted-by-other' | 'reassigned' | 'order-status-conflict' = 'order-status-conflict';
-              if (isAcceptedByOther) {
-                reason = 'accepted-by-other';
-              } else if (serverStatus === 'DELIVERED') {
-                reason = 'reassigned'; // delivered by someone — generic reassigned bucket
-              }
-              r.lastConflictReason = reason;
-              r.lastConflictAt = Date.now();
-            }
           }));
 
           // Emit event untuk order entity
           if (ack.entityType === 'order') {
             const serverDriverId = (ack.serverData as any).driverId;
-            // currentUserId already computed above (hoisted untuk prepareUpdate callback)
+            // currentUserId hanya dibutuhkan untuk deteksi order di-accept
+            // oleh driver lain (orderRemovedFromView). Tidak lagi di-hoist
+            // untuk prepareUpdate callback — Temuan 1: cancel-offline
+            // discriminator sudah dipindah ke outbox.ts handleVersionConflict.
+            const currentUserId = await getCurrentUserId();
             const isAcceptedByOther = serverDriverId != null && serverDriverId !== currentUserId;
 
             const reason = isAcceptedByOther ? 'accepted-by-other' : 'order-status-conflict';
