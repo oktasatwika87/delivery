@@ -490,14 +490,54 @@ function isOrphanedCod(err: any): boolean {
 
 /**
  * Handle version conflict: pull fresh order data, delete pending action, notify UI.
+ *
+ * Untuk pending action bertipe 'cancel', tulis juga persisted banner signal
+ * (lastConflictReason + lastConflictAt) ke order row lokal — banner
+ * LastConflictBanner baca field ini untuk surface cancel-offline conflict
+ * ke driver (Skenario A, Temuan 1).
+ *
+ * Aksi 'reject' / 'collect_cod' TIDAK menulis field ini. Reason
+ * 'cancelled-by-server' spesifik untuk skenario cancel-offline (driver tap
+ * Batal offline, server sudah reassign/close/cancel sebelum mobile sempat
+ * sync) — bukan untuk cancel online biasa.
  */
 async function handleVersionConflict(action: PendingActionModel, db: Database, reason: string): Promise<void> {
   console.log(`[outbox] Handling version conflict for action ${action.id}`);
 
-  // Delete the pending action
-  await deletePendingAction(action, db);
+  // Untuk pending action bertipe cancel: lookup order row lebih dulu
+  // (read-only, di luar transaction) supaya bisa di-batch dengan delete
+  // pending_action di bawah. Kalau order tidak ada di lokal (sangat
+  // jarang — server data di-pull duluan sebelum sync berikutnya), log
+  // warning dan lanjut tanpa tulis banner signal.
+  let cancelOrder: OrderModel | null = null;
+  if (action.actionType === 'cancel') {
+    try {
+      cancelOrder = await db.get<OrderModel>('orders').find(action.targetOrderId);
+    } catch (err) {
+      console.warn(
+        `[outbox] Order ${action.targetOrderId} not found locally for cancel conflict write:`,
+        err,
+      );
+    }
+  }
 
-  // Pull fresh order data to sync coordinator
+  // Single batch: delete pending_action + (kalau cancel) tulis banner signal.
+  // Tidak buka transaksi terpisah untuk lastConflictReason/lastConflictAt —
+  // gabung dengan delete pending_action (sesuai spec Temuan 1).
+  await db.write(async () => {
+    const ops: any[] = [action.prepareDestroyPermanently()];
+    if (cancelOrder) {
+      ops.push(cancelOrder.prepareUpdate((o: any) => {
+        o.lastConflictReason = 'cancelled-by-server';
+        o.lastConflictAt = Date.now();
+      }));
+    }
+    await db.batch(...ops);
+  });
+
+  // Pull fresh order data via sync coordinator (transaksi sendiri — tidak
+  // bisa digabung dengan batch di atas karena syncCoordinator.pullNow()
+  // mengelola batch internal applyPull-nya sendiri).
   try {
     await syncCoordinator.pullNow();
   } catch (err) {

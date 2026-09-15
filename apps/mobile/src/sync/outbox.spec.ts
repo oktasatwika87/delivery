@@ -5,6 +5,8 @@
 // Shared state
 const mockState = {
   records: new Map<string, any>(),
+  // Orders collection — track state untuk assertions lastConflictReason/lastConflictAt
+  orders: new Map<string, any>(),
   batchOps: [] as Array<{ type: string; row: any; fn?: (r: any) => void }>,
   // Per-test query overrides
   queryOverrides: [] as Array<{ matcher: string; results: any[] }>,
@@ -12,6 +14,7 @@ const mockState = {
 
 function clearMockState() {
   mockState.records.clear();
+  mockState.orders.clear();
   mockState.batchOps = [];
   mockState.queryOverrides = [];
 }
@@ -25,12 +28,23 @@ function attachMethods(row: any) {
     fn(row);
     return row;
   };
+  row.prepareDestroyPermanently = function() {
+    // Prepared destroy op — batch() detects _isDestroy dan remove from map.
+    return { _isDestroy: true, _targetRow: row, id: row.id };
+  };
   row.destroyPermanently = async function() {
     // mockState.records keys are arbitrary test labels, not row.id, so
     // delete by reference identity rather than by row.id.
     for (const [key, val] of mockState.records) {
       if (val === row) {
         mockState.records.delete(key);
+        break;
+      }
+    }
+    // Also remove from orders collection if applicable
+    for (const [key, val] of mockState.orders) {
+      if (val === row) {
+        mockState.orders.delete(key);
         break;
       }
     }
@@ -83,7 +97,37 @@ jest.mock('../db', () => ({
   database: {
     get(name: string) {
       if (name === 'orders') {
-        return { find() { return Promise.resolve({ update() {} }); } };
+        // Orders collection — track state via mockState.orders untuk
+        // assertions di handleVersionConflict tests (lastConflictReason,
+        // lastConflictAt). Method mirror pending_actions pattern supaya
+        // find/prepareUpdate/prepareDestroyPermanently seragam.
+        //
+        // Backward compat: kalau order belum ada di mockState.orders,
+        // auto-create stub supaya existing tests (enqueueReject/Cancel/
+        // CollectCod yang tidak pre-populate order) tetap jalan. Tests
+        // baru di handleVersionConflict suite pre-populate order secara
+        // eksplisit sebelum drain.
+        return {
+          async find(id: string) {
+            let r = mockState.orders.get(id);
+            if (!r) {
+              r = {
+                id,
+                _raw: { id, _status: 'synced' },
+              };
+              mockState.orders.set(id, r);
+            }
+            return attachMethods(r);
+          },
+          prepareCreateFromDirtyRaw(dirtyRaw: any) {
+            const row = {
+              id: dirtyRaw.id,
+              _raw: { id: dirtyRaw.id, _status: dirtyRaw._status ?? 'synced' },
+              ...dirtyRaw,
+            };
+            return row;
+          },
+        };
       }
       // pending_actions collection with query that filters
       return {
@@ -154,14 +198,40 @@ jest.mock('../db', () => ({
       return fn();
     },
     async batch(...ops: unknown[]) {
-      // Process prepared records — store them in records map
+      // Process prepared records — store them in records map.
+      // Also handle _isDestroy prepared ops (delete by reference identity).
+      //
+      // Backward compat: process pending batchOps yang di-queue via
+      // prepareUpdate. Pola lama: prepareUpdate → db.write (yang
+      // pre-iterate batchOps di mock). Pola baru: prepareUpdate
+      // di dalam writer fn → db.batch (yang process batchOps di sini).
+      // Handle keduanya supaya single-batch pattern handleVersionConflict
+      // (yang call prepareUpdate sebelum db.batch) jalan benar.
+      for (const op of mockState.batchOps) {
+        if (op.type === 'update' && op.fn) op.fn(op.row);
+      }
+      mockState.batchOps = [];
+
       for (const op of ops) {
         const prepared = op as any;
-        if (prepared && prepared.id) {
+        if (prepared && prepared._isDestroy && prepared._targetRow) {
+          // destroyPermanently prepared op — remove dari records & orders
+          for (const [key, val] of mockState.records) {
+            if (val === prepared._targetRow) {
+              mockState.records.delete(key);
+              break;
+            }
+          }
+          for (const [key, val] of mockState.orders) {
+            if (val === prepared._targetRow) {
+              mockState.orders.delete(key);
+              break;
+            }
+          }
+        } else if (prepared && prepared.id) {
           mockState.records.set(prepared.id, prepared);
         }
       }
-      mockState.batchOps = [];
     },
   },
 }));
@@ -430,6 +500,120 @@ describe('outbox', () => {
       const results = await drainPendingActions();
       expect(results).toHaveLength(2);
       expect(mockRejectOrder.mock.invocationCallOrder[0]).toBeLessThan(mockCancelOrder.mock.invocationCallOrder[0]);
+    });
+  });
+
+  // Temuan 1 (Skenario A): handleVersionConflict di outbox.ts menulis
+  // persisted banner signal (lastConflictReason + lastConflictAt) HANYA
+  // untuk pending action bertipe 'cancel'. Aksi 'reject' / 'collect_cod'
+  // TIDAK menulis field ini — diverifikasi via integration drain flow.
+  describe('handleVersionConflict() — cancel-offline banner signal', () => {
+    test('cancel conflict → tulis lastConflictReason=cancelled-by-server + lastConflictAt', async () => {
+      // Setup order lokal (mockState.orders)
+      const order = {
+        id: 'order-cancel-banner-test',
+        _raw: { id: 'order-cancel-banner-test', _status: 'synced' },
+        status: 'PENDING',
+        serverVersion: 5,
+      };
+      mockState.orders.set('order-cancel-banner-test', order);
+
+      // Setup pending action bertipe cancel
+      const action = makeRecord({
+        actionType: 'cancel',
+        targetOrderId: 'order-cancel-banner-test',
+        expectedVersion: 5,
+        payloadJson: { reason: 'customer tidak ada' },
+      });
+      mockState.records.set('cancel-banner-action', action);
+      attachMethods(action);
+
+      // Mock cancelOrder → reject dengan version conflict (409)
+      mockCancelOrder.mockRejectedValue({ status: 409 });
+
+      await drainPendingActions();
+
+      // Order row harus ter-update dengan reason cancelled-by-server
+      const updatedOrder = mockState.orders.get('order-cancel-banner-test')!;
+      expect(updatedOrder.lastConflictReason).toBe('cancelled-by-server');
+      expect(updatedOrder.lastConflictAt).toBeDefined();
+      expect(typeof updatedOrder.lastConflictAt).toBe('number');
+
+      // Pending action harus ter-delete
+      expect(mockState.records.has('cancel-banner-action')).toBe(false);
+
+      // Conflict event harus tetap ter-emit (LastConflictBanner trigger UI)
+      expect(syncEvents.emit).toHaveBeenCalledWith('orderConflict', expect.objectContaining({
+        orderId: 'order-cancel-banner-test',
+        reason: 'order-status-conflict',
+      }));
+    });
+
+    test('reject conflict → TIDAK tulis lastConflictReason / lastConflictAt', async () => {
+      // Setup order lokal
+      const order = {
+        id: 'order-reject-banner-test',
+        _raw: { id: 'order-reject-banner-test', _status: 'synced' },
+        status: 'ASSIGNED',
+        serverVersion: 3,
+      };
+      mockState.orders.set('order-reject-banner-test', order);
+
+      // Setup pending action bertipe reject
+      const action = makeRecord({
+        actionType: 'reject',
+        targetOrderId: 'order-reject-banner-test',
+        expectedVersion: 3,
+      });
+      mockState.records.set('reject-banner-action', action);
+      attachMethods(action);
+
+      // Mock rejectOrder → reject dengan version conflict (409)
+      mockRejectOrder.mockRejectedValue({ status: 409 });
+
+      await drainPendingActions();
+
+      // lastConflictReason/lastConflictAt harus undefined (tidak di-write)
+      const updatedOrder = mockState.orders.get('order-reject-banner-test')!;
+      expect(updatedOrder.lastConflictReason).toBeUndefined();
+      expect(updatedOrder.lastConflictAt).toBeUndefined();
+
+      // Pending action tetap ter-delete (handleVersionConflict tetap berjalan)
+      expect(mockState.records.has('reject-banner-action')).toBe(false);
+    });
+
+    test('collect_cod conflict → TIDAK tulis lastConflictReason / lastConflictAt', async () => {
+      // Setup order lokal
+      const order = {
+        id: 'order-cod-banner-test',
+        _raw: { id: 'order-cod-banner-test', _status: 'synced' },
+        status: 'DELIVERED',
+        serverVersion: 10,
+      };
+      mockState.orders.set('order-cod-banner-test', order);
+
+      // Setup pending action bertipe collect_cod
+      const action = makeRecord({
+        actionType: 'collect_cod',
+        targetOrderId: 'order-cod-banner-test',
+        idempotencyKey: 'cod:banner-test-key',
+        payloadJson: { amountCents: 50000 },
+      });
+      mockState.records.set('cod-banner-action', action);
+      attachMethods(action);
+
+      // Mock collectCodOrder → reject dengan version conflict (409)
+      // Note: processCollectCod treat 409 sebagai orphaned_needs_review,
+      // BUKAN handleVersionConflict. Verifikasi bahwa path ini juga tidak
+      // menulis banner signal.
+      mockCollectCodOrder.mockRejectedValue({ status: 409 });
+
+      await drainPendingActions();
+
+      // lastConflictReason/lastConflictAt harus undefined (tidak di-write)
+      const updatedOrder = mockState.orders.get('order-cod-banner-test')!;
+      expect(updatedOrder.lastConflictReason).toBeUndefined();
+      expect(updatedOrder.lastConflictAt).toBeUndefined();
     });
   });
 
