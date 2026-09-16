@@ -173,6 +173,64 @@ export class UnauthorizedError extends Error {
   }
 }
 
+/**
+ * Error generic dari API call non-2xx (selain 401 Unauthorized).
+ *
+ * Field `status` = HTTP status code, `code` = machine-readable code dari
+ * backend (mis. `'VERSION_CONFLICT'`), `body` = parsed response body
+ * (object kalau JSON, string kalau body plain text).
+ *
+ * Pesan Error tetap dalam format lama (`<prefix> failed: <status> - <body>`)
+ * supaya log existing tetap kebaca. Mobile callers yang butuh branching
+ * pakai `err.code` atau `err.status` — JANGAN parse pesan.
+ */
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  body?: unknown;
+
+  constructor(message: string, status: number, code?: string, body?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+    this.body = body;
+  }
+}
+
+/**
+ * Parse error response body & build ApiError untuk non-2xx response.
+ * Try JSON parse first, fallback ke plain text. Extract field `code`
+ * kalau ada di parsed object.
+ */
+async function buildApiError(prefix: string, res: Response): Promise<ApiError> {
+  const rawText = await res.text();
+  let body: unknown = rawText;
+  let code: string | undefined;
+
+  try {
+    const parsed = JSON.parse(rawText);
+    body = parsed;
+    if (parsed && typeof parsed === 'object' && 'code' in parsed) {
+      const codeVal = (parsed as Record<string, unknown>).code;
+      if (typeof codeVal === 'string') {
+        code = codeVal;
+      }
+    }
+  } catch {
+    // body bukan JSON — keep as text
+  }
+
+  const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
+  console.error(`[${prefix}] Failed: status=${res.status}, body=${bodyStr}`);
+  return new ApiError(
+    `${prefix} failed: ${res.status} - ${bodyStr}`,
+    res.status,
+    code,
+    body,
+  );
+}
+
 export interface AvailableOrderItem {
   orderId: string;
   totalCents: number;
@@ -365,9 +423,7 @@ export async function rejectOrder(orderId: string, version: number): Promise<Dri
     }
 
     if (!res.ok) {
-      const body = await res.text();
-      console.error(`[rejectOrder] Failed: status=${res.status}, body=${body}`);
-      throw new Error(`rejectOrder failed: ${res.status} - ${body}`);
+      throw await buildApiError('rejectOrder', res);
     }
 
     return res.json() as Promise<DriverActionResponse>;
@@ -405,9 +461,7 @@ export async function cancelOrder(
     }
 
     if (!res.ok) {
-      const body = await res.text();
-      console.error(`[cancelOrder] Failed: status=${res.status}, body=${body}`);
-      throw new Error(`cancelOrder failed: ${res.status} - ${body}`);
+      throw await buildApiError('cancelOrder', res);
     }
 
     return res.json() as Promise<DriverActionResponse>;
@@ -445,9 +499,7 @@ export async function collectCodOrder(
     }
 
     if (!res.ok) {
-      const body = await res.text();
-      console.error(`[collectCodOrder] Failed: status=${res.status}, body=${body}`);
-      throw new Error(`collectCodOrder failed: ${res.status} - ${body}`);
+      throw await buildApiError('collectCodOrder', res);
     }
 
     return res.json() as Promise<DriverActionResponse>;

@@ -75,15 +75,20 @@ jest.mock('./session', () => ({
   getCurrentUserId: jest.fn().mockResolvedValue('driver-123'),
 }));
 
-jest.mock('./client', () => ({
-  rejectOrder: jest.fn(),
-  cancelOrder: jest.fn(),
-  collectCodOrder: jest.fn(),
-  flagOrphanedCod: jest.fn().mockResolvedValue(undefined),
-  UnauthorizedError: class extends Error {
-    constructor() { super('Unauthorized'); this.name = 'UnauthorizedError'; }
-  },
-}));
+jest.mock('./client', () => {
+  // requireActual untuk preserve class identity — dipakai test isVersionConflict
+  // untuk instantiate ApiError langsung. rejectOrder/cancelOrder/collectCodOrder
+  // /flagOrphanedCod di-override dengan jest.fn() karena outbox.ts cuma butuh
+  // side effect-nya, bukan implementasinya.
+  const actual = jest.requireActual('./client');
+  return {
+    ...actual,
+    rejectOrder: jest.fn(),
+    cancelOrder: jest.fn(),
+    collectCodOrder: jest.fn(),
+    flagOrphanedCod: jest.fn().mockResolvedValue(undefined),
+  };
+});
 
 jest.mock('./idempotency', () => ({
   generateCodIdempotencyKey: jest.fn().mockResolvedValue('cod:test-uuid-123'),
@@ -247,9 +252,10 @@ import {
   isPendingActionStale,
   getPendingActionAgeMs,
   hasStalePendingAction,
+  isVersionConflict,
   STALE_THRESHOLD_MS,
 } from './outbox';
-import { rejectOrder, cancelOrder, collectCodOrder } from './client';
+import { rejectOrder, cancelOrder, collectCodOrder, ApiError } from './client';
 import { syncEvents } from './syncEvents';
 
 const mockRejectOrder = rejectOrder as jest.MockedFunction<typeof rejectOrder>;
@@ -671,6 +677,120 @@ describe('outbox', () => {
     test('hasStalePendingAction: returns false for order with no pending actions', async () => {
       const result = await hasStalePendingAction('order-none');
       expect(result).toBe(false);
+    });
+  });
+
+  // Unit test isVersionConflict — kontrak typed error ApiError dari client.ts
+  // memungkinkan deteksi 409 tanpa parse pesan. Tests ini verifikasi:
+  // (a) status === 409 di ApiError cukup, walaupun pesan tidak memuat 'version'
+  //     (kasus yang dulu gagal dengan regex parse);
+  // (b) ApiError non-409 tidak match;
+  // (c) error network biasa tidak match.
+  describe('isVersionConflict()', () => {
+    test('ApiError 409 tanpa kata "version" di pesan → true', () => {
+      // Persis pola backend baru: status 409, code VERSION_CONFLICT,
+      // message "Order was modified by another request..." (TIDAK ada
+      // kata "version" atau "conflict" di pesan — itulah yang dulu
+      // bikin handleVersionConflict tidak terpanggil).
+      const err = new ApiError(
+        'cancelOrder failed: 409 - {"code":"VERSION_CONFLICT","message":"Order was modified by another request. Please refresh and try again."}',
+        409,
+        'VERSION_CONFLICT',
+        { code: 'VERSION_CONFLICT', message: 'Order was modified by another request. Please refresh and try again.' },
+      );
+      expect(isVersionConflict(err)).toBe(true);
+    });
+
+    test('ApiError 409 dengan code undefined → tetap true via status', () => {
+      // Defensive: kalau backend somehow tidak kirim `code` field, status 409
+      // saja sudah cukup untuk trigger handleVersionConflict.
+      const err = new ApiError('cancelOrder failed: 409 - some body', 409);
+      expect(isVersionConflict(err)).toBe(true);
+    });
+
+    test('ApiError 403 → false (bukan version conflict, itu ownership check)', () => {
+      const err = new ApiError(
+        'rejectOrder failed: 403 - {"code":"ORDER_NOT_ASSIGNED","message":"You are not assigned to this order"}',
+        403,
+        'ORDER_NOT_ASSIGNED',
+        { code: 'ORDER_NOT_ASSIGNED', message: 'You are not assigned to this order' },
+      );
+      expect(isVersionConflict(err)).toBe(false);
+    });
+
+    test('Error network biasa (status undefined, code undefined) → false', () => {
+      const err = new Error('Network request failed');
+      expect(isVersionConflict(err)).toBe(false);
+    });
+
+    test('Error dengan pesan "version mismatch" → true (backward compat string check)', () => {
+      // Backward compat — error lama dengan pesan generic masih ke-detect.
+      const err = new Error('version mismatch detected');
+      expect(isVersionConflict(err)).toBe(true);
+    });
+
+    test('Error null/undefined → false', () => {
+      expect(isVersionConflict(null)).toBe(false);
+      expect(isVersionConflict(undefined)).toBe(false);
+    });
+  });
+
+  // Integration test: processCancel dengan client yang melempar ApiError 409
+  // (kasus riil dari Skenario A — driver cancel offline, server sudah
+  // reassign/complete, mobile sync dapat 409). handleVersionConflict harus
+  // terpanggil, pending_action terhapus, dan order lokal punya banner signal.
+  describe('processCancel + ApiError 409 → handleVersionConflict + banner signal', () => {
+    test('cancel conflict via ApiError 409 → tulis banner signal cancelled-by-server', async () => {
+      // Setup order lokal
+      const order = {
+        id: 'order-cancel-apierror-test',
+        _raw: { id: 'order-cancel-apierror-test', _status: 'synced' },
+        status: 'ASSIGNED',
+        serverVersion: 5,
+      };
+      mockState.orders.set('order-cancel-apierror-test', order);
+
+      // Setup pending action cancel
+      const action = makeRecord({
+        actionType: 'cancel',
+        targetOrderId: 'order-cancel-apierror-test',
+        expectedVersion: 5,
+        payloadJson: { reason: 'customer tidak ada' },
+      });
+      mockState.records.set('cancel-apierror-action', action);
+      attachMethods(action);
+
+      // Mock cancelOrder → reject dengan ApiError 409 (real instance, sama
+      // dengan yang akan dilempar client.ts setelah fix). Pesan TIDAK
+      // memuat 'version' atau 'conflict' — sehingga isVersionConflict
+      // hanya match via status === 409 atau code === 'VERSION_CONFLICT'.
+      mockCancelOrder.mockRejectedValue(
+        new ApiError(
+          'cancelOrder failed: 409 - {"code":"VERSION_CONFLICT","message":"Order was modified by another request. Please refresh and try again."}',
+          409,
+          'VERSION_CONFLICT',
+          { code: 'VERSION_CONFLICT', message: 'Order was modified by another request. Please refresh and try again.' },
+        ),
+      );
+
+      await drainPendingActions();
+
+      // handleVersionConflict terpanggil:
+      // - pending_action terhapus
+      // - order.lastConflictReason = 'cancelled-by-server'
+      // - order.lastConflictAt terisi
+      expect(mockState.records.has('cancel-apierror-action')).toBe(false);
+
+      const updatedOrder = mockState.orders.get('order-cancel-apierror-test')!;
+      expect(updatedOrder.lastConflictReason).toBe('cancelled-by-server');
+      expect(updatedOrder.lastConflictAt).toBeDefined();
+      expect(typeof updatedOrder.lastConflictAt).toBe('number');
+
+      // Conflict event tetap ter-emit (OrderConflictBanner trigger UI)
+      expect(syncEvents.emit).toHaveBeenCalledWith('orderConflict', expect.objectContaining({
+        orderId: 'order-cancel-apierror-test',
+        reason: 'order-status-conflict',
+      }));
     });
   });
 });

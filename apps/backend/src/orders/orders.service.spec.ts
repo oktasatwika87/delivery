@@ -459,6 +459,50 @@ describe('OrdersService', () => {
         service.rejectOrder(orderId, version, driverId),
       ).rejects.toThrow('Order was modified by another request');
     });
+
+    test('OCC conflict: response body memuat code VERSION_CONFLICT', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(mockOrderAssigned);
+      const prismaError = Object.assign(
+        new Error('Record to update not found.'),
+        { code: 'P2025', name: 'PrismaClientKnownRequestError' }
+      );
+      mockPrisma.order.update.mockRejectedValue(prismaError);
+
+      let caught: any;
+      try {
+        await service.rejectOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = caught.getResponse();
+      expect(response).toMatchObject({
+        code: 'VERSION_CONFLICT',
+        message: expect.stringContaining('Order was modified by another request'),
+      });
+    });
+
+    test('reject bukan owner → response body memuat code ORDER_NOT_ASSIGNED', async () => {
+      const orderAssignedToOther = {
+        ...mockOrderAssigned,
+        driverId: anotherDriverId,
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(orderAssignedToOther);
+
+      let caught: any;
+      try {
+        await service.rejectOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ForbiddenException);
+      const response = caught.getResponse();
+      expect(response).toMatchObject({
+        code: 'ORDER_NOT_ASSIGNED',
+      });
+    });
   });
 
   // ===== cancelOrder tests =====
@@ -640,6 +684,75 @@ describe('OrdersService', () => {
       await expect(
         service.cancelOrder(orderId, version, driverId),
       ).rejects.toThrow('Order was modified by another request');
+    });
+
+    // Skenario A (Temuan 1): body response harus berisi machine-readable
+    // `code: 'VERSION_CONFLICT'` supaya mobile outbox.ts isVersionConflict()
+    // bisa deteksi tanpa parse pesan. Body object di-pass langsung ke
+    // ConflictException, Nest HTTP exception filter serialize as-is.
+    test('OCC conflict: response body memuat code VERSION_CONFLICT', async () => {
+      const mockOrder = makeOrderWithDriver(OrderStatusDb.ASSIGNED);
+      mockPrisma.order.findUnique.mockResolvedValue(mockOrder);
+
+      const prismaError = Object.assign(
+        new Error('Record to update not found.'),
+        { code: 'P2025', name: 'PrismaClientKnownRequestError' }
+      );
+      mockPrisma.order.update.mockRejectedValue(prismaError);
+
+      let caught: any;
+      try {
+        await service.cancelOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = caught.getResponse();
+      expect(response).toMatchObject({
+        code: 'VERSION_CONFLICT',
+        message: expect.stringContaining('Order was modified by another request'),
+      });
+    });
+
+    test('cancel non-cancellable status → response body memuat code ORDER_NOT_CANCELLABLE', async () => {
+      const mockOrder = makeOrderWithDriver(OrderStatusDb.PENDING);
+      mockPrisma.order.findUnique.mockResolvedValue(mockOrder);
+
+      let caught: any;
+      try {
+        await service.cancelOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(BadRequestException);
+      const response = caught.getResponse();
+      expect(response).toMatchObject({
+        code: 'ORDER_NOT_CANCELLABLE',
+      });
+    });
+
+    test('cancel bukan owner → response body memuat code ORDER_NOT_ASSIGNED', async () => {
+      const mockOrder = makeOrderWithDriver(OrderStatusDb.ASSIGNED);
+      const orderAssignedToOther = {
+        ...mockOrder,
+        driverId: anotherDriverId,
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(orderAssignedToOther);
+
+      let caught: any;
+      try {
+        await service.cancelOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ForbiddenException);
+      const response = caught.getResponse();
+      expect(response).toMatchObject({
+        code: 'ORDER_NOT_ASSIGNED',
+      });
     });
   });
 

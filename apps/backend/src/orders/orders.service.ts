@@ -210,14 +210,18 @@ export class OrdersService {
 
     // Status check: harus ASSIGNED baru bisa di-reject
     if (current.status !== OrderStatusDb.ASSIGNED) {
-      throw new BadRequestException(
-        `Cannot reject order in status ${current.status}. Expected ASSIGNED.`,
-      );
+      throw new BadRequestException({
+        code: 'ORDER_NOT_CANCELLABLE',
+        message: `Cannot reject order in status ${current.status}. Expected ASSIGNED.`,
+      });
     }
 
     // Ownership: hanya driver yang di-assign order ini yang boleh reject
     if (current.driverId !== driverId) {
-      throw new ForbiddenException('You are not assigned to this order');
+      throw new ForbiddenException({
+        code: 'ORDER_NOT_ASSIGNED',
+        message: 'You are not assigned to this order',
+      });
     }
 
     try {
@@ -247,7 +251,10 @@ export class OrdersService {
     } catch (err) {
       const error = err as { code?: string };
       if (error.code === 'P2025') {
-        throw new ConflictException('Order was modified by another request. Please refresh and try again.');
+        throw new ConflictException({
+          code: 'VERSION_CONFLICT',
+          message: 'Order was modified by another request. Please refresh and try again.',
+        });
       }
       throw err;
     }
@@ -270,7 +277,10 @@ export class OrdersService {
 
     // Driver ownership: hanya driver yang sedang assigned yang boleh cancel
     if (current.driverId !== driverId) {
-      throw new ForbiddenException('You are not assigned to this order');
+      throw new ForbiddenException({
+        code: 'ORDER_NOT_ASSIGNED',
+        message: 'You are not assigned to this order',
+      });
     }
 
     // Status check: harus ASSIGNED, PREPARING, atau OUT_FOR_DELIVERY
@@ -282,9 +292,10 @@ export class OrdersService {
       status === OrderStatusDb.OUT_FOR_DELIVERY;
 
     if (!isCancellable(current.status)) {
-      throw new BadRequestException(
-        `Cannot cancel order in status ${current.status}. Must be ASSIGNED, PREPARING, or OUT_FOR_DELIVERY.`,
-      );
+      throw new BadRequestException({
+        code: 'ORDER_NOT_CANCELLABLE',
+        message: `Cannot cancel order in status ${current.status}. Must be ASSIGNED, PREPARING, or OUT_FOR_DELIVERY.`,
+      });
     }
 
     try {
@@ -311,7 +322,10 @@ export class OrdersService {
     } catch (err) {
       const error = err as { code?: string };
       if (error.code === 'P2025') {
-        throw new ConflictException('Order was modified by another request. Please refresh and try again.');
+        throw new ConflictException({
+          code: 'VERSION_CONFLICT',
+          message: 'Order was modified by another request. Please refresh and try again.',
+        });
       }
       throw err;
     }
