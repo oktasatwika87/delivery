@@ -460,19 +460,16 @@ async function processCollectCod(action: PendingActionModel, db: Database): Prom
 }
 
 /**
- * Check if an error indicates a version conflict (409 atau code 'VERSION_CONFLICT').
+ * Check if an error indicates a version conflict.
  *
- * Pre-fix bug: clause `msg.includes('version') && (...)` punya operator
- * precedence yang salah (JS: `&&` lebih tinggi dari `||`, jadi clause
- * jadi `version && (...) || (...) || (...)` — bukan yang dimaksud). Plus,
- * backend message "Order was modified by another request..." tidak memuat
- * kata "version" atau "conflict" → tidak match → handleVersionConflict
- * tidak pernah terpanggil untuk cancel/reject offline conflict.
+ * Cek field terstruktur dulu: `status === 409`, `statusCode === 409`,
+ * atau `code === 'VERSION_CONFLICT'`. Backward compat string check untuk
+ * error lama yang pesan-nya generic ("version mismatch" dll).
  *
- * Rewrite: cek field terstruktur dulu (status 409 atau code VERSION_CONFLICT),
- * fallback ke regex `\b409\b` di pesan untuk backward compat dengan log lama,
- * plus clause `version` + conflict/mismatch/stale dengan explicit parentheses
- * supaya presedensinya benar.
+ * Catatan: clause `\b409\b` regex terhadap String(err) sudah dihapus —
+ * redundant (ApiError dari client.ts selalu punya `err.status === 409`
+ * duluan) DAN false-positive prone (body apapun yang memuat angka 409,
+ * mis. `{"amount":409}`, akan lolos).
  */
 export function isVersionConflict(err: any): boolean {
   if (!err) return false;
@@ -481,7 +478,6 @@ export function isVersionConflict(err: any): boolean {
     err.status === 409 ||
     err.statusCode === 409 ||
     err.code === 'VERSION_CONFLICT' ||
-    /\b409\b/.test(msg) ||
     (msg.includes('version') && (msg.includes('conflict') || msg.includes('mismatch') || msg.includes('stale')))
   );
 }

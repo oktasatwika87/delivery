@@ -394,15 +394,6 @@ export interface DriverActionResponse {
 }
 
 /**
- * Error response from driver action endpoints.
- */
-export interface DriverActionError {
-  statusCode: number;
-  message: string;
-  error: string;
-}
-
-/**
  * Driver rejects an assigned order.
  * Order must be in status ASSIGNED.
  */

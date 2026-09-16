@@ -733,6 +733,21 @@ describe('outbox', () => {
       expect(isVersionConflict(null)).toBe(false);
       expect(isVersionConflict(undefined)).toBe(false);
     });
+
+    // Regression lock: clause regex `\b409\b` pernah ada di isVersionConflict
+    // tapi rentan false-positive — body response apapun yang memuat angka 409
+    // berdiri sendiri (mis. `{"amount":409}` dari endpoint yang tidak terkait)
+    // akan lolos sebagai version conflict. Setelah clause dihapus,
+    // ApiError 403 dengan body mengandung "409" HARUS return false.
+    test('ApiError 403 dengan body yang memuat angka 409 → false (lock: jangan parse pesan untuk 409)', () => {
+      const err = new ApiError(
+        'cancelOrder failed: 403 - {"code":"ORDER_NOT_ASSIGNED","message":"You are not assigned to this order","debug":{"requestId":409}}',
+        403,
+        'ORDER_NOT_ASSIGNED',
+        { code: 'ORDER_NOT_ASSIGNED', message: 'You are not assigned to this order', debug: { requestId: 409 } },
+      );
+      expect(isVersionConflict(err)).toBe(false);
+    });
   });
 
   // Integration test: processCancel dengan client yang melempar ApiError 409
