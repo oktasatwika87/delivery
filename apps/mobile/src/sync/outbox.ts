@@ -65,15 +65,20 @@ export async function enqueueReject(orderId: string, expectedVersion: number): P
     const pendingActionId = generateUUID();
 
     await database.write(async () => {
+      // Kunci HARUS nama kolom di schema.ts (snake_case). sanitizedRaw
+      // di RawRecord/index.js cuma iterasi tableSchema.columnArray -
+      // kunci tak dikenal di-drop, kolom snake_case jatuh ke default
+      // ('' / 0). Lihat outbox.regression.spec.ts untuk bukti.
       const preparedRecord = database.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
         id: pendingActionId,
         _status: 'synced',
         _changed: '',
-        actionType: 'reject',
-        targetOrderId: orderId,
-        expectedVersion,
-        idempotencyKey: `reject:${orderId}:${userId}`,
-        payloadJson: null,
+        action_type: 'reject',
+        target_order_id: orderId,
+        expected_version: expectedVersion,
+        idempotency_key: `reject:${orderId}:${userId}`,
+        // payload_json optional, default null.
+        payload_json: null,
         status: 'pending',
       });
       await database.batch(preparedRecord);
@@ -116,15 +121,19 @@ export async function enqueueCancel(
     const pendingActionId = generateUUID();
 
     await database.write(async () => {
+      // Kunci snake_case (lihat catatan di enqueueReject). payload_json
+      // adalah kolom string berisi JSON - prepareCreateFromDirtyRaw
+      // bypass decorator @json PendingActionModel, jadi nilai raw
+      // harus JSON.stringify (atau null untuk optional).
       const preparedRecord = database.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
         id: pendingActionId,
         _status: 'synced',
         _changed: '',
-        actionType: 'cancel',
-        targetOrderId: orderId,
-        expectedVersion,
-        idempotencyKey: `cancel:${orderId}:${userId}:${Date.now()}`,
-        payloadJson: payload,
+        action_type: 'cancel',
+        target_order_id: orderId,
+        expected_version: expectedVersion,
+        idempotency_key: `cancel:${orderId}:${userId}:${Date.now()}`,
+        payload_json: JSON.stringify(payload),
         status: 'pending',
       });
       await database.batch(preparedRecord);
@@ -163,15 +172,17 @@ export async function enqueueCollectCod(
     const pendingActionId = generateUUID();
 
     await database.write(async () => {
+      // Kunci snake_case (lihat catatan di enqueueReject). payload_json
+      // string berisi JSON - bypass decorator @json.
       const preparedRecord = database.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
         id: pendingActionId,
         _status: 'synced',
         _changed: '',
-        actionType: 'collect_cod',
-        targetOrderId: orderId,
-        expectedVersion: 0, // COD doesn't require version check
-        idempotencyKey,
-        payloadJson: payload,
+        action_type: 'collect_cod',
+        target_order_id: orderId,
+        expected_version: 0, // COD tidak butuh version check
+        idempotency_key: idempotencyKey,
+        payload_json: JSON.stringify(payload),
         status: 'pending',
       });
       await database.batch(preparedRecord);

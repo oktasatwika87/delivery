@@ -180,15 +180,21 @@ jest.mock('../db', () => ({
           return attachMethods(row);
         },
         prepareCreateFromDirtyRaw(dirtyRaw: any) {
-          // Return a mock prepared record that batch() can process
+          // Baca kunci snake_case saja - sesuai tableSchema.columnArray
+          // yang diiterasi sanitizedRaw. Kunci tak dikenal di-drop,
+          // jadi camelCase dari caller bikin isi _raw undefined.
           const row = {
             id: dirtyRaw.id,
-            _raw: { id: dirtyRaw.id, _status: dirtyRaw._status },
-            actionType: dirtyRaw.actionType,
-            targetOrderId: dirtyRaw.targetOrderId,
-            expectedVersion: dirtyRaw.expectedVersion,
-            idempotencyKey: dirtyRaw.idempotencyKey,
-            payloadJson: dirtyRaw.payloadJson,
+            _raw: {
+              id: dirtyRaw.id,
+              _status: dirtyRaw._status,
+              action_type: dirtyRaw.action_type,
+              target_order_id: dirtyRaw.target_order_id,
+              expected_version: dirtyRaw.expected_version,
+              idempotency_key: dirtyRaw.idempotency_key,
+              payload_json: dirtyRaw.payload_json,
+              status: dirtyRaw.status,
+            },
             status: dirtyRaw.status,
           };
           return row;
@@ -272,10 +278,10 @@ describe('outbox', () => {
       expect(result.pendingActionId).toBeDefined();
       const actions = [...mockState.records.values()];
       expect(actions).toHaveLength(1);
-      expect(actions[0].actionType).toBe('reject');
-      expect(actions[0].targetOrderId).toBe('order-abc');
-      expect(actions[0].expectedVersion).toBe(5);
-      expect(actions[0].status).toBe('pending');
+      expect(actions[0]._raw.action_type).toBe('reject');
+      expect(actions[0]._raw.target_order_id).toBe('order-abc');
+      expect(actions[0]._raw.expected_version).toBe(5);
+      expect(actions[0]._raw.status).toBe('pending');
     });
 
     test('returns error when not authenticated', async () => {
@@ -292,14 +298,16 @@ describe('outbox', () => {
       const result = await enqueueCancel('order-xyz', 7, 'Customer tidak ada di lokasi');
       expect(result.success).toBe(true);
       const actions = [...mockState.records.values()];
-      expect(actions[0].actionType).toBe('cancel');
-      expect(actions[0].payloadJson).toEqual({ reason: 'Customer tidak ada di lokasi' });
+      // payload_json: string berisi JSON (prepareCreateFromDirtyRaw bypass @json decorator).
+      expect(actions[0]._raw.action_type).toBe('cancel');
+      expect(actions[0]._raw.payload_json).toBe('{"reason":"Customer tidak ada di lokasi"}');
     });
 
     test('creates pending_action row without reason', async () => {
       const result = await enqueueCancel('order-no-reason', 1);
       expect(result.success).toBe(true);
-      expect([...mockState.records.values()][0].payloadJson).toEqual({});
+      // payload_json: '{}' saat tanpa reason.
+      expect([...mockState.records.values()][0]._raw.payload_json).toBe('{}');
     });
   });
 
@@ -308,9 +316,10 @@ describe('outbox', () => {
       const result = await enqueueCollectCod('order-cod', 50000);
       expect(result.success).toBe(true);
       const actions = [...mockState.records.values()];
-      expect(actions[0].actionType).toBe('collect_cod');
-      expect(actions[0].payloadJson).toEqual({ amountCents: 50000 });
-      expect(actions[0].idempotencyKey).toBe('cod:test-uuid-123');
+      // payload_json: JSON.stringify dari payload - string, bukan objek.
+      expect(actions[0]._raw.action_type).toBe('collect_cod');
+      expect(actions[0]._raw.payload_json).toBe('{"amountCents":50000}');
+      expect(actions[0]._raw.idempotency_key).toBe('cod:test-uuid-123');
     });
   });
 
@@ -324,7 +333,8 @@ describe('outbox', () => {
       // Record should be in mockState.records with the returned pendingActionId
       const actions = [...mockState.records.values()];
       expect(actions.some(a => a.id === result.pendingActionId)).toBe(true);
-      expect(actions.some(a => a.actionType === 'reject')).toBe(true);
+      // Baca _raw langsung - mock prepareCreateFromDirtyRaw hanya isi snake_case.
+      expect(actions.some(a => a._raw.action_type === 'reject')).toBe(true);
     });
 
     test('enqueueCancel creates record with id from prepareCreateFromDirtyRaw', async () => {
@@ -336,7 +346,7 @@ describe('outbox', () => {
       // Record should be in mockState.records with the returned pendingActionId
       const actions = [...mockState.records.values()];
       expect(actions.some(a => a.id === result.pendingActionId)).toBe(true);
-      expect(actions.some(a => a.actionType === 'cancel')).toBe(true);
+      expect(actions.some(a => a._raw.action_type === 'cancel')).toBe(true);
     });
 
     test('enqueueCollectCod creates record with id from prepareCreateFromDirtyRaw', async () => {
@@ -348,7 +358,7 @@ describe('outbox', () => {
       // Record should be in mockState.records with the returned pendingActionId
       const actions = [...mockState.records.values()];
       expect(actions.some(a => a.id === result.pendingActionId)).toBe(true);
-      expect(actions.some(a => a.actionType === 'collect_cod')).toBe(true);
+      expect(actions.some(a => a._raw.action_type === 'collect_cod')).toBe(true);
     });
 
     test('enqueueReject pendingActionId is valid UUID format', async () => {
