@@ -13,6 +13,8 @@ import { Q } from '@nozbe/watermelondb';
 import reactNativeUUID from 'react-native-uuid';
 import type { Database } from '@nozbe/watermelondb';
 import type {
+  ChatMessage,
+  Order,
   Payment,
   SyncPullResponse,
   SyncRecordPull,
@@ -40,6 +42,19 @@ import { networkMonitor } from '../map/networkMonitor';
  * permanen surfaced ke user.
  */
 const MAX_SYNC_ATTEMPTS = 5;
+
+/**
+ * Parse string ISO 8601 jadi epoch milliseconds, atau null kalau input
+ * tidak valid (bukan string, string kosong, atau string yang gagal di-parse
+ * oleh Date constructor). Dipakai oleh buildRawRowForCreate untuk
+ * konversi createdAt dari server (ISO string) jadi nilai kolom number
+ * `created_at` / `client_created_at` / `server_created_at` di schema.
+ */
+function parseIsoMsOrNull(value: unknown): number | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
 
 interface Coordinator {
   start(db: Database): Promise<void>;
@@ -468,74 +483,98 @@ export class SyncCoordinator implements Coordinator {
 
   /**
    * Build dirty raw object untuk prepareCreateFromDirtyRaw() dari server
-   * pull record. Mirror dari applyServerDataToLocalRow — field mapping
-   * sama, JSON decorator handling sama — tapi untuk create path.
+   * pull record. Mirror dari applyServerDataToLocalRow (update path) -
+   * field mapping sama - tapi untuk create path dengan snake_case keys.
    *
    * Beda API antara dua path:
    * - Update path: `row.fooBar = value` (Model setter, camelCase)
    * - Create path: prepareCreateFromDirtyRaw accepts raw row shape dengan
-   *   Model camelCase names + reserved keys (`id`, `_status`, `_changed`)
+   *   snake_case column names + reserved keys (`id`, `_status`, `_changed`)
    *
-   * Decision: pakai function terpisah, bukan shared mapping spec.
-   * Rationale: dua API ini secara struktural berbeda (Model setter vs
-   * raw object API). Shared spec bakal encode dua konvensi sekaligus
-   * tanpa benar-benar mengurangi duplication — extra abstraction layer
-   * tanpa payoff. Function terpisah lebih simple, local, dan visible
-   * side-by-side dengan sibling update-path function di file ini.
-   * Code reviewer bisa langsung compare untuk catch drift kalau
-   * field mapping server berubah.
+   * Kenapa snake_case: prepareCreateFromDirtyRaw memakai sanitizedRaw.
+   * WatermelonDB mengiterasi tableSchema.columnArray dan hanya menyalin
+   * kunci yang sama persis dengan nama kolom. Kunci lain (mis. camelCase)
+   * di-drop, dan kolom yang tidak dikirim jatuh ke nilai bawaan ('' untuk
+   * string wajib, 0 untuk number wajib, null untuk kolom opsional).
+   *
+   * Kolom JSON (items_json, address_json, attachment_json) harus dikirim
+   * sebagai string JSON. Nilai bukan string di kolom string juga diganti
+   * nilai bawaan, jadi object harus di-JSON.stringify dulu.
+   *
+   * record.data bertipe union Order | Payment | ChatMessage dan
+   * entityType ada di luar data, jadi TypeScript tidak bisa mempersempit
+   * sendiri; cast per cabang di bawah dijaga oleh pengecekan entityType.
+   *
+   * created_at dan updated_at tidak diisi otomatis oleh
+   * prepareCreateFromDirtyRaw, jadi keduanya dikirim eksplisit di sini:
+   * created_at dari server (`data.createdAt`, parsed ke ms) atau fallback
+   * Date.now(); updated_at selalu Date.now() (waktu persist lokal).
+   *
+   * Function terpisah dari applyServerDataToLocalRow karena dua API ini
+   * secara struktural berbeda (Model setter vs raw object API). Shared
+   * mapping spec bakal encode dua konvensi sekaligus tanpa benar-benar
+   * mengurangi duplication. Code reviewer bisa langsung compare dua
+   * function side-by-side di file ini untuk catch drift kalau field
+   * mapping server berubah.
    */
   private buildRawRowForCreate(record: SyncRecordPull): Record<string, unknown> {
     const d = record.data;
+    const now = Date.now();
+    const createdAtRaw = parseIsoMsOrNull(d.createdAt) ?? now;
+    const updatedAtRaw = now;
+
+    // Pulled dari server, bukan perubahan user - langsung synced,
+    // gak akan di-pickup oleh collectDirty() berikutnya.
     const base: Record<string, unknown> = {
       id: record.id,
-      // Pulled dari server, bukan perubahan user — langsung synced,
-      // gak akan di-pickup oleh collectDirty() berikutnya.
       _status: 'synced',
       _changed: '',
-      serverVersion: record.serverVersion,
+      server_version: record.serverVersion,
+      created_at: createdAtRaw,
+      updated_at: updatedAtRaw,
     };
 
     if (record.entityType === 'order') {
+      const orderData = d as Order;
       return {
         ...base,
-        customerId: (d as any).customerId,
-        driverId: (d as any).driverId ?? null,
-        status: (d as any).status,
-        // @json decorator auto-stringify on write — assign raw object
-        itemsJson: (d as any).items,
-        addressJson: (d as any).deliveryAddress,
-        totalCents: (d as any).totalCents,
-        currency: (d as any).currency,
-        notes: (d as any).notes ?? null,
-        cancelledBy: (d as any).cancelledBy ?? null,
-        cancelReason: (d as any).cancelReason ?? null,
+        customer_id: orderData.customerId,
+        driver_id: orderData.driverId ?? null,
+        status: orderData.status,
+        items_json: JSON.stringify(orderData.items),
+        address_json: JSON.stringify(orderData.deliveryAddress),
+        total_cents: orderData.totalCents,
+        currency: orderData.currency,
+        notes: orderData.notes ?? null,
+        cancelled_by: orderData.cancelledBy ?? null,
+        cancel_reason: orderData.cancelReason ?? null,
       };
     } else if (record.entityType === 'payment') {
+      const paymentData = d as Payment;
       return {
         ...base,
-        orderId: (d as any).orderId,
-        idempotencyKey: (d as any).idempotencyKey,
-        method: (d as any).method,
-        status: (d as any).status,
-        amountCents: (d as any).amountCents,
-        currency: (d as any).currency,
-        kind: (d as any).kind,
-        externalRef: (d as any).externalRef ?? null,
+        order_id: paymentData.orderId,
+        idempotency_key: paymentData.idempotencyKey,
+        method: paymentData.method,
+        status: paymentData.status,
+        amount_cents: paymentData.amountCents,
+        currency: paymentData.currency,
+        kind: paymentData.kind,
+        external_ref: paymentData.externalRef ?? null,
       };
     } else if (record.entityType === 'chat_message') {
+      const chatData = d as ChatMessage;
       return {
         ...base,
-        roomId: (d as any).roomId,
-        senderId: (d as any).senderId,
-        body: (d as any).body,
-        // @json decorator auto-stringify on write — assign raw object
-        attachmentJson: (d as any).attachment ?? null,
-        status: (d as any).status,
-        clientCreatedAt: new Date((d as any).clientCreatedAt).getTime(),
-        serverCreatedAt: (d as any).serverCreatedAt
-          ? new Date((d as any).serverCreatedAt).getTime()
-          : null,
+        room_id: chatData.roomId,
+        sender_id: chatData.senderId,
+        body: chatData.body,
+        attachment_json: chatData.attachment != null ? JSON.stringify(chatData.attachment) : null,
+        status: chatData.status,
+        // Kolom angka wajib di schema (bukan optional); 0 bukan timestamp yang sah,
+        // jadi fallback ke now saat server tidak kirim atau ISO string tidak valid.
+        client_created_at: parseIsoMsOrNull(chatData.clientCreatedAt) ?? now,
+        server_created_at: parseIsoMsOrNull(chatData.serverCreatedAt),
       };
     }
 

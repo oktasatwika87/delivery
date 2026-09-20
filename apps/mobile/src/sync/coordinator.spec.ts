@@ -81,7 +81,11 @@ type SyncPushResponse = {
 
 interface MockRow {
   id: string;
-  _raw: { _status: string };
+  // Mock menulis semua kunci non-reserved langsung ke _raw apa adanya.
+  // Mock ini tidak mensimulasikan sanitizedRaw WatermelonDB. Tes membaca
+  // kolom snake_case, jadi kalau kode produksi kembali ke camelCase,
+  // kolom terbaca undefined dan tes gagal.
+  _raw: { _status: string; [key: string]: unknown };
   serverVersion?: number;
   failedSyncAttempts?: number;
   createdAt?: number;
@@ -112,6 +116,16 @@ function resetState() {
   for (const name of ['orders', 'payments', 'chat_messages']) {
     state.records.set(name, new Map());
   }
+}
+
+// Baca satu kolom JSON dari _raw lalu parse. Melempar kalau nilainya
+// bukan string, supaya typo nama kolom gagal cepat dengan pesan jelas.
+function readJsonColumn(raw: { [key: string]: unknown }, columnName: string): unknown {
+  const value = raw[columnName];
+  if (typeof value !== 'string') {
+    throw new Error(`Kolom ${columnName} di _raw bukan string: ${typeof value}`);
+  }
+  return JSON.parse(value);
 }
 
 function createMockRow(id: string, initialStatus = 'synced'): MockRow {
@@ -158,27 +172,21 @@ function createCollection(name: string) {
       collectionRecords.set(id, row);
       return attachModelMethods(row);
     },
-    // Used by applyPull()'s create path (post-refactor). Mirrors the official
-    // WatermelonDB API: collection.prepareCreateFromDirtyRaw(dirtyRaw) returns
-    // a prepared record that becomes persisted via database.batch(). In this
-    // mock we collapse prepare+persist for simplicity (multi-collection state
-    // tracked here, not in batch()) — final state-equivalence is what tests
-    // verify, not the intermediate prepare/persist timeline. See same pattern
-    // in outbox.spec.ts as reference for the production API contract.
+    // Copy semua kunci non-reserved ke _raw apa adanya. Kunci reserved
+    // (id, _status, _changed) dipisah sesuai contract.
     prepareCreateFromDirtyRaw(dirtyRaw: Record<string, unknown>): MockRow {
       const id = dirtyRaw.id as string;
+      const rawClone: { _status: string; [key: string]: unknown } = {
+        _status: (dirtyRaw._status as string) ?? 'synced',
+      };
+      for (const [k, v] of Object.entries(dirtyRaw)) {
+        if (k === 'id' || k === '_status' || k === '_changed') continue;
+        rawClone[k] = v;
+      }
       const row: MockRow = {
         id,
-        _raw: { _status: (dirtyRaw._status as string) ?? 'synced' },
+        _raw: rawClone,
       };
-      // Apply semua field dari dirtyRaw (Model camelCase keys, sama seperti
-      // how production code calls prepareCreateFromDirtyRaw — lihat
-      // buildRawRowForCreate di coordinator.ts).
-      for (const [k, v] of Object.entries(dirtyRaw)) {
-        if (k === '_raw') continue; // _raw udah di-set di atas
-        if (k === 'id') continue; // udah di-set di atas
-        (row as any)[k] = v;
-      }
       collectionRecords.set(id, row);
       return row;
     },
@@ -264,32 +272,38 @@ describe('SyncCoordinator', () => {
       // @ts-expect-error - accessing private method for testing
       await coordinator.applyPull(pullResponse, mockDb);
 
-      // Verifikasi: row ter-create di collection orders dengan semua field order
-      // Deepened dari 3 ke full-field assertion biar sama rigor dengan
-      // payment/chat_message create-path tests (yang udah full-field dari awal).
+      // Verifikasi: row ter-create di collection orders dengan semua field order.
+      // Baca dari _raw (snake_case) sesuai pola outbox.spec.ts - mock
+      // menulis kolom snake_case langsung ke _raw, dan production code
+      // buildRawRowForCreate juga pakai snake_case (lihat coordinator.ts).
       const records = state.records.get('orders');
       const created = records?.get('order-new-1');
       expect(created).toBeDefined();
-      expect(created!.serverVersion).toBe(1);
-      expect(created!.customerId).toBe('cust-1');
-      expect(created!.driverId).toBeNull();
-      expect(created!.status).toBe('CONFIRMED');
-      // JSON columns — items + deliveryAddress di-serialize via @json decorator,
-      // tapi mock ini assign raw object langsung (lihat buildRawRowForCreate).
-      expect(created!.itemsJson).toEqual([
+      expect(created!._raw.server_version).toBe(1);
+      expect(created!._raw.customer_id).toBe('cust-1');
+      expect(created!._raw.driver_id).toBeNull();
+      expect(created!._raw.status).toBe('CONFIRMED');
+      // JSON columns - items & deliveryAddress di-serialize via JSON.stringify
+      // di buildRawRowForCreate.
+      expect(readJsonColumn(created!._raw, 'items_json')).toEqual([
         { id: 'item-1', name: 'Nasi Goreng', priceCents: 25000, quantity: 1 },
       ]);
-      expect(created!.addressJson).toEqual({
+      expect(readJsonColumn(created!._raw, 'address_json')).toEqual({
         street: 'Jl Sudirman No. 1',
         city: 'Jakarta',
       });
-      expect(created!.totalCents).toBe(25000);
-      expect(created!.currency).toBe('IDR');
-      expect(created!.notes).toBe('Pedesin');
-      // cancelledBy/cancelReason absent dari pull data → fallback null
-      // (buildRawRowForCreate order branch: (d as any).cancelledBy ?? null).
-      expect(created!.cancelledBy).toBeNull();
-      expect(created!.cancelReason).toBeNull();
+      expect(created!._raw.total_cents).toBe(25000);
+      expect(created!._raw.currency).toBe('IDR');
+      expect(created!._raw.notes).toBe('Pedesin');
+      // cancelled_by/cancel_reason absent dari pull data -> fallback null
+      // (buildRawRowForCreate order branch: orderData.cancelledBy ?? null).
+      expect(created!._raw.cancelled_by).toBeNull();
+      expect(created!._raw.cancel_reason).toBeNull();
+      // created_at dan updated_at terisi (bukan 0).
+      expect(typeof created!._raw.created_at).toBe('number');
+      expect(created!._raw.created_at).toBeGreaterThan(0);
+      expect(typeof created!._raw.updated_at).toBe('number');
+      expect(created!._raw.updated_at).toBeGreaterThan(0);
       expect(created!._raw._status).toBe('synced');
     });
 
@@ -328,15 +342,20 @@ describe('SyncCoordinator', () => {
       const records = state.records.get('payments');
       const created = records?.get('payment-new-1');
       expect(created).toBeDefined();
-      expect(created!.serverVersion).toBe(1);
-      expect(created!.orderId).toBe('order-1');
-      expect(created!.idempotencyKey).toBe('cod:abc-123-uuid');
-      expect(created!.method).toBe('CASH');
-      expect(created!.status).toBe('CAPTURED');
-      expect(created!.amountCents).toBe(50000);
-      expect(created!.currency).toBe('IDR');
-      expect(created!.kind).toBe('PAYMENT');
-      expect(created!.externalRef).toBeNull();
+      expect(created!._raw.server_version).toBe(1);
+      expect(created!._raw.order_id).toBe('order-1');
+      expect(created!._raw.idempotency_key).toBe('cod:abc-123-uuid');
+      expect(created!._raw.method).toBe('CASH');
+      expect(created!._raw.status).toBe('CAPTURED');
+      expect(created!._raw.amount_cents).toBe(50000);
+      expect(created!._raw.currency).toBe('IDR');
+      expect(created!._raw.kind).toBe('PAYMENT');
+      expect(created!._raw.external_ref).toBeNull();
+      // created_at/updated_at di-set eksplisit oleh buildRawRowForCreate.
+      expect(typeof created!._raw.created_at).toBe('number');
+      expect(created!._raw.created_at).toBeGreaterThan(0);
+      expect(typeof created!._raw.updated_at).toBe('number');
+      expect(created!._raw.updated_at).toBeGreaterThan(0);
       expect(created!._raw._status).toBe('synced');
     });
 
@@ -377,17 +396,23 @@ describe('SyncCoordinator', () => {
       const records = state.records.get('chat_messages');
       const created = records?.get('chat-new-1');
       expect(created).toBeDefined();
-      expect(created!.serverVersion).toBe(1);
-      expect(created!.roomId).toBe('room-1');
-      expect(created!.senderId).toBe('user-1');
-      expect(created!.body).toBe('Hello world');
-      expect(created!.attachmentJson).toBeNull();
-      expect(created!.status).toBe('SENT');
+      expect(created!._raw.server_version).toBe(1);
+      expect(created!._raw.room_id).toBe('room-1');
+      expect(created!._raw.sender_id).toBe('user-1');
+      expect(created!._raw.body).toBe('Hello world');
+      // attachment_json null karena payload null di source.
+      expect(created!._raw.attachment_json).toBeNull();
+      expect(created!._raw.status).toBe('SENT');
       // Timestamp fields harus di-convert dari ISO string ke number (epoch ms)
-      expect(typeof created!.clientCreatedAt).toBe('number');
-      expect(created!.clientCreatedAt).toBe(new Date(clientCreatedAtIso).getTime());
-      expect(typeof created!.serverCreatedAt).toBe('number');
-      expect(created!.serverCreatedAt).toBe(new Date(serverCreatedAtIso).getTime());
+      // oleh buildRawRowForCreate.
+      expect(typeof created!._raw.client_created_at).toBe('number');
+      expect(created!._raw.client_created_at).toBe(new Date(clientCreatedAtIso).getTime());
+      expect(typeof created!._raw.server_created_at).toBe('number');
+      expect(created!._raw.server_created_at).toBe(new Date(serverCreatedAtIso).getTime());
+      expect(typeof created!._raw.created_at).toBe('number');
+      expect(created!._raw.created_at).toBeGreaterThan(0);
+      expect(typeof created!._raw.updated_at).toBe('number');
+      expect(created!._raw.updated_at).toBeGreaterThan(0);
       expect(created!._raw._status).toBe('synced');
     });
 
