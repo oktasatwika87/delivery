@@ -238,6 +238,7 @@ export interface AvailableOrderItem {
   itemsCount: number;
   city?: string;
   createdAt: string;
+  version: number;
 }
 
 /**

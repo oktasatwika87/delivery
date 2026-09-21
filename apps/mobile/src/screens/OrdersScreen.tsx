@@ -22,6 +22,7 @@ import { fetchAvailableOrders, UnauthorizedError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
 import { hasPendingAction, hasStalePendingAction } from '../sync/outbox';
+import { buildPoolRow } from './buildPoolRow';
 import { locationService } from '../map/location';
 import { networkMonitor } from '../map/networkMonitor';
 import { RouteService } from '../map/routeService';
@@ -95,11 +96,12 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
   // ─── Fetch available pool from REST ─────────────────────────────────────────
   const fetchPool = useCallback(async (): Promise<void> => {
     try {
-      // fetchAvailableOrders returns pool items: orderId, totalCents, currency, itemsCount, city?, createdAt
+      // fetchAvailableOrders returns pool items: orderId, totalCents, currency, itemsCount, city?, createdAt, version
       const poolItems = await fetchAvailableOrders();
 
       // Upsert each order to local DB with _raw._status='synced'
       // (Penting: synced biar collectDirty gak pickup pool rows)
+      const nowMs = Date.now();
       await database.write(async () => {
         for (const item of poolItems) {
           // Guard against malformed backend response where orderId is null/undefined.
@@ -116,18 +118,11 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
             // WatermelonDB untuk buat record dengan ID spesifik dari backend.
             // prepareCreateFromDirtyRaw HANYA membuat prepared record;
             // harus dilewatkan ke database.batch() untuk benar-benar persist.
-            const preparedRecord = database.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
-              id: item.orderId,
-              _status: 'synced',
-              _changed: '',
-              status: 'ASSIGNED',
-              totalCents: item.totalCents,
-              currency: item.currency,
-              customerId: '',
-              driverId: null,
-              itemsJson: [],
-              addressJson: {},
-            });
+            const row = buildPoolRow(
+              { orderId: item.orderId, totalCents: item.totalCents, currency: item.currency, createdAt: item.createdAt, version: item.version },
+              nowMs,
+            );
+            const preparedRecord = database.get<OrderModel>('orders').prepareCreateFromDirtyRaw(row);
             await database.batch(preparedRecord);
           }
         }

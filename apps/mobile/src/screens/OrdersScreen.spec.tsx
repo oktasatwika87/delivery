@@ -186,7 +186,7 @@ describe('OrdersScreen smoke test', () => {
     // Old buggy pattern: create() with _raw.id override — causes corrupt rows.
     // Correct pattern: prepareCreateFromDirtyRaw + database.batch().
     const poolItems = [
-      { orderId: 'order-custom-1', totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z' },
+      { orderId: 'order-custom-1', totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z', version: 7 },
     ];
     (fetchAvailableOrders as jest.Mock).mockResolvedValue(poolItems);
 
@@ -202,16 +202,20 @@ describe('OrdersScreen smoke test', () => {
     // Verify batch was called to persist the prepared record
     expect(mockBatch).toHaveBeenCalledTimes(1);
 
-    // Verify the custom ID was passed correctly
+    // Verify the custom ID was passed correctly (snake_case keys)
     expect(mockOrdersCollection.prepareCreateFromDirtyRaw).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'order-custom-1',
         _status: 'synced',
+        _changed: '',
         status: 'ASSIGNED',
-        totalCents: 25000,
+        total_cents: 25000,
         currency: 'IDR',
-        customerId: '',
-        driverId: null,
+        customer_id: '',
+        driver_id: null,
+        items_json: '[]',
+        address_json: '{}',
+        server_version: 7,
       }),
     );
 
@@ -223,9 +227,9 @@ describe('OrdersScreen smoke test', () => {
     // Regression test: backend returning null orderId previously caused
     // "Cannot read property 'id' of null" TypeError from WatermelonDB find(null)
     const poolItemsWithNullOrderId = [
-      { orderId: null, totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z' },
-      { orderId: 'order-valid', totalCents: 30000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z' },
-      { orderId: undefined, totalCents: 35000, currency: 'IDR', itemsCount: 3, createdAt: '2024-01-01T00:00:00Z' },
+      { orderId: null, totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z', version: 7 },
+      { orderId: 'order-valid', totalCents: 30000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z', version: 7 },
+      { orderId: undefined, totalCents: 35000, currency: 'IDR', itemsCount: 3, createdAt: '2024-01-01T00:00:00Z', version: 7 },
     ];
     (fetchAvailableOrders as jest.Mock).mockResolvedValue(poolItemsWithNullOrderId);
 
@@ -253,8 +257,8 @@ describe('OrdersScreen smoke test', () => {
   test('fetchPool handles array with only null orderId items gracefully', async () => {
     // Edge case: all items have null orderId — should not crash
     const allNullOrderId = [
-      { orderId: null, totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z' },
-      { orderId: undefined, totalCents: 30000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z' },
+      { orderId: null, totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z', version: 7 },
+      { orderId: undefined, totalCents: 30000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z', version: 7 },
     ];
     (fetchAvailableOrders as jest.Mock).mockResolvedValue(allNullOrderId);
 
@@ -281,7 +285,7 @@ describe('OrdersScreen smoke test', () => {
     // prepareCreateFromDirtyRaw (not the auto-generated ID pattern).
     const customOrderId = '9e934d93-9da2-4d6a-b587-87a98d3a5cec';
     const poolItems = [
-      { orderId: customOrderId, totalCents: 50000, currency: 'IDR', itemsCount: 1, city: 'Jakarta', createdAt: '2026-07-23T04:15:57.745Z' },
+      { orderId: customOrderId, totalCents: 50000, currency: 'IDR', itemsCount: 1, city: 'Jakarta', createdAt: '2026-07-23T04:15:57.745Z', version: 7 },
     ];
     (fetchAvailableOrders as jest.Mock).mockResolvedValue(poolItems);
 
