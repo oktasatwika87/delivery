@@ -29,6 +29,7 @@ export interface AvailableOrderPayload {
   itemsCount: number;
   city?: string;
   createdAt: string;
+  version: number;
 }
 
 @Injectable()
@@ -365,6 +366,7 @@ export class OrdersService {
    *   sebagai `Json` di Prisma — defensif, meski schema enforce object)
    * - r.createdAt.toISOString() → createdAt (string format ISO 8601,
    *   sesuai `Order.createdAt` convention)
+   * - r.version jadi version (kunci versi untuk accept)
    */
   private toAvailablePayload(row: {
     id: string;
@@ -373,6 +375,7 @@ export class OrdersService {
     totalCents: number;
     currency: string;
     createdAt: Date;
+    version: number;
   }): AvailableOrderPayload {
     const items = Array.isArray(row.itemsJson) ? row.itemsJson : [];
     const address =
@@ -387,6 +390,7 @@ export class OrdersService {
       itemsCount: items.length,
       city: address?.city,
       createdAt: row.createdAt.toISOString(),
+      version: row.version,
     };
   }
 

@@ -840,7 +840,7 @@ describe('OrdersService', () => {
   describe('findAvailable()', () => {
     const driverId = 'driver-uuid-1';
 
-    function makeAvailableOrder(overrideId: string, overrideCreatedAt: Date) {
+    function makeAvailableOrder(overrideId: string, overrideCreatedAt: Date, overrideVersion = 1) {
       return {
         id: overrideId,
         customerId: 'customer-uuid',
@@ -851,7 +851,7 @@ describe('OrdersService', () => {
         totalCents: 50000,
         currency: 'IDR',
         notes: null as string | null,
-        version: 1,
+        version: overrideVersion,
         createdAt: overrideCreatedAt,
         updatedAt: overrideCreatedAt,
         cancelledBy: null as string | null,
@@ -861,9 +861,9 @@ describe('OrdersService', () => {
 
     test('returns slim AvailableOrderPayload (not full Order) sorted by createdAt ASC', async () => {
       const now = new Date();
-      const order1 = makeAvailableOrder('order-1', new Date(now.getTime() - 10000));
-      const order2 = makeAvailableOrder('order-2', now);
-      const order3 = makeAvailableOrder('order-3', new Date(now.getTime() + 10000));
+      const order1 = makeAvailableOrder('order-1', new Date(now.getTime() - 10000), 7);
+      const order2 = makeAvailableOrder('order-2', now, 9);
+      const order3 = makeAvailableOrder('order-3', new Date(now.getTime() + 10000), 11);
 
       // Mock findMany - will be called with correct filters
       mockPrisma.order.findMany = jest.fn().mockResolvedValue([order1, order2, order3]);
@@ -884,15 +884,18 @@ describe('OrdersService', () => {
       expect(result[0].orderId).toBe('order-1');
       expect(result[1].orderId).toBe('order-2');
       expect(result[2].orderId).toBe('order-3');
+      // version harus ada dan sama dengan fixture
+      expect(result[0].version).toBe(7);
+      expect(result[1].version).toBe(9);
+      expect(result[2].version).toBe(11);
       // PENTING: payload TIDAK boleh bocor full Order fields seperti `customerId`,
-      // `driverId`, `notes`, `version`, `cancelledBy`, `cancelReason`, `items`,
+      // `driverId`, `notes`, `cancelledBy`, `cancelReason`, `items`,
       // `deliveryAddress`. Type assertion catch-all untuk regressions.
       for (const item of result) {
         expect(item).not.toHaveProperty('id');
         expect(item).not.toHaveProperty('customerId');
         expect(item).not.toHaveProperty('driverId');
         expect(item).not.toHaveProperty('notes');
-        expect(item).not.toHaveProperty('version');
         expect(item).not.toHaveProperty('items');
         expect(item).not.toHaveProperty('deliveryAddress');
       }
