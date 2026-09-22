@@ -56,6 +56,7 @@ jest.mock('../sync/client', () => {
   return {
     fetchAvailableOrders: jest.fn().mockResolvedValue({ items: [], hasMore: false }),
     UnauthorizedError,
+    acceptOrder: jest.fn(),
   };
 });
 

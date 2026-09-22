@@ -473,6 +473,40 @@ export async function cancelOrder(
 }
 
 /**
+ * Driver accepts a pool order.
+ * Order must be in status ASSIGNED with no driver assigned.
+ */
+export async function acceptOrder(orderId: string, version: number): Promise<DriverActionResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await fetchWithAuth(`${API_BASE}/orders/${orderId}/accept`, {
+      method: 'POST',
+      body: JSON.stringify({ version }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.status === 401) {
+      throw new UnauthorizedError();
+    }
+
+    if (!res.ok) {
+      throw await buildApiError('acceptOrder', res);
+    }
+
+    return res.json() as Promise<DriverActionResponse>;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      console.warn('[acceptOrder] Request aborted due to 8s timeout');
+    }
+    throw err;
+  }
+}
+
+/**
  * Driver collects COD (cash on delivery) for an order.
  * Uses idempotency key to prevent double-collection.
  */

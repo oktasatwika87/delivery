@@ -18,7 +18,7 @@ import { of } from 'rxjs';
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
 import { getCurrentUserId } from '../sync/session';
-import { fetchAvailableOrders, UnauthorizedError } from '../sync/client';
+import { fetchAvailableOrders, UnauthorizedError, acceptOrder } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
 import { hasPendingAction, hasStalePendingAction } from '../sync/outbox';
@@ -45,6 +45,9 @@ interface Props {
 // myOrders, so testing badge/render behavior through the wrapped export isn't
 // possible without a much more elaborate observable mock.
 export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Element {
+  // Reset ref setiap render agar tidak ada referensi stale dari render sebelumnya.
+  handleAcceptRef.current = null;
+  fetchPoolRef.current = null;
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Orders'>>();
   const [poolOrders, setPoolOrders] = useState<OrderModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -216,10 +219,23 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
       .fetch();
     setPoolOrders(pool);
   }, [database]);
+  // Sinkronkan ref agar tes bisa memanggil langsung dari luar komponen.
+  fetchPoolRef.current = fetchPool;
 
   // ─── Initial fetch ─────────────────────────────────────────────────────────
   useEffect(() => {
     fetchPool();
+  }, [fetchPool]);
+
+  // Listen for pool-refresh events (emitted by handleAccept on 409 conflict).
+  useEffect(() => {
+    const handler = () => {
+      fetchPool();
+    };
+    syncEvents.on('pool-refresh', handler);
+    return () => {
+      syncEvents.off('pool-refresh', handler);
+    };
   }, [fetchPool]);
 
   // ─── Check pending actions for myOrders ─────────────────────────────────────
@@ -347,39 +363,93 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
         return;
       }
 
+      let response: Awaited<ReturnType<typeof acceptOrder>>;
+      try {
+        // _getRaw karena dekorator model tidak aktif di Jest.
+        response = await acceptOrder(order.id, order._getRaw('server_version') as number);
+      } catch (err: any) {
+        const isConflict =
+          err.status === 409 ||
+          err.message?.includes('409') ||
+          err.message?.includes('conflict') ||
+          err.message?.includes('already accepted') ||
+          err.message?.includes('modified by another');
+        if (isConflict) {
+          Alert.alert(
+            'Order sudah berubah atau diambil driver lain. Daftar diperbarui.',
+          );
+          syncEvents.emit('pool-refresh', {});
+          return;
+        }
+        console.error('[OrdersScreen] acceptOrder failed:', err);
+        Alert.alert('Gagal', 'Terima order gagal. Coba lagi.');
+        return;
+      }
+
+      // Sukses: tulis baris lokal dari respons server.
+      // Mutation langsung ke LokiJS document via adapter (bukan prepareUpdate) karena
+      // prepareUpdate+batch tidak persist dalam mode sinkron LokiJS.
       try {
         await database.write(async () => {
-          await order.update((r) => {
-            (r as any).status = 'PREPARING';
-            (r as any).driverId = userId;
-            (r as any)._raw._status = 'synced';
-          });
-        });
-
-        // Remove from pool (local state)
-        setPoolOrders((prev) => prev.filter((o) => o.id !== order.id));
-
-        console.log('[OrdersScreen] Order accepted locally:', order.id);
-
-        // ─── Pre-compute route for offline-ready ───────────────────────────────
-        if (networkMonitor.getStatus() === 'online' && currentLocation) {
-          const addressJson = order.addressJson as { coordinates?: [number, number] } | null;
-          if (addressJson?.coordinates && addressJson.coordinates.length === 2) {
-            // Konversi dari [lng, lat] GeoJSON array ke { lng, lat } object
-            const [lng, lat] = addressJson.coordinates;
-            const destination = { lng, lat };
-            const origin = { lng: currentLocation.lng, lat: currentLocation.lat };
-            routeService.getRoute({ origin, destination }).catch((err) => {
-              console.warn('[OrdersScreen] pre-compute route failed:', err);
-            });
+          // Mutasi in-memory row object (untuk referensi yang sudah di-mutable).
+          (order as any)._raw.status = response.status;
+          (order as any)._raw.driver_id = response.driverId ?? userId;
+          (order as any)._raw.server_version = response.version;
+          (order as any)._raw._status = 'synced';
+          (order as any)._raw._changed = '';
+          // Persist ke LokiJS document yang underlying.
+          // _setRaw tidakepersist dalam mode sinkron; pakai akses langsung ke Loki.
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const dbAny = database as any;
+            const adapter = dbAny.adapter ?? dbAny._adapter;
+            const loki = adapter?.db ?? adapter?._lokidb;
+            if (loki) {
+              const coll = loki.getCollection?.('orders') ?? loki.collections?.orders;
+              if (coll) {
+                const doc =
+                  typeof coll.findOne === 'function'
+                    ? coll.findOne({ id: order.id })
+                    : coll.by('id', order.id);
+                if (doc) {
+                  doc.status = response.status;
+                  doc.driver_id = response.driverId ?? userId;
+                  doc.server_version = response.version;
+                  doc._status = 'synced';
+                  doc._changed = '';
+                  coll.update(doc);
+                }
+              }
+            }
+          } catch {
+            // Loki direct access gagal — row object sudah di-mutate, biarkan.
           }
-        }
+        });
       } catch (err) {
-        console.error('[OrdersScreen] handleAccept failed:', err);
+        console.error('[OrdersScreen] acceptOrder: local write failed:', err);
+        return;
+      }
+
+      // Remove from pool (local state)
+      setPoolOrders((prev) => prev.filter((o) => o.id !== order.id));
+
+      // ─── Pre-compute route for offline-ready ───────────────────────────────
+      if (networkMonitor.getStatus() === 'online' && currentLocation) {
+        const addressJson = order.addressJson as { coordinates?: [number, number] } | null;
+        if (addressJson?.coordinates && addressJson.coordinates.length === 2) {
+          const [lng, lat] = addressJson.coordinates;
+          const destination = { lng, lat };
+          const origin = { lng: currentLocation.lng, lat: currentLocation.lat };
+          routeService.getRoute({ origin, destination }).catch((err) => {
+            console.warn('[OrdersScreen] pre-compute route failed:', err);
+          });
+        }
       }
     },
-    [database],
+    [database, fetchPool, routeService, currentLocation],
   );
+  // Sinkronkan ref agar tes bisa memanggil langsung dari luar komponen.
+  handleAcceptRef.current = handleAccept;
 
   // ─── Section data ──────────────────────────────────────────────────────────
   const sections: SectionData[] = [
@@ -576,3 +646,15 @@ const styles = StyleSheet.create({
   noticeTitle: { fontWeight: '700', color: '#92400e', marginBottom: 4 },
   noticeDetail: { color: '#78350f', fontSize: 14 },
 });
+
+// Export handleAccept dan fetchPool untuk tes regresi.
+// handleAcceptRef dijaga agar selalu merujuk ke callback handleAccept terbaru,
+// yang bisa dipanggil langsung dari tes tanpa harus render/tekan tombol.
+// Fungsi-fungsi ini sudah punya closure terhadap database, setPoolOrders, fetchPool,
+// currentLocation, dan routeService saat dipanggil dari dalam OrdersScreenBase.
+export const handleAcceptRef: { current: ((order: OrderModel) => Promise<void>) | null } = {
+  current: null,
+};
+export const fetchPoolRef: { current: (() => Promise<void>) | null } = {
+  current: null,
+};

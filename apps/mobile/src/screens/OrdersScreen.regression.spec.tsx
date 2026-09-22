@@ -28,11 +28,13 @@ import type { AvailableOrderItem } from '../sync/client';
 // yang ditiru: jaringan dan modul pendukung layar (database tetap asli)
 // fetchAvailableOrders ditiru supaya isinya bisa diatur per tes.
 // UnauthorizedError dipakai untuk instanceof di catch, jadi kelasnya harus asli.
+// acceptOrder juga di-mock di level modul untuk tes handleAccept.
 jest.mock('../sync/client', () => {
   const actual = jest.requireActual('../sync/client');
   return {
     ...actual,
     fetchAvailableOrders: jest.fn(),
+    acceptOrder: jest.fn(),
   };
 });
 
@@ -43,6 +45,17 @@ jest.mock('@react-navigation/native', () => ({
     navigate: jest.fn(),
   }),
 }));
+
+// Alert: dipanggil handleAccept saat perlu minta koneksi atau error.
+jest.mock('react-native', () => {
+  const RN = jest.requireActual('react-native') as Record<string, any>;
+  return {
+    ...RN,
+    Alert: {
+      alert: jest.fn(),
+    },
+  };
+});
 
 // lokasi: dipanggil di useEffect saat layar tampil (getLastKnown dan subscribe).
 jest.mock('../map/location', () => ({
@@ -812,5 +825,188 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
       expect(row._raw._status).toBe('synced');
       expect(await rowExistsInAdapter(confirmedRowId)).toBe(true);
     });
+  });
+});
+
+// ─── Regresi handleAccept: accept order lewat REST, bukan cuma lokal ────────────
+// Sebelum diperbaiki, handleAccept hanya menulis WatermelonDB lokal tanpa memanggil
+// POST /orders/:id/accept. acceptOrder tidak pernah dipanggil → tes MERAH.
+// Sesudah diperbaiki: acceptOrder dipanggil, baris ditulis dari respons server,
+// _status='synced'+_changed='' pada sukses; 409 memicu fetchPool; error tidak mengubah baris lokal.
+describe('handleAccept - accept order lewat REST', () => {
+  let db: Database;
+
+  // Mock fetchAvailableOrders: kembalikan seeded row agar fetchPool onMount tidak menghapusnya.
+  // Row seeded dengan driver_id=null, status=ASSIGNED, jadi masuk pool query → ada di server list
+  // → tidak di-delete; juga tidak di-create (sudah ada).
+  function buildFetchPoolMock(rowId: string, rowFields: Record<string, unknown>) {
+    const client = jest.requireMock('../sync/client') as { fetchAvailableOrders: jest.Mock };
+    client.fetchAvailableOrders.mockResolvedValue({
+      items: [
+        {
+          orderId: rowId,
+          totalCents: (rowFields.total_cents as number) ?? 55000,
+          currency: (rowFields.currency as string) ?? 'IDR',
+          itemsCount: 1,
+          createdAt: new Date(rowFields.created_at as number).toISOString(),
+          version: (rowFields.server_version as number) ?? 3,
+        },
+      ],
+      hasMore: true,
+    });
+  }
+
+  beforeEach(() => {
+    db = buildTestDatabase();
+    jest.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // defaultRowFields yang sama dengan tes fetchPool
+  const defaultRowFields = {
+    customer_id: '',
+    driver_id: null,
+    status: 'ASSIGNED',
+    items_json: '[]',
+    address_json: '{}',
+    total_cents: 55000,
+    currency: 'IDR',
+    notes: null,
+    server_version: 3,
+    deleted_at: null,
+    failed_sync_attempts: 0,
+    cancelled_by: null,
+    cancel_reason: null,
+    last_conflict_reason: null,
+    last_conflict_at: null,
+  };
+
+  // Seed baris pool dengan server_version=3
+  const poolAcceptFields = {
+    ...defaultRowFields,
+    server_version: 3,
+    total_cents: 55000,
+    created_at: 1_600_000_000_000,
+    updated_at: 1_600_000_000_000,
+  };
+
+  // seedPoolRow: alias ke seedOrderRow (pool rows pakai seed yang sama)
+  async function seedPoolRow(rowId: string, fields: Record<string, unknown>): Promise<void> {
+    await db.write(async () => {
+      const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+        id: rowId,
+        _status: 'synced',
+        _changed: '',
+        ...fields,
+      });
+      await db.batch(prepared);
+    });
+  }
+
+  // rowExistsInAdapter: cek apakah baris ada di adapter (lokijs)
+  async function rowExistsInAdapter(rowId: string): Promise<boolean> {
+    const all = await db.get<OrderModel>('orders').query().fetch();
+    return all.some((r) => r.id === rowId);
+  }
+
+  // Tes 1: accept sukses → acceptOrder dipanggil, baris ditulis dari respons server
+  it('acceptOrder dipanggil dengan order.id dan serverVersion; baris lokal ditulis dari respons server', async () => {
+    const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
+    const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
+    client.acceptOrder = jest.fn().mockResolvedValue({
+      id: 'pool-accept-1',
+      status: 'PREPARING',
+      version: 4,
+      driverId: 'driver-AC21',
+    });
+    session.getCurrentUserId.mockResolvedValue('driver-AC21');
+
+    const { handleAcceptRef } = require('../screens/OrdersScreen') as {
+      handleAcceptRef: { current: ((order: OrderModel) => Promise<void>) | null };
+    };
+    const rowId = 'pool-accept-1';
+    await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
+    buildFetchPoolMock(rowId, poolAcceptFields);
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(handleAcceptRef.current).not.toBeNull();
+    });
+
+    const order = await db.get<OrderModel>('orders').find(rowId);
+    await handleAcceptRef.current!(order);
+
+    expect(client.acceptOrder).toHaveBeenCalledWith(rowId, 3);
+    const updatedRow = await db.get<OrderModel>('orders').find(rowId);
+    expect(updatedRow._getRaw('status')).toBe('PREPARING');
+    expect(updatedRow._getRaw('driver_id')).toBe('driver-AC21');
+    expect(updatedRow._getRaw('server_version')).toBe(4);
+    expect(updatedRow._raw._status).toBe('synced');
+    expect(updatedRow._raw._changed).toBe('');
+  });
+
+  // Tes 2: 409 conflict → syncEvents.emit dipanggil, baris lama TIDAK dihapus manual
+  it('409 Conflict → syncEvents.emit("pool-refresh") dipanggil; baris pool TIDAK berubah/hapus manual', async () => {
+    const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
+    const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
+    const syncEvents = jest.requireMock('../sync/syncEvents') as { syncEvents: { emit: jest.Mock } };
+    // ApiError dengan status 409: {status: 409, message: "...409..."}
+    const apiError409 = new Error('Order already accepted by another driver. Please refresh and try again. — 409');
+    (apiError409 as any).status = 409;
+    client.acceptOrder = jest.fn().mockRejectedValue(apiError409);
+    session.getCurrentUserId.mockResolvedValue('driver-AC21');
+    syncEvents.syncEvents.emit = jest.fn();
+
+    const { handleAcceptRef } = require('../screens/OrdersScreen') as {
+      handleAcceptRef: { current: ((order: OrderModel) => Promise<void>) | null };
+    };
+    const rowId = 'pool-accept-409';
+    await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
+    buildFetchPoolMock(rowId, poolAcceptFields);
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(handleAcceptRef.current).not.toBeNull();
+    });
+
+    const order = await db.get<OrderModel>('orders').find(rowId);
+    await handleAcceptRef.current!(order);
+
+    // syncEvents.emit('pool-refresh') dipanggil saat 409
+    expect(syncEvents.syncEvents.emit).toHaveBeenCalledWith('pool-refresh', {});
+    // Baris pool TIDAK dihapus manual oleh handleAccept
+    expect(await rowExistsInAdapter(rowId)).toBe(true);
+  });
+
+  // Tes 3: error jaringan/5xx → baris lokal TIDAK diubah sama sekali
+  it('network error / 5xx → baris lokal TIDAK diubah; status tetap ASSIGNED', async () => {
+    const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
+    const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
+    client.acceptOrder = jest.fn().mockRejectedValue(new Error('Network error'));
+    session.getCurrentUserId.mockResolvedValue('driver-AC21');
+
+    const { handleAcceptRef } = require('../screens/OrdersScreen') as {
+      handleAcceptRef: { current: ((order: OrderModel) => Promise<void>) | null };
+    };
+    const rowId = 'pool-accept-err';
+    await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
+    buildFetchPoolMock(rowId, poolAcceptFields);
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(handleAcceptRef.current).not.toBeNull();
+    });
+
+    const order = await db.get<OrderModel>('orders').find(rowId);
+    await handleAcceptRef.current!(order);
+
+    // Baris pool TIDAK berubah
+    const row = await db.get<OrderModel>('orders').find(rowId);
+    expect(row._getRaw('status')).toBe('ASSIGNED');
+    expect(row._getRaw('driver_id')).toBe(null);
+    expect(row._getRaw('server_version')).toBe(3);
   });
 });
