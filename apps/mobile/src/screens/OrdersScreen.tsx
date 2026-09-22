@@ -386,44 +386,18 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
         return;
       }
 
-      // Sukses: tulis baris lokal dari respons server.
-      // Mutation langsung ke LokiJS document via adapter (bukan prepareUpdate) karena
-      // prepareUpdate+batch tidak persist dalam mode sinkron LokiJS.
+      // Sukses: tulis baris lokal dari respons server via WatermelonDB batch.
       try {
         await database.write(async () => {
-          // Mutasi in-memory row object (untuk referensi yang sudah di-mutable).
-          (order as any)._raw.status = response.status;
-          (order as any)._raw.driver_id = response.driverId ?? userId;
-          (order as any)._raw.server_version = response.version;
-          (order as any)._raw._status = 'synced';
-          (order as any)._raw._changed = '';
-          // Persist ke LokiJS document yang underlying.
-          // _setRaw tidakepersist dalam mode sinkron; pakai akses langsung ke Loki.
-          try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const dbAny = database as any;
-            const adapter = dbAny.adapter ?? dbAny._adapter;
-            const loki = adapter?.db ?? adapter?._lokidb;
-            if (loki) {
-              const coll = loki.getCollection?.('orders') ?? loki.collections?.orders;
-              if (coll) {
-                const doc =
-                  typeof coll.findOne === 'function'
-                    ? coll.findOne({ id: order.id })
-                    : coll.by('id', order.id);
-                if (doc) {
-                  doc.status = response.status;
-                  doc.driver_id = response.driverId ?? userId;
-                  doc.server_version = response.version;
-                  doc._status = 'synced';
-                  doc._changed = '';
-                  coll.update(doc);
-                }
-              }
-            }
-          } catch {
-            // Loki direct access gagal — row object sudah di-mutate, biarkan.
-          }
+          await database.batch(
+            order.prepareUpdate((r) => {
+              r._setRaw('status', response.status);
+              r._setRaw('driver_id', response.driverId ?? userId);
+              r._setRaw('server_version', response.version);
+              r._raw._status = 'synced';
+              r._raw._changed = '';
+            }),
+          );
         });
       } catch (err) {
         console.error('[OrdersScreen] acceptOrder: local write failed:', err);
@@ -446,7 +420,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
         }
       }
     },
-    [database, fetchPool, routeService, currentLocation],
+    [database, routeService, currentLocation],
   );
   // Sinkronkan ref agar tes bisa memanggil langsung dari luar komponen.
   handleAcceptRef.current = handleAccept;
