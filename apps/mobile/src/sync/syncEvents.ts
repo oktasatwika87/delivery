@@ -24,7 +24,7 @@ export interface OrderRejectedEvent {
 }
 
 /** Event names supported by syncEvents */
-export type SyncEventName = 'orderConflict' | 'orderRemovedFromView' | 'orderRejected';
+export type SyncEventName = 'orderConflict' | 'orderRemovedFromView' | 'orderRejected' | 'pool-refresh';
 
 /** Callback type — matches pattern from socket managers */
 type EventCallback<T = unknown> = (data: T) => void;
