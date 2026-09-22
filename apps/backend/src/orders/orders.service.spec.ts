@@ -865,7 +865,7 @@ describe('OrdersService', () => {
       const order2 = makeAvailableOrder('order-2', now, 9);
       const order3 = makeAvailableOrder('order-3', new Date(now.getTime() + 10000), 11);
 
-      // Mock findMany - will be called with correct filters
+      // Mock findMany - will be called with correct filters (take+1 untuk hasMore)
       mockPrisma.order.findMany = jest.fn().mockResolvedValue([order1, order2, order3]);
 
       const result = await service.findAvailable(driverId, 50);
@@ -876,22 +876,22 @@ describe('OrdersService', () => {
           driverId: null,
           deletedAt: null,
         },
-        take: 50,
+        take: 51,
         orderBy: { createdAt: 'asc' },
       });
-      expect(result).toHaveLength(3);
+      expect(result.items).toHaveLength(3);
       // Slim shape: orderId (bukan `id` dari full Order)
-      expect(result[0].orderId).toBe('order-1');
-      expect(result[1].orderId).toBe('order-2');
-      expect(result[2].orderId).toBe('order-3');
+      expect(result.items[0].orderId).toBe('order-1');
+      expect(result.items[1].orderId).toBe('order-2');
+      expect(result.items[2].orderId).toBe('order-3');
       // version harus ada dan sama dengan fixture
-      expect(result[0].version).toBe(7);
-      expect(result[1].version).toBe(9);
-      expect(result[2].version).toBe(11);
+      expect(result.items[0].version).toBe(7);
+      expect(result.items[1].version).toBe(9);
+      expect(result.items[2].version).toBe(11);
       // PENTING: payload TIDAK boleh bocor full Order fields seperti `customerId`,
       // `driverId`, `notes`, `cancelledBy`, `cancelReason`, `items`,
       // `deliveryAddress`. Type assertion catch-all untuk regressions.
-      for (const item of result) {
+      for (const item of result.items) {
         expect(item).not.toHaveProperty('id');
         expect(item).not.toHaveProperty('customerId');
         expect(item).not.toHaveProperty('driverId');
@@ -908,8 +908,8 @@ describe('OrdersService', () => {
 
       const result = await service.findAvailable(driverId, 50);
 
-      expect(result).toHaveLength(1);
-      const item = result[0];
+      expect(result.items).toHaveLength(1);
+      const item = result.items[0];
       expect(item.orderId).toBe('order-1');
       expect(item.totalCents).toBe(50000);
       expect(item.currency).toBe('IDR');
@@ -935,7 +935,7 @@ describe('OrdersService', () => {
 
       const result = await service.findAvailable(driverId, 50);
 
-      expect(result[0].itemsCount).toBe(3);
+      expect(result.items[0].itemsCount).toBe(3);
     });
 
     test('itemsCount falls back to 0 if itemsJson is not an array (defensive)', async () => {
@@ -948,7 +948,7 @@ describe('OrdersService', () => {
 
       const result = await service.findAvailable(driverId, 50);
 
-      expect(result[0].itemsCount).toBe(0);
+      expect(result.items[0].itemsCount).toBe(0);
     });
 
     test('city is undefined if addressJson missing city field', async () => {
@@ -960,7 +960,7 @@ describe('OrdersService', () => {
 
       const result = await service.findAvailable(driverId, 50);
 
-      expect(result[0].city).toBeUndefined();
+      expect(result.items[0].city).toBeUndefined();
     });
 
     test('city is undefined if addressJson is null or non-object (defensive)', async () => {
@@ -972,16 +972,16 @@ describe('OrdersService', () => {
 
       const result = await service.findAvailable(driverId, 50);
 
-      expect(result[0].city).toBeUndefined();
+      expect(result.items[0].city).toBeUndefined();
     });
 
-    test('respects take parameter - pass through to Prisma', async () => {
+    test('respects take parameter - pass through to Prisma as take+1', async () => {
       mockPrisma.order.findMany = jest.fn().mockResolvedValue([]);
 
-      // Service just passes through whatever take value it receives
+      // Service passes take+1 through to Prisma (for hasMore detection)
       await service.findAvailable(driverId, 25);
       expect(mockPrisma.order.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ take: 25 })
+        expect.objectContaining({ take: 26 })
       );
     });
 
@@ -990,7 +990,7 @@ describe('OrdersService', () => {
 
       await service.findAvailable(driverId, 100);
       expect(mockPrisma.order.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ take: 100 })
+        expect.objectContaining({ take: 101 })
       );
     });
 
@@ -1000,7 +1000,7 @@ describe('OrdersService', () => {
       // Service passes 200 through — clamping is controller's responsibility
       await service.findAvailable(driverId, 200);
       expect(mockPrisma.order.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ take: 200 })
+        expect.objectContaining({ take: 201 })
       );
     });
 
@@ -1032,12 +1032,68 @@ describe('OrdersService', () => {
       );
     });
 
-    test('returns empty array when no available orders', async () => {
+    test('returns empty items and hasMore=false when no available orders', async () => {
       mockPrisma.order.findMany = jest.fn().mockResolvedValue([]);
 
       const result = await service.findAvailable(driverId, 50);
 
-      expect(result).toEqual([]);
+      expect(result).toEqual({ items: [], hasMore: false });
+    });
+
+    // ===== hasMore tests =====
+
+    test('hasMore=true when rows.length > take', async () => {
+      // exactly take rows returned: no more data beyond this page
+      const orders = Array.from({ length: 50 }, (_, i) =>
+        makeAvailableOrder(`order-${i}`, new Date(1000 + i))
+      );
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue(orders);
+
+      const result = await service.findAvailable(driverId, 50);
+
+      expect(result.hasMore).toBe(false);
+      expect(result.items).toHaveLength(50);
+    });
+
+    test('hasMore=true when rows.length > take', async () => {
+      // one extra row: more data exists beyond this page
+      const orders = Array.from({ length: 51 }, (_, i) =>
+        makeAvailableOrder(`order-${i}`, new Date(1000 + i))
+      );
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue(orders);
+
+      const result = await service.findAvailable(driverId, 50);
+
+      expect(result.hasMore).toBe(true);
+      expect(result.items).toHaveLength(50);
+      expect(result.items[49].orderId).toBe('order-49'); // last returned item
+    });
+
+    test('hasMore=false when rows.length < take (less than requested)', async () => {
+      // fewer orders than requested — no pagination needed
+      const orders = Array.from({ length: 3 }, (_, i) =>
+        makeAvailableOrder(`order-${i}`, new Date(1000 + i))
+      );
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue(orders);
+
+      const result = await service.findAvailable(driverId, 50);
+
+      expect(result.hasMore).toBe(false);
+      expect(result.items).toHaveLength(3);
+    });
+
+    test('hasMore=false when rows.length equals take+1 and take=1', async () => {
+      // boundary case: take=1, 2 rows returned -> exactly 1 extra row
+      const orders = [
+        makeAvailableOrder('order-0', new Date(1000)),
+        makeAvailableOrder('order-1', new Date(2000)),
+      ];
+      mockPrisma.order.findMany = jest.fn().mockResolvedValue(orders);
+
+      const result = await service.findAvailable(driverId, 1);
+
+      expect(result.hasMore).toBe(true);
+      expect(result.items).toHaveLength(1);
     });
   });
 });

@@ -45,9 +45,19 @@ jest.mock('../sync/session', () => ({
 
 // ─── Mock API client ─────────────────────────────────────────────────────────
 // Must use require.resolve to ensure correct module path
-jest.mock('../sync/client', () => ({
-  fetchAvailableOrders: jest.fn().mockResolvedValue([]),
-}));
+jest.mock('../sync/client', () => {
+  // Define a minimal error class for the instanceof check in catch block
+  class UnauthorizedError extends Error {
+    constructor() {
+      super('Sesi berakhir, silakan login ulang');
+      this.name = 'UnauthorizedError';
+    }
+  }
+  return {
+    fetchAvailableOrders: jest.fn().mockResolvedValue({ items: [], hasMore: false }),
+    UnauthorizedError,
+  };
+});
 
 // ─── Mock ordersSocket ────────────────────────────────────────────────────────
 jest.mock('../sync/ordersSocket', () => ({
@@ -154,8 +164,8 @@ function makeOrder(overrides: Partial<{ id: string; status: string; totalCents: 
 describe('OrdersScreen smoke test', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // Reset mock to return empty by default
-    (fetchAvailableOrders as jest.Mock).mockResolvedValue([]);
+    // Reset mock to return new { items, hasMore } format
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
     // Reset find to reject (new order create path)
     mockOrdersCollection.find = jest.fn().mockRejectedValue(new Error('not found'));
     mockOrdersCollection.create = jest.fn().mockResolvedValue({});
@@ -188,7 +198,7 @@ describe('OrdersScreen smoke test', () => {
     const poolItems = [
       { orderId: 'order-custom-1', totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z', version: 7 },
     ];
-    (fetchAvailableOrders as jest.Mock).mockResolvedValue(poolItems);
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: poolItems, hasMore: false });
 
     render(<OrdersScreen database={mockDatabase as never} />);
 
@@ -231,7 +241,7 @@ describe('OrdersScreen smoke test', () => {
       { orderId: 'order-valid', totalCents: 30000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z', version: 7 },
       { orderId: undefined, totalCents: 35000, currency: 'IDR', itemsCount: 3, createdAt: '2024-01-01T00:00:00Z', version: 7 },
     ];
-    (fetchAvailableOrders as jest.Mock).mockResolvedValue(poolItemsWithNullOrderId);
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: poolItemsWithNullOrderId, hasMore: false });
 
     let caughtError: Error | null = null;
     try {
@@ -260,7 +270,7 @@ describe('OrdersScreen smoke test', () => {
       { orderId: null, totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z', version: 7 },
       { orderId: undefined, totalCents: 30000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z', version: 7 },
     ];
-    (fetchAvailableOrders as jest.Mock).mockResolvedValue(allNullOrderId);
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: allNullOrderId, hasMore: false });
 
     let caughtError: Error | null = null;
     try {
@@ -287,7 +297,7 @@ describe('OrdersScreen smoke test', () => {
     const poolItems = [
       { orderId: customOrderId, totalCents: 50000, currency: 'IDR', itemsCount: 1, city: 'Jakarta', createdAt: '2026-07-23T04:15:57.745Z', version: 7 },
     ];
-    (fetchAvailableOrders as jest.Mock).mockResolvedValue(poolItems);
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: poolItems, hasMore: false });
 
     render(<OrdersScreen database={mockDatabase as never} />);
 
@@ -322,7 +332,7 @@ describe('OrdersScreen smoke test', () => {
 describe('pending action badge', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (fetchAvailableOrders as jest.Mock).mockResolvedValue([]);
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
     mockHasPendingAction.mockResolvedValue(false);
   });
 
@@ -367,9 +377,12 @@ describe('pending action badge', () => {
     // never even be called for a pool item's id.
     mockHasPendingAction.mockResolvedValue(true);
     const sharedId = 'order-shared-id';
-    (fetchAvailableOrders as jest.Mock).mockResolvedValue([
-      { orderId: sharedId, totalCents: 25000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z' },
-    ]);
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({
+      items: [
+        { orderId: sharedId, totalCents: 25000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z' },
+      ],
+      hasMore: false,
+    });
     const myOrders = [makeOrder({ id: 'order-mine' })];
 
     const { queryAllByText } = render(
@@ -396,7 +409,7 @@ describe('pending action badge', () => {
 describe('stale pending action badge', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (fetchAvailableOrders as jest.Mock).mockResolvedValue([]);
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
     mockHasPendingAction.mockResolvedValue(false);
     mockHasStalePendingAction.mockResolvedValue(false);
   });
@@ -488,7 +501,7 @@ describe('Accept order online gating', () => {
     networkMonitor.getStatus.mockReturnValue('online');
     networkMonitor.subscribe.mockReturnValue(jest.fn());
     // Reset fetchAvailableOrders mock
-    (fetchAvailableOrders as jest.Mock).mockResolvedValue([]);
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
     // Reset pool query mock
     mockOrdersCollection.query = jest.fn().mockReturnValue({
       fetch: jest.fn().mockResolvedValue([]),
@@ -502,8 +515,14 @@ describe('Accept order online gating', () => {
     // Override to offline
     networkMonitor.getStatus.mockReturnValue('offline');
 
-    // Set up pool orders so the Accept button appears
-    const poolOrderMock = makeOrder({ id: 'pool-order-1', status: 'ASSIGNED', driverId: null });
+    // Set up pool orders so the Accept button appears.
+    // Must have WatermelonDB model methods: prepareDestroyPermanently for DELETE loop
+    // in fetchPool (triggered when hasMore=false and serverIds is empty).
+    const poolOrderMock = {
+      ...makeOrder({ id: 'pool-order-1', status: 'ASSIGNED', driverId: null }),
+      _raw: { id: 'pool-order-1', driver_id: null, _status: 'synced' },
+      prepareDestroyPermanently: jest.fn().mockReturnValue({ _preparedState: 'destroy', _raw: { id: 'pool-order-1' } }),
+    };
     mockOrdersCollection.query = jest.fn().mockReturnValue({
       fetch: jest.fn().mockResolvedValue([poolOrderMock]),
       observe: jest.fn().mockReturnValue({
@@ -552,8 +571,13 @@ describe('Accept order online gating', () => {
   test('accepts order normally when online', async () => {
     // Already set to online in beforeEach
 
-    // Set up pool orders so the Accept button appears
-    const poolOrderMock = makeOrder({ id: 'pool-order-2', status: 'ASSIGNED', driverId: null });
+    // Set up pool orders so the Accept button appears.
+    // Must have WatermelonDB model methods: prepareDestroyPermanently for DELETE loop.
+    const poolOrderMock = {
+      ...makeOrder({ id: 'pool-order-2', status: 'ASSIGNED', driverId: null }),
+      _raw: { id: 'pool-order-2', driver_id: null, _status: 'synced' },
+      prepareDestroyPermanently: jest.fn().mockReturnValue({ _preparedState: 'destroy', _raw: { id: 'pool-order-2' } }),
+    };
     mockOrdersCollection.query = jest.fn().mockReturnValue({
       fetch: jest.fn().mockResolvedValue([poolOrderMock]),
       observe: jest.fn().mockReturnValue({

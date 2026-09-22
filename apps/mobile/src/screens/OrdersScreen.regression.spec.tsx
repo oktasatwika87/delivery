@@ -190,12 +190,14 @@ const POOL_ROW_EXPECTED: Record<string, unknown> = {
 };
 
 // render OrdersScreenBase dengan item pool tertentu, lalu tunggu fetchPool selesai.
+// hasMore default false (pool habis setelah fetch ini).
 async function renderAndAwaitPool(
   db: Database,
   poolItems: AvailableOrderItem[],
+  hasMore = false,
 ): Promise<void> {
   const client = jest.requireMock('../sync/client') as { fetchAvailableOrders: jest.Mock };
-  client.fetchAvailableOrders.mockResolvedValue(poolItems);
+  client.fetchAvailableOrders.mockResolvedValue({ items: poolItems, hasMore });
 
   render(<OrdersScreenBase database={db} myOrders={[]} />);
   await waitFor(() => {
@@ -368,11 +370,12 @@ describe('OrdersScreen fetchPool - regresi kunci camelCase di prepareCreateFromD
   });
 
   describe('fetchPool dengan item id yang sudah ada di DB lokal', () => {
-    it('tidak membuat baris duplikat; data baris lama tetap', async () => {
-      // isi baris awal dengan data khas.
+    it('tidak membuat baris duplikat; data baris lama tetap; baris non-pool tidak disentuh', async () => {
+      // Seed baris NON-pool (driver_id terisi): fetchPool tidak menyentuh baris non-pool
+      // sama sekali (pool row = driver_id kosong, _status synced, tanpa pending action).
       await seedOrderRow(db, POOL_ID, {
         customer_id: 'preexisting-cust',
-        driver_id: 'preexisting-driver',
+        driver_id: 'preexisting-driver', // bukan pool row
         status: 'PREPARING',
         items_json: '[{"id":"preexisting-item"}]',
         address_json: '{"street":"preexisting"}',
@@ -390,7 +393,7 @@ describe('OrdersScreen fetchPool - regresi kunci camelCase di prepareCreateFromD
         updated_at: 1700000000000,
       });
 
-      // item pool membawa data berbeda. Untuk baris yang sudah ada, kode hanya mengubah _status dan tidak menimpa kolom data.
+      // Server mengirim data pool untuk id yang sama.
       const poolItem: AvailableOrderItem = {
         orderId: POOL_ID,
         totalCents: 99000,
@@ -405,12 +408,12 @@ describe('OrdersScreen fetchPool - regresi kunci camelCase di prepareCreateFromD
       expect(all).toHaveLength(1);
       const row = all[0];
       expect(row.id).toBe(POOL_ID);
-      // data lama tidak ditimpa.
+      // Data lama TIDAK ditimpa (perilaku baru: non-pool rows tidak disentuh).
       expect(row._getRaw('customer_id')).toBe('preexisting-cust');
       expect(row._getRaw('driver_id')).toBe('preexisting-driver');
       expect(row._getRaw('total_cents')).toBe(88000);
       expect(row._getRaw('server_version')).toBe(5);
-      // _status diubah jadi 'synced' oleh cabang baris yang sudah ada.
+      // _status tidak berubah (tetap seeded value — fetchPool tidak menyentuh non-pool).
       expect(row._raw._status).toBe('synced');
     });
   });
@@ -430,6 +433,384 @@ describe('OrdersScreen fetchPool - regresi kunci camelCase di prepareCreateFromD
       const row = await db.get<OrderModel>('orders').find('pool-invalid-createdat');
       expect(row._getRaw('created_at')).toBe(FIXED_NOW_MS);
       expect(row._getRaw('updated_at')).toBe(FIXED_NOW_MS);
+    });
+  });
+});
+
+// ─── Tujuh tes regresi untuk fetchPool dengan hasMore ──────────────────────────
+// Pola: seed baris pool lama, panggil fetchPool, assert hasil.
+// Pakai Loki adapter asli (sama dengan tes regresi yang sudah ada).
+describe('fetchPool -tes regresi dengan hasMore', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = buildTestDatabase();
+    jest.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // Helper: seed satu baris pool ke DB lokal.
+  async function seedPoolRow(
+    rowId: string,
+    fields: Record<string, unknown>,
+  ): Promise<void> {
+    await db.write(async () => {
+      const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+        id: rowId,
+        _status: 'synced',
+        _changed: '',
+        ...fields,
+      });
+      await db.batch(prepared);
+    });
+  }
+
+  // Helper: seed satu baris order milik driver (bukan pool).
+  async function seedDriverRow(
+    rowId: string,
+    driverId: string,
+    fields: Record<string, unknown>,
+  ): Promise<void> {
+    await db.write(async () => {
+      const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+        id: rowId,
+        _status: 'synced',
+        _changed: '',
+        driver_id: driverId,
+        ...fields,
+      });
+      await db.batch(prepared);
+    });
+  }
+
+  // Helper: cek apakah baris ada di adapter (cek dirty records).
+  async function rowExistsInAdapter(rowId: string): Promise<boolean> {
+    try {
+      await db.get<OrderModel>('orders').find(rowId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // Helper: cek apakah baris akan di-push oleh collectDirty.
+  // Baris dengan _status 'synced' dan _changed '' tidak akan di-push.
+  async function willBePushed(rowId: string): Promise<boolean> {
+    try {
+      const row = await db.get<OrderModel>('orders').find(rowId);
+      return row._raw._status !== 'synced' || row._raw._changed !== '';
+    } catch {
+      return false;
+    }
+  }
+
+  const defaultRowFields = {
+    customer_id: '',
+    driver_id: null,
+    status: 'ASSIGNED',
+    items_json: '[]',
+    address_json: '{}',
+    total_cents: 55000,
+    currency: 'IDR',
+    notes: null,
+    server_version: 3,
+    deleted_at: null,
+    failed_sync_attempts: 0,
+    cancelled_by: null,
+    cancel_reason: null,
+    last_conflict_reason: null,
+    last_conflict_at: null,
+    created_at: 1_600_000_000_000,
+    updated_at: 1_600_000_000_000,
+  };
+
+  // Tes 1: baris pool versi lama diperbarui oleh server data baru.
+  describe('tes 1: baris pool versi lama diperbarui dari data server', () => {
+    it('server_version, total_cents, currency, status, updated_at diperbarui; created_at tidak berubah; _status synced dan _changed kosong', async () => {
+      const rowId = 'pool-t1-1';
+      await seedPoolRow(rowId, {
+        ...defaultRowFields,
+        total_cents: 55000,
+        currency: 'IDR',
+        server_version: 3,
+        created_at: 1_600_000_000_000,
+        updated_at: 1_600_000_000_000,
+      });
+
+      const updatedItem: AvailableOrderItem = {
+        orderId: rowId,
+        totalCents: 77000,
+        currency: 'SGD',
+        itemsCount: 1,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        version: 9,
+      };
+      await renderAndAwaitPool(db, [updatedItem]);
+
+      const row = await db.get<OrderModel>('orders').find(rowId);
+      // Kolom yang boleh berubah
+      expect(row._getRaw('server_version')).toBe(9);
+      expect(row._getRaw('total_cents')).toBe(77000);
+      expect(row._getRaw('currency')).toBe('SGD');
+      expect(row._getRaw('status')).toBe('ASSIGNED');
+      expect(row._getRaw('updated_at')).toBe(FIXED_NOW_MS);
+      // created_at TIDAK berubah
+      expect(row._getRaw('created_at')).toBe(1_600_000_000_000);
+      // _status synced dan _changed kosong
+      expect(row._raw._status).toBe('synced');
+      expect(row._raw._changed).toBe('');
+      // Tidak di-push
+      expect(await willBePushed(rowId)).toBe(false);
+    });
+  });
+
+  // Tes 2: baris pool yang hilang dari daftar (hasMore false) terhapus permanen.
+  describe('tes 2: baris pool yang hilang dari daftar (hasMore false) dihapus permanen', () => {
+    it('baris tidak ada di adapter setelah fetchPool dan tidak akan di-push', async () => {
+      const existingRowId = 'pool-t2-existing';
+      const goneRowId = 'pool-t2-gone';
+      await seedPoolRow(existingRowId, defaultRowFields);
+      await seedPoolRow(goneRowId, defaultRowFields);
+
+      // Server hanya kirim existingRowId — goneRowId tidak ada di daftar
+      const serverItems: AvailableOrderItem[] = [
+        {
+          orderId: existingRowId,
+          totalCents: 55000,
+          currency: 'IDR',
+          itemsCount: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          version: 5,
+        },
+      ];
+      await renderAndAwaitPool(db, serverItems, false);
+
+      // existingRowId masih ada
+      expect(await rowExistsInAdapter(existingRowId)).toBe(true);
+      // goneRowId tidak ada (destroyPermanently, bukan soft delete)
+      expect(await rowExistsInAdapter(goneRowId)).toBe(false);
+    });
+  });
+
+  // Tes 3: baris milik driver ini (driver_id terisi) tidak disentuh fetchPool.
+  describe('tes 3: baris milik driver lain tidak disentuh oleh fetchPool', () => {
+    it('baris driver_id terisi tidak berubah meskipun id-nya tidak ada di daftar server', async () => {
+      const driverRowId = 'driver-t3-1';
+      const driverRowFields = {
+        ...defaultRowFields,
+        driver_id: 'driver-456',
+        total_cents: 99000,
+        status: 'PREPARING',
+        server_version: 11,
+        created_at: 1_700_000_000_000,
+        updated_at: 1_700_000_000_000,
+      };
+      await seedDriverRow(driverRowId, 'driver-456', driverRowFields);
+
+      // Server kirim daftar kosong (pool habis), hasMore false
+      await renderAndAwaitPool(db, [], false);
+
+      // Baris driver tetap persis seperti sebelumnya
+      const row = await db.get<OrderModel>('orders').find(driverRowId);
+      expect(row._getRaw('driver_id')).toBe('driver-456');
+      expect(row._getRaw('total_cents')).toBe(99000);
+      expect(row._getRaw('status')).toBe('PREPARING');
+      expect(row._getRaw('server_version')).toBe(11);
+      expect(row._getRaw('created_at')).toBe(1_700_000_000_000);
+      expect(row._getRaw('updated_at')).toBe(1_700_000_000_000);
+      expect(row._raw._status).toBe('synced');
+    });
+  });
+
+  // Tes 4: baris pool dengan pending action tidak disentuh.
+  describe('tes 4: baris pool dengan pending action tidak disentuh', () => {
+    it('baris pool dengan pending action tidak diperbarui dan tidak dihapus', async () => {
+      const pendingRowId = 'pool-t4-pending';
+      await seedPoolRow(pendingRowId, {
+        ...defaultRowFields,
+        total_cents: 33000,
+        server_version: 2,
+        created_at: 1_500_000_000_000,
+        updated_at: 1_500_000_000_000,
+      });
+
+      // Mock hasPendingAction = true untuk row ini
+      const outbox = jest.requireMock('../sync/outbox') as { hasPendingAction: jest.Mock };
+      outbox.hasPendingAction.mockImplementation(async (orderId: string) => {
+        return orderId === pendingRowId;
+      });
+
+      // Server kirim data baru untuk row ini
+      const serverItems: AvailableOrderItem[] = [
+        {
+          orderId: pendingRowId,
+          totalCents: 77000,
+          currency: 'IDR',
+          itemsCount: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          version: 8,
+        },
+      ];
+      await renderAndAwaitPool(db, serverItems, false);
+
+      // Baris pool tetap seperti data lama (tidak diperbarui)
+      const row = await db.get<OrderModel>('orders').find(pendingRowId);
+      expect(row._getRaw('total_cents')).toBe(33000); // tidak berubah
+      expect(row._getRaw('server_version')).toBe(2);  // tidak berubah
+      expect(row._getRaw('updated_at')).toBe(1_500_000_000_000); // tidak berubah
+      expect(row._raw._status).toBe('synced');
+    });
+  });
+
+  // Tes 5: baris belum tersinkron tidak dipaksa synced dan tidak ditimpa datanya.
+  describe('tes 5: baris _status bukan synced tidak dipaksa synced dan tidak ditimpa', () => {
+    it('baris pool dengan _status updated tidak dipaksa synced dan total_cents tidak berubah', async () => {
+      const dirtyRowId = 'pool-t5-dirty';
+      await db.write(async () => {
+        const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+          id: dirtyRowId,
+          _status: 'updated',  // BUKAN synced — ada perubahan lokal
+          _changed: '',
+          ...defaultRowFields,
+          total_cents: 44000,   // nilai lokal yang berbeda
+          server_version: 2,
+          created_at: 1_500_000_000_000,
+          updated_at: 1_500_000_000_000,
+        });
+        await db.batch(prepared);
+      });
+
+      const serverItems: AvailableOrderItem[] = [
+        {
+          orderId: dirtyRowId,
+          totalCents: 88000,  // nilai server berbeda
+          currency: 'IDR',
+          itemsCount: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          version: 7,
+        },
+      ];
+      await renderAndAwaitPool(db, serverItems, false);
+
+      const row = await db.get<OrderModel>('orders').find(dirtyRowId);
+      // _status TIDAK berubah jadi synced
+      expect(row._raw._status).toBe('updated');
+      // total_cents lokal TIDAK ditimpa server
+      expect(row._getRaw('total_cents')).toBe(44000);
+    });
+  });
+
+  // Tes 6: fetch gagal tidak mengubah apa pun.
+  describe('tes 6: fetch gagal tidak mengubah baris pool', () => {
+    it('fetch yang gagal (network error) tidak mengubah, tidak menghapus, tidak menambah baris', async () => {
+      const existingRowId = 'pool-t6-1';
+      const anotherRowId = 'pool-t6-2';
+      await seedPoolRow(existingRowId, defaultRowFields);
+      await seedPoolRow(anotherRowId, defaultRowFields);
+
+      // Mock fetchAvailableOrders melempar error
+      const client = jest.requireMock('../sync/client') as { fetchAvailableOrders: jest.Mock };
+      client.fetchAvailableOrders.mockRejectedValue(new Error('Network error'));
+
+      render(<OrdersScreenBase database={db} myOrders={[]} />);
+      // fetchPool gagal di catch → tidak ada batch. Tapi tetap tunggu 1 tick agar efek cleanup selesai.
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+
+      // Semua baris pool tetap ada dan tidak berubah
+      expect(await rowExistsInAdapter(existingRowId)).toBe(true);
+      expect(await rowExistsInAdapter(anotherRowId)).toBe(true);
+      const row = await db.get<OrderModel>('orders').find(existingRowId);
+      expect(row._getRaw('total_cents')).toBe(55000);
+      expect(row._getRaw('server_version')).toBe(3);
+      expect(row._raw._status).toBe('synced');
+    });
+  });
+
+  // Tes 7: hasMore true — baris yang hilang dari daftar TIDAK dihapus.
+  describe('tes 7: hasMore true — baris pool yang tidak ada di daftar server tidak dihapus', () => {
+    it('hasMore true: baris pool yang hilang TIDAK dihapus; baris yang ada diperbarui; baris baru ditambahkan', async () => {
+      const existingRowId = 'pool-t7-existing';
+      const goneRowId = 'pool-t7-gone';
+      const newRowId = 'pool-t7-new';
+      await seedPoolRow(existingRowId, {
+        ...defaultRowFields,
+        total_cents: 33000,
+        server_version: 2,
+        created_at: 1_500_000_000_000,
+        updated_at: 1_500_000_000_000,
+      });
+      await seedPoolRow(goneRowId, defaultRowFields);
+
+      // Server kirim: existingRowId (harus diperbarui) + newRowId (baru ditambahkan)
+      // goneRowId TIDAK ada di daftar — hasMore true, jadi TIDAK dihapus
+      const serverItems: AvailableOrderItem[] = [
+        {
+          orderId: existingRowId,
+          totalCents: 88000,
+          currency: 'IDR',
+          itemsCount: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          version: 7,
+        },
+        {
+          orderId: newRowId,
+          totalCents: 22000,
+          currency: 'IDR',
+          itemsCount: 2,
+          createdAt: '2026-02-01T00:00:00.000Z',
+          version: 1,
+        },
+      ];
+      await renderAndAwaitPool(db, serverItems, true);
+
+      // existingRowId diperbarui
+      const existingRow = await db.get<OrderModel>('orders').find(existingRowId);
+      expect(existingRow._getRaw('total_cents')).toBe(88000);
+      expect(existingRow._getRaw('server_version')).toBe(7);
+      expect(existingRow._raw._status).toBe('synced');
+
+      // goneRowId MASIH ADA (tidak dihapus karena hasMore true)
+      expect(await rowExistsInAdapter(goneRowId)).toBe(true);
+
+      // newRowId ditambahkan
+      expect(await rowExistsInAdapter(newRowId)).toBe(true);
+      const newRow = await db.get<OrderModel>('orders').find(newRowId);
+      expect(newRow._getRaw('total_cents')).toBe(22000);
+      expect(newRow._raw._status).toBe('synced');
+    });
+  });
+
+  // Tes 8: baris driver_id kosong tapi status BUKAN ASSIGNED (misal CONFIRMED) tidak disentuh.
+  describe('tes 8: baris driver_id kosong tapi status CONFIRMED tidak disentuh oleh fetchPool', () => {
+    it('baris dengan driver_id null dan status CONFIRMED tidak diperbarui dan tidak dihapus', async () => {
+      const confirmedRowId = 'pool-t8-confirmed';
+      const confirmedRowFields = {
+        ...defaultRowFields,
+        driver_id: null,
+        status: 'CONFIRMED', // BUKAN ASSIGNED
+        total_cents: 44000,
+        server_version: 4,
+        created_at: 1_500_000_000_000,
+        updated_at: 1_500_000_000_000,
+      };
+      await seedPoolRow(confirmedRowId, confirmedRowFields);
+
+      // Server kirim daftar kosong (hasMore false — jika baris ini dianggap pool, akan dihapus).
+      await renderAndAwaitPool(db, [], false);
+
+      // Baris tetap persis sama (tidak disentuh)
+      const row = await db.get<OrderModel>('orders').find(confirmedRowId);
+      expect(row._getRaw('driver_id')).toBe(null);
+      expect(row._getRaw('status')).toBe('CONFIRMED');
+      expect(row._getRaw('total_cents')).toBe(44000);
+      expect(row._getRaw('server_version')).toBe(4);
+      expect(row._getRaw('created_at')).toBe(1_500_000_000_000);
+      expect(row._getRaw('updated_at')).toBe(1_500_000_000_000);
+      expect(row._raw._status).toBe('synced');
+      expect(await rowExistsInAdapter(confirmedRowId)).toBe(true);
     });
   });
 });

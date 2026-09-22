@@ -241,11 +241,16 @@ export interface AvailableOrderItem {
   version: number;
 }
 
+export interface FetchAvailableOrdersResult {
+  items: AvailableOrderItem[];
+  hasMore: boolean;
+}
+
 /**
  * Ambil daftar order yang tersedia di driver pool.
  * AbortController 8 detik — fail fast kalau network unreachable.
  */
-export async function fetchAvailableOrders(take?: number): Promise<AvailableOrderItem[]> {
+export async function fetchAvailableOrders(take?: number): Promise<FetchAvailableOrdersResult> {
   let url = `${API_BASE}/orders/available`;
   if (take !== undefined) {
     url += `?take=${String(take)}`;
@@ -261,12 +266,13 @@ export async function fetchAvailableOrders(take?: number): Promise<AvailableOrde
       throw new UnauthorizedError();
     }
     if (!res.ok) throw new Error(`fetchAvailableOrders failed: ${res.status}`);
-    return res.json() as Promise<AvailableOrderItem[]>;
+    const data = await res.json() as FetchAvailableOrdersResult;
+    return data;
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
       console.warn('[fetchAvailableOrders] Request aborted due to 8s timeout — returning empty');
-      return [];
+      return { items: [], hasMore: false };
     }
     throw err;
   }

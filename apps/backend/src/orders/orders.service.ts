@@ -32,6 +32,11 @@ export interface AvailableOrderPayload {
   version: number;
 }
 
+export interface FindAvailableResult {
+  items: AvailableOrderPayload[];
+  hasMore: boolean;
+}
+
 @Injectable()
 export class OrdersService {
   constructor(
@@ -336,23 +341,28 @@ export class OrdersService {
    * List orders yang siap di-accept (status ASSIGNED, belum ada driver).
    * Untuk driver lihat pool. Read-only, tidak ada side effect.
    *
-   * Return `AvailableOrderPayload[]` (slim shape), BUKAN full `Order[]`.
+   * Return `{ items, hasMore }` (slim shape), BUKAN full `Order[]`.
    * Lihat type def di atas untuk rationale + parallel dengan WS broadcast.
+   *
+   * hasMore: ambil take+1 baris, kirim maksimal take baris, hasMore=true
+   * kalau baris yang terambil lebih dari take.
    *
    * @param _driverId - userId dari JWT (untuk future audit logging, tidak untuk filter)
    * @param take - max orders (hard cap 100)
    */
-  async findAvailable(_driverId: string, take: number): Promise<AvailableOrderPayload[]> {
+  async findAvailable(_driverId: string, take: number): Promise<FindAvailableResult> {
     const rows = await this.prisma.order.findMany({
       where: {
         status: OrderStatusDb.ASSIGNED,
         driverId: null,
         deletedAt: null,
       },
-      take,
+      take: take + 1,
       orderBy: { createdAt: 'asc' },
     });
-    return rows.map((r) => this.toAvailablePayload(r));
+    const hasMore = rows.length > take;
+    const items = rows.slice(0, take).map((r) => this.toAvailablePayload(r));
+    return { items, hasMore };
   }
 
   /**

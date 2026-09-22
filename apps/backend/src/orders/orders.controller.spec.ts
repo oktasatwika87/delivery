@@ -29,7 +29,7 @@ describe('OrdersController', () => {
 
   beforeEach(async () => {
     mockService = {
-      findAvailable: jest.fn().mockResolvedValue([]),
+      findAvailable: jest.fn().mockResolvedValue({ items: [], hasMore: false }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -54,7 +54,7 @@ describe('OrdersController', () => {
       const result = await controller.findAvailable(driverId, UserRole.DRIVER, '25');
 
       expect(mockService.findAvailable).toHaveBeenCalledWith(driverId, 25);
-      expect(result).toEqual([]);
+      expect(result).toEqual({ items: [], hasMore: false });
     });
 
     test('non-DRIVER role → 403 Forbidden', async () => {
@@ -103,42 +103,46 @@ describe('OrdersController', () => {
      * Regression guard untuk Tier 6 drift:
      * Sebelumnya `findAvailable` return `Order[]` (full payload), padahal mobile
      * expect slim `AvailableOrderPayload[]`. Test ini assert controller pass-through
-     * adalah ARRAY of SLIM PAYLOAD, BUKAN array of full Order.
+     * adalah OBJECT dengan { items, hasMore }, BUKAN array of full Order.
      *
-     * Kalau backend regressions ke full Order shape (seperti di Tier 6), test ini
-     * fail dan force investigasi sebelum mobile break lagi di lapangan.
+     * response shape: { items: AvailableOrderPayload[], hasMore: boolean }
      */
-    test('pass-through response is slim AvailableOrderPayload[], not full Order[]', async () => {
-      const slimPayload = [
-        {
-          orderId: 'order-aaa',
-          totalCents: 50000,
-          currency: 'IDR',
-          itemsCount: 2,
-          city: 'Denpasar',
-          createdAt: '2026-08-25T10:00:00.000Z',
-        },
-      ];
-      mockService.findAvailable.mockResolvedValue(slimPayload);
+    test('pass-through response is { items, hasMore } not full Order[]', async () => {
+      const response = {
+        items: [
+          {
+            orderId: 'order-aaa',
+            totalCents: 50000,
+            currency: 'IDR',
+            itemsCount: 2,
+            city: 'Denpasar',
+            createdAt: '2026-08-25T10:00:00.000Z',
+          },
+        ],
+        hasMore: true,
+      };
+      mockService.findAvailable.mockResolvedValue(response);
 
       const result = await controller.findAvailable(driverId, UserRole.DRIVER, '50');
 
-      // Slim shape fields present
-      expect(result).toEqual(slimPayload);
-      expect(result[0]).toHaveProperty('orderId');
-      expect(result[0]).toHaveProperty('totalCents');
-      expect(result[0]).toHaveProperty('currency');
-      expect(result[0]).toHaveProperty('itemsCount');
-      expect(result[0]).toHaveProperty('createdAt');
+      expect(result).toEqual(response);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toHaveProperty('orderId');
+      expect(result.items[0]).toHaveProperty('totalCents');
+      expect(result.items[0]).toHaveProperty('currency');
+      expect(result.items[0]).toHaveProperty('itemsCount');
+      expect(result.items[0]).toHaveProperty('createdAt');
+      expect(result).toHaveProperty('hasMore');
+      expect(result.hasMore).toBe(true);
       // PENTING: full Order fields TIDAK boleh bocor di response driver pool
       // (customerId, driverId, items[], deliveryAddress, notes — itu private)
-      expect(result[0]).not.toHaveProperty('id');
-      expect(result[0]).not.toHaveProperty('customerId');
-      expect(result[0]).not.toHaveProperty('driverId');
-      expect(result[0]).not.toHaveProperty('items');
-      expect(result[0]).not.toHaveProperty('deliveryAddress');
-      expect(result[0]).not.toHaveProperty('notes');
-      expect(result[0]).not.toHaveProperty('version');
+      expect(result.items[0]).not.toHaveProperty('id');
+      expect(result.items[0]).not.toHaveProperty('customerId');
+      expect(result.items[0]).not.toHaveProperty('driverId');
+      expect(result.items[0]).not.toHaveProperty('items');
+      expect(result.items[0]).not.toHaveProperty('deliveryAddress');
+      expect(result.items[0]).not.toHaveProperty('notes');
+      expect(result.items[0]).not.toHaveProperty('version');
     });
   });
 });
