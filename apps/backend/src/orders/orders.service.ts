@@ -134,17 +134,25 @@ export class OrdersService {
     if (!current) throw new NotFoundException(`Order ${id} not found`);
 
     // Role check: harus DRIVER (dipastikan di controller via @CurrentUser('role'))
-    // Status check: harus ASSIGNED baru bisa di-accept
+    // Status check: harus ASSIGNED baru bisa di-accept.
+    // Order yang sudah di-unassign cron (kembali ke CONFIRMED) atau sudah
+    // pindah status (PREPARING, dst.) dianggap tidak lagi tersedia untuk
+    // driver yang sedang menekan Terima — kembalikan 409 ORDER_UNAVAILABLE
+    // supaya client tahu pool perlu refresh, bukan pesan gagal umum.
     if (current.status !== OrderStatusDb.ASSIGNED) {
-      throw new BadRequestException(
-        `Cannot accept order in status ${current.status}. Expected ASSIGNED.`,
-      );
+      throw new ConflictException({
+        code: 'ORDER_UNAVAILABLE',
+        message: `Cannot accept order in status ${current.status}. Expected ASSIGNED.`,
+      });
     }
 
     // Ownership: order harus belum di-accept driver lain (driverId === null berarti belum ada yang accept)
     // Kalau driverId === driverId (driver yang sama), bisa jadi retry — OCC akan handle
     if (current.driverId !== null && current.driverId !== driverId) {
-      throw new ConflictException('Order already accepted by another driver');
+      throw new ConflictException({
+        code: 'ORDER_UNAVAILABLE',
+        message: 'Order already accepted by another driver.',
+      });
     }
 
     try {
@@ -170,11 +178,16 @@ export class OrdersService {
 
       return this.toDomain(updated);
     } catch (err) {
-      // OCC conflict: version mismatch → 409 Conflict
-      // Check code directly since instanceof may fail with mocks
+      // OCC conflict: version mismatch → 409 VERSION_CONFLICT.
+      // Body object di-pass langsung ke ConflictException supaya Nest HTTP
+      // exception filter serialize { code, message } as-is — pola sama
+      // dengan cancelOrder/rejectOrder.
       const error = err as { code?: string };
       if (error.code === 'P2025') {
-        throw new ConflictException('Order was modified by another request. Please refresh and try again.');
+        throw new ConflictException({
+          code: 'VERSION_CONFLICT',
+          message: 'Order was modified by another request. Please refresh and try again.',
+        });
       }
       throw err;
     }
