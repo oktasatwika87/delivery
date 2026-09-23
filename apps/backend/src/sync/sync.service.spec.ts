@@ -166,6 +166,42 @@ describe('SyncService.applyOne', () => {
     expect(prisma.order.upsert).not.toHaveBeenCalled();
   });
 
+  // ============ Scenario: Conflict ack membawa cancelledBy/cancelReason (Temuan 14) ============
+
+  it('should include cancelledBy and cancelReason in ack.serverData on conflict', async () => {
+    // Server punya order dengan data batal dari cron — saat conflict, data ini
+    // harus ikut di serverData supaya client yang menarik row ini (mis. setelah
+    // accept dari pool) bisa melihat alasan pembatalan lama kalau ada.
+    const record = makeRecord({
+      op: 'update',
+      baseVersion: 2,
+    });
+
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+      id: record.id,
+      customerId: 'customer-uuid',
+      driverId: null,
+      status: 'PENDING',
+      itemsJson: [],
+      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      cancelledBy: 'SYSTEM',
+      cancelReason: 'system_timeout',
+      version: 3, // SERVER LEBIH BARU
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const ack = await service.applyOne(record.entityType, record);
+
+    expect(ack.status).toBe('conflict');
+    expect(ack.serverData).toBeDefined();
+    expect(ack.serverData?.cancelledBy).toBe('SYSTEM');
+    expect(ack.serverData?.cancelReason).toBe('system_timeout');
+  });
+
   // ============ Scenario 4: Update setelah record di-delete (version sudah naik) ============
 
   it('should return conflict when updating a soft-deleted record with stale baseVersion', async () => {
@@ -991,6 +1027,63 @@ describe('SyncService.pullSince', () => {
         .map((r) => r.id);
       expect(chatIds).toContain('chat-a-uuid');
       expect(chatIds).not.toContain('chat-b-uuid');
+    });
+  });
+
+  describe('cancelledBy/cancelReason propagation (Temuan 14)', () => {
+    test('pullSince membawa cancelledBy & cancelReason untuk order yang punya nilai', async () => {
+      // Order dengan data pembatalan lama (mis. dari cron reassign). Saat
+      // customer melakukan pull, kedua field ini harus ikut agar OrderTrackingScreen
+      // bisa menampilkan alasan batal yang sebenarnya (OrderTrackingScreen
+      // menampilkan text dari cancelReason, lihat syncCancelledOrder handler).
+      const orderWithCancel = {
+        id: 'order-cancelled-uuid',
+        customerId: userA,
+        driverId: null,
+        status: 'ASSIGNED',
+        itemsJson: [],
+        addressJson: { recipientName: 'A', phone: '0812', street: 'Jl A', city: 'Jakarta', postalCode: '12345' },
+        totalCents: 50000,
+        currency: 'IDR',
+        notes: null,
+        cancelledBy: 'SYSTEM',
+        cancelReason: 'system_timeout',
+        version: 4,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        deletedAt: null,
+      };
+
+      (prisma.order.findMany as jest.Mock)
+        .mockResolvedValueOnce([orderWithCancel])
+        .mockResolvedValueOnce([orderWithCancel]);
+      (prisma.payment.findMany as jest.Mock).mockResolvedValueOnce([]);
+      (prisma.chatMessage.findMany as jest.Mock).mockResolvedValueOnce([]);
+
+      const result = await service.pullSince('device-a', userA, null);
+
+      const orderRecords = result.records.filter((r) => r.entityType === 'order');
+      expect(orderRecords).toHaveLength(1);
+      const orderData = orderRecords[0].data;
+      expect(orderData.cancelledBy).toBe('SYSTEM');
+      expect(orderData.cancelReason).toBe('system_timeout');
+    });
+
+    test('pullSince: order tanpa cancelledBy/cancelReason tidak memunculkan field', async () => {
+      // Order normal (belum pernah di-cancel) tidak boleh memunculkan cancelledBy/cancelReason
+      (prisma.order.findMany as jest.Mock)
+        .mockResolvedValueOnce([orderA])
+        .mockResolvedValueOnce([orderA]);
+      (prisma.payment.findMany as jest.Mock).mockResolvedValueOnce([]);
+      (prisma.chatMessage.findMany as jest.Mock).mockResolvedValueOnce([]);
+
+      const result = await service.pullSince('device-a', userA, null);
+
+      const orderRecords = result.records.filter((r) => r.entityType === 'order');
+      expect(orderRecords).toHaveLength(1);
+      const orderData = orderRecords[0].data;
+      expect(orderData.cancelledBy).toBeUndefined();
+      expect(orderData.cancelReason).toBeUndefined();
     });
   });
 });

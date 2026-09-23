@@ -397,6 +397,11 @@ export class SyncService {
     version: number;
     createdAt: Date;
     updatedAt: Date;
+    // Kolom pembatalan: null jadi undefined sama seperti toDomain di
+    // OrdersService (orders.service.ts:446-447) supaya shape konsisten
+    // antara pull REST dan respons endpoint order.
+    cancelledBy: string | null;
+    cancelReason: string | null;
   }): Order {
     return {
       id: row.id,
@@ -408,6 +413,8 @@ export class SyncService {
       totalCents: row.totalCents,
       currency: row.currency,
       notes: row.notes ?? undefined,
+      cancelledBy: row.cancelledBy ?? undefined,
+      cancelReason: row.cancelReason ?? undefined,
       version: row.version,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
