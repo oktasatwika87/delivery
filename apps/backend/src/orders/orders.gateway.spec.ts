@@ -265,16 +265,17 @@ describe('OrdersGateway', () => {
   });
 
   describe('emitOrderRejected', () => {
-    test('broadcasts to customerId room with CONFIRMED status (reassign-able, not terminal)', () => {
-      // FIX (2026-09): status was 'CANCELLED' in old test — reject now goes
-      // back to CONFIRMED (same as cancel) so order can be reassigned.
-      // See orders.service.ts rejectOrder() + orders.gateway.ts emitOrderRejected.
+    test('broadcasts to customerId room with ASSIGNED status (back to pool)', () => {
+      // K9 (2026-09): status sekarang 'ASSIGNED' — single pool state,
+      // lihat order-events.ts OrderRejectedPayload. 'CONFIRMED' dulu
+      // dipakai sebagai transitional state; sekarang tidak ada gunanya
+      // lagi karena releaseToPool kembali ke ASSIGNED + driverId null.
       gateway.emitOrderRejected('customer-uuid', 'order-123', 2);
 
       expect(mockServer.to).toHaveBeenCalledWith('customer-uuid');
       expect(mockServer.emit).toHaveBeenCalledWith('order:rejected', {
         orderId: 'order-123',
-        status: 'CONFIRMED',
+        status: 'ASSIGNED',
         version: 2,
       });
     });
@@ -282,12 +283,13 @@ describe('OrdersGateway', () => {
 
   describe('emitOrderCancelled', () => {
     test('broadcasts to customerId room with reason', () => {
+      // K9: status 'ASSIGNED' — order balik ke pool.
       gateway.emitOrderCancelled('customer-uuid', 'order-123', 3, 'Kendaraan mogok');
 
       expect(mockServer.to).toHaveBeenCalledWith('customer-uuid');
       expect(mockServer.emit).toHaveBeenCalledWith('order:cancelled', {
         orderId: 'order-123',
-        status: 'CONFIRMED',
+        status: 'ASSIGNED',
         version: 3,
         reason: 'Kendaraan mogok',
       });

@@ -2,9 +2,9 @@
  * Unit tests untuk ReassignmentService.
  *
  * Coverage:
- * 1. triggerReassignment - OCC success (order berhasil di-reassign)
- * 2. triggerReassignment - OCC conflict (P2025 → skip silently, return false)
- * 3. triggerReassignment - non-P2025 error → rethrow
+ * 1. triggerReassignment - OCC success via releaseToPool (order berhasil di-reassign)
+ * 2. triggerReassignment - ConflictException VERSION_CONFLICT → return false (skip silently)
+ * 3. triggerReassignment - non-ConflictException error → rethrow
  * 4. checkReassignments - ASSIGNED order timeout (lastSeenAt > 15 min) → reassign
  * 5. checkReassignments - ASSIGNED order with recent lastSeenAt → NOT reassign
  * 6. checkReassignments - OUT_FOR_DELIVERY order timeout (lastSeenAt > 50 min) → reassign
@@ -12,14 +12,20 @@
  * 8. checkReassignments - null lastSeenAt (driver never synced) → reassign
  * 9. checkReassignments - PREPARING order uses preparing timeout (15 min)
  * 10. checkReassignments - no active orders → no reassignments, no errors
+ *
+ * K9 (2026-09): ReassignmentService sekarang mendelegasikan release ke
+ * OrdersService.releaseToPool, bukan langsung prisma.order.update + emit.
+ * Mock OrdersService.releaseToPool untuk test — Prisma langsung tidak
+ * lagi dipanggil untuk release path.
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
+import { ConflictException } from '@nestjs/common';
 import { PrismaClient, OrderStatusDb } from '@prisma/client';
 
 import { ReassignmentService } from './reassignment.service';
-import { OrdersGateway } from './orders.gateway';
+import { OrdersService } from './orders.service';
 
 describe('ReassignmentService', () => {
   let service: ReassignmentService;
@@ -32,8 +38,8 @@ describe('ReassignmentService', () => {
       updateMany: jest.Mock;
     };
   };
-  let mockGateway: {
-    emitOrderAvailable: jest.Mock;
+  let mockOrdersService: {
+    releaseToPool: jest.Mock;
   };
   let mockConfig: {
     get: jest.Mock;
@@ -55,8 +61,8 @@ describe('ReassignmentService', () => {
       },
     };
 
-    mockGateway = {
-      emitOrderAvailable: jest.fn(),
+    mockOrdersService = {
+      releaseToPool: jest.fn(),
     };
 
     mockConfig = {
@@ -72,7 +78,7 @@ describe('ReassignmentService', () => {
         ReassignmentService,
         { provide: PrismaClient, useValue: mockPrisma },
         { provide: ConfigService, useValue: mockConfig },
-        { provide: OrdersGateway, useValue: mockGateway },
+        { provide: OrdersService, useValue: mockOrdersService },
       ],
     }).compile();
 
@@ -86,58 +92,45 @@ describe('ReassignmentService', () => {
   // ===== triggerReassignment tests =====
 
   describe('triggerReassignment()', () => {
-    test('OCC success - order berhasil di-reassign, emitOrderAvailable called', async () => {
+    test('OCC success - releaseToPool dipanggil, return true', async () => {
       const reassignedOrder = {
         id: orderId,
-        status: OrderStatusDb.CONFIRMED,
+        status: OrderStatusDb.ASSIGNED,
         version: version + 1,
-        itemsJson: [],
-        addressJson: {},
-        totalCents: 50000,
-        currency: 'IDR',
-        createdAt: new Date(),
-        updatedAt: new Date(),
       };
 
-      mockPrisma.order.update.mockResolvedValue(reassignedOrder);
+      mockOrdersService.releaseToPool.mockResolvedValue(reassignedOrder);
 
       const result = await service.triggerReassignment(orderId, version);
 
       expect(result).toBe(true);
-      expect(mockPrisma.order.update).toHaveBeenCalledWith({
-        where: { id: orderId, version },
-        data: expect.objectContaining({
-          status: OrderStatusDb.CONFIRMED,
-          driverId: null,
-          cancelledBy: 'SYSTEM',
-          cancelReason: 'system_timeout',
-          version: { increment: 1 },
-        }),
+      expect(mockOrdersService.releaseToPool).toHaveBeenCalledWith({
+        orderId,
+        expectedVersion: version,
+        cancelledBy: 'SYSTEM',
+        cancelReason: 'system_timeout',
       });
-      expect(mockGateway.emitOrderAvailable).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: orderId,
-          status: 'CONFIRMED',
-        }),
-      );
+      // releaseToPool yang mengurus emit, jadi ReassignmentService tidak
+      // boleh akses prisma.order.update untuk release path
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
-    test('OCC conflict (P2025) → return false, no emit', async () => {
-      const prismaError = Object.assign(
-        new Error('Record to update not found.'),
-        { code: 'P2025', name: 'PrismaClientKnownRequestError' },
-      );
-      mockPrisma.order.update.mockRejectedValue(prismaError);
+    test('ConflictException VERSION_CONFLICT → return false, skip silently', async () => {
+      // releaseToPool melemparkan ConflictException untuk P2025
+      const conflict = new ConflictException({
+        code: 'VERSION_CONFLICT',
+        message: 'Order was modified by another request. Please refresh and try again.',
+      });
+      mockOrdersService.releaseToPool.mockRejectedValue(conflict);
 
       const result = await service.triggerReassignment(orderId, version);
 
       expect(result).toBe(false);
-      expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
     });
 
-    test('non-P2025 error → rethrow', async () => {
+    test('non-ConflictException error → rethrow', async () => {
       const dbError = new Error('Database connection failed');
-      mockPrisma.order.update.mockRejectedValue(dbError);
+      mockOrdersService.releaseToPool.mockRejectedValue(dbError);
 
       await expect(
         service.triggerReassignment(orderId, version),
@@ -177,34 +170,24 @@ describe('ReassignmentService', () => {
     }
 
     test(
-      'ASSIGNED order timeout (lastSeenAt > 15 min) → reassign',
+      'ASSIGNED order timeout (lastSeenAt > 15 min) → reassign via releaseToPool',
       async () => {
         const oldLastSeen = minutesAgo(20); // lebih dari 15 menit
         mockPrisma.order.findMany.mockResolvedValue([
           makeActiveOrder(OrderStatusDb.ASSIGNED, oldLastSeen),
         ]);
-        mockPrisma.order.update.mockResolvedValue({
+        mockOrdersService.releaseToPool.mockResolvedValue({
           id: orderId,
-          status: OrderStatusDb.CONFIRMED,
           version: version + 1,
-          itemsJson: [],
-          addressJson: {},
-          totalCents: 50000,
-          currency: 'IDR',
-          createdAt: new Date(),
-          updatedAt: new Date(),
         });
 
         await service.checkReassignments();
 
-        expect(mockPrisma.order.update).toHaveBeenCalledWith({
-          where: { id: orderId, version },
-          data: expect.objectContaining({
-            status: OrderStatusDb.CONFIRMED,
-            driverId: null,
-            cancelledBy: 'SYSTEM',
-            cancelReason: 'system_timeout',
-          }),
+        expect(mockOrdersService.releaseToPool).toHaveBeenCalledWith({
+          orderId,
+          expectedVersion: version,
+          cancelledBy: 'SYSTEM',
+          cancelReason: 'system_timeout',
         });
       },
     );
@@ -219,7 +202,7 @@ describe('ReassignmentService', () => {
 
         await service.checkReassignments();
 
-        expect(mockPrisma.order.update).not.toHaveBeenCalled();
+        expect(mockOrdersService.releaseToPool).not.toHaveBeenCalled();
       },
     );
 
@@ -230,21 +213,14 @@ describe('ReassignmentService', () => {
         mockPrisma.order.findMany.mockResolvedValue([
           makeActiveOrder(OrderStatusDb.OUT_FOR_DELIVERY, oldLastSeen),
         ]);
-        mockPrisma.order.update.mockResolvedValue({
+        mockOrdersService.releaseToPool.mockResolvedValue({
           id: orderId,
-          status: OrderStatusDb.CONFIRMED,
           version: version + 1,
-          itemsJson: [],
-          addressJson: {},
-          totalCents: 50000,
-          currency: 'IDR',
-          createdAt: new Date(),
-          updatedAt: new Date(),
         });
 
         await service.checkReassignments();
 
-        expect(mockPrisma.order.update).toHaveBeenCalled();
+        expect(mockOrdersService.releaseToPool).toHaveBeenCalled();
       },
     );
 
@@ -258,7 +234,7 @@ describe('ReassignmentService', () => {
 
         await service.checkReassignments();
 
-        expect(mockPrisma.order.update).not.toHaveBeenCalled();
+        expect(mockOrdersService.releaseToPool).not.toHaveBeenCalled();
       },
     );
 
@@ -268,21 +244,14 @@ describe('ReassignmentService', () => {
         mockPrisma.order.findMany.mockResolvedValue([
           makeActiveOrder(OrderStatusDb.ASSIGNED, null),
         ]);
-        mockPrisma.order.update.mockResolvedValue({
+        mockOrdersService.releaseToPool.mockResolvedValue({
           id: orderId,
-          status: OrderStatusDb.CONFIRMED,
           version: version + 1,
-          itemsJson: [],
-          addressJson: {},
-          totalCents: 50000,
-          currency: 'IDR',
-          createdAt: new Date(),
-          updatedAt: new Date(),
         });
 
         await service.checkReassignments();
 
-        expect(mockPrisma.order.update).toHaveBeenCalled();
+        expect(mockOrdersService.releaseToPool).toHaveBeenCalled();
       },
     );
 
@@ -295,22 +264,15 @@ describe('ReassignmentService', () => {
         mockPrisma.order.findMany.mockResolvedValue([
           makeActiveOrder(OrderStatusDb.PREPARING, lastSeen43MinAgo),
         ]);
-        mockPrisma.order.update.mockResolvedValue({
+        mockOrdersService.releaseToPool.mockResolvedValue({
           id: orderId,
-          status: OrderStatusDb.CONFIRMED,
           version: version + 1,
-          itemsJson: [],
-          addressJson: {},
-          totalCents: 50000,
-          currency: 'IDR',
-          createdAt: new Date(),
-          updatedAt: new Date(),
         });
 
         await service.checkReassignments();
 
         // Harus reassign karena 43 menit > 15 menit preparing timeout
-        expect(mockPrisma.order.update).toHaveBeenCalled();
+        expect(mockOrdersService.releaseToPool).toHaveBeenCalled();
       },
     );
 
@@ -320,8 +282,7 @@ describe('ReassignmentService', () => {
       // Tidak throw
       await service.checkReassignments();
 
-      expect(mockPrisma.order.update).not.toHaveBeenCalled();
-      expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
+      expect(mockOrdersService.releaseToPool).not.toHaveBeenCalled();
     });
 
     test('ASSIGNED at exactly 15 min boundary → NOT reassign', async () => {
@@ -334,7 +295,7 @@ describe('ReassignmentService', () => {
       await service.checkReassignments();
 
       // Should NOT reassign — threshold adalah "lebih dari" timeout
-      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      expect(mockOrdersService.releaseToPool).not.toHaveBeenCalled();
     });
 
     test('OUT_FOR_DELIVERY at exactly 50 min boundary → NOT reassign', async () => {
@@ -345,7 +306,7 @@ describe('ReassignmentService', () => {
 
       await service.checkReassignments();
 
-      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      expect(mockOrdersService.releaseToPool).not.toHaveBeenCalled();
     });
 
     test('mixed orders: one timed out, one not → only reassign timed out', async () => {
@@ -357,24 +318,17 @@ describe('ReassignmentService', () => {
         { ...makeActiveOrder(OrderStatusDb.ASSIGNED, oldDriver.lastSeenAt), driver: oldDriver, id: 'order-old' },
       ]);
 
-      mockPrisma.order.update.mockResolvedValue({
+      mockOrdersService.releaseToPool.mockResolvedValue({
         id: 'order-old',
-        status: OrderStatusDb.CONFIRMED,
         version: version + 1,
-        itemsJson: [],
-        addressJson: {},
-        totalCents: 50000,
-        currency: 'IDR',
-        createdAt: new Date(),
-        updatedAt: new Date(),
       });
 
       await service.checkReassignments();
 
       // Hanya order-old yang timeout (30 menit > 15 menit)
-      expect(mockPrisma.order.update).toHaveBeenCalledTimes(1);
-      expect(mockPrisma.order.update).toHaveBeenCalledWith(
-        expect.objectContaining({ where: expect.objectContaining({ id: 'order-old' }) }),
+      expect(mockOrdersService.releaseToPool).toHaveBeenCalledTimes(1);
+      expect(mockOrdersService.releaseToPool).toHaveBeenCalledWith(
+        expect.objectContaining({ orderId: 'order-old' }),
       );
     });
   });

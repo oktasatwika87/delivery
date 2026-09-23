@@ -374,11 +374,15 @@ describe('OrdersService', () => {
       },
     };
 
+    // K9 (2026-09): order baru lahir ASSIGNED + driverId null (pool state)
+    // — sebelumnya PENDING lalu di-confirm manual. Sekarang create() otomatis
+    // masuk pool, sehingga emitOrderAvailable dipanggil supaya driver yang
+    // online langsung lihat order baru tanpa harus pull REST.
     const mockCreatedOrder = {
       id: 'new-order-id',
       customerId,
       driverId: null,
-      status: OrderStatusDb.PENDING,
+      status: OrderStatusDb.ASSIGNED,
       itemsJson: validInput.items,
       addressJson: validInput.deliveryAddress,
       totalCents: 50000,
@@ -391,13 +395,15 @@ describe('OrdersService', () => {
       cancelReason: null,
     };
 
-    test('berhasil create order dengan input valid', async () => {
+    test('berhasil create order: born ASSIGNED + masuk pool', async () => {
       mockPrisma.order.create.mockResolvedValue(mockCreatedOrder);
 
       const result = await service.create(validInput, customerId);
 
       expect(result.id).toBe('new-order-id');
-      expect(result.status).toBe('PENDING');
+      // K9: status ASSIGNED saat lahir, bukan PENDING
+      expect(result.status).toBe('ASSIGNED');
+      expect(result.driverId).toBeUndefined();
       expect(result.totalCents).toBe(50000);
       expect(mockPrisma.order.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
@@ -406,8 +412,14 @@ describe('OrdersService', () => {
           addressJson: validInput.deliveryAddress,
           totalCents: 50000,
           currency: 'IDR',
+          status: OrderStatusDb.ASSIGNED,
+          driverId: null,
         }),
       });
+      // pool diberi tahu supaya driver online langsung lihat
+      expect(mockGateway.emitOrderAvailable).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'new-order-id', status: 'ASSIGNED' })
+      );
     });
 
     test('totalCents dihitung dari quantity × unitPriceCents', async () => {
@@ -461,11 +473,13 @@ describe('OrdersService', () => {
       updatedAt: new Date(),
     };
 
-    test('berhasil reject order ASSIGNED yang di-assign ke driver ybs → balik CONFIRMED, reassign-able', async () => {
+    test('berhasil reject order ASSIGNED yang di-assign ke driver ybs → balik ke pool (ASSIGNED + driverId null)', async () => {
       const updatedOrder = {
         ...mockOrderAssigned,
-        status: OrderStatusDb.CONFIRMED,
+        status: OrderStatusDb.ASSIGNED,
         driverId: null,
+        cancelledBy: null,
+        cancelReason: null,
         version: version + 1,
       };
 
@@ -474,7 +488,8 @@ describe('OrdersService', () => {
 
       const result = await service.rejectOrder(orderId, version, driverId);
 
-      expect(result.status).toBe('CONFIRMED');
+      // K9: balik ke pool = ASSIGNED + driverId null (bukan CONFIRMED).
+      expect(result.status).toBe('ASSIGNED');
       expect(result.driverId).toBeUndefined();
       expect(result.version).toBe(version + 1);
       expect(mockGateway.emitOrderRejected).toHaveBeenCalledWith(
@@ -485,8 +500,10 @@ describe('OrdersService', () => {
       expect(mockPrisma.order.update).toHaveBeenCalledWith({
         where: { id: orderId, version },
         data: expect.objectContaining({
-          status: OrderStatusDb.CONFIRMED,
+          status: OrderStatusDb.ASSIGNED,
           driverId: null,
+          cancelledBy: null,
+          cancelReason: null,
           version: { increment: 1 },
         }),
       });
@@ -639,11 +656,11 @@ describe('OrdersService', () => {
       };
     }
 
-    test('berhasil cancel dari ASSIGNED - status CONFIRMED, driverId null, cancelledBy set', async () => {
+    test('berhasil cancel dari ASSIGNED - kembali ke pool (ASSIGNED + driverId null), cancelledBy set', async () => {
       const mockOrder = makeOrderWithDriver(OrderStatusDb.ASSIGNED);
       const cancelledOrder = {
         ...mockOrder,
-        status: OrderStatusDb.CONFIRMED,
+        status: OrderStatusDb.ASSIGNED,
         driverId: null,
         cancelledBy: driverId,
         cancelReason: null,
@@ -655,7 +672,8 @@ describe('OrdersService', () => {
 
       const result = await service.cancelOrder(orderId, version, driverId);
 
-      expect(result.status).toBe('CONFIRMED');
+      // K9: balik ke pool = ASSIGNED + driverId null (bukan CONFIRMED).
+      expect(result.status).toBe('ASSIGNED');
       expect(result.driverId).toBeUndefined();
       expect(result.cancelledBy).toBe(driverId);
       expect(result.cancelReason).toBeUndefined();
@@ -669,10 +687,11 @@ describe('OrdersService', () => {
       expect(mockPrisma.order.update).toHaveBeenCalledWith({
         where: { id: orderId, version },
         data: expect.objectContaining({
-          status: OrderStatusDb.CONFIRMED,
+          status: OrderStatusDb.ASSIGNED,
           driverId: null,
           cancelledBy: driverId,
-          cancelReason: undefined,
+          // releaseToPool normalisasi: undefined → null untuk Prisma
+          cancelReason: null,
           version: { increment: 1 },
         }),
       });
@@ -682,7 +701,7 @@ describe('OrdersService', () => {
       const mockOrder = makeOrderWithDriver(OrderStatusDb.PREPARING);
       const cancelledOrder = {
         ...mockOrder,
-        status: OrderStatusDb.CONFIRMED,
+        status: OrderStatusDb.ASSIGNED,
         driverId: null,
         cancelledBy: driverId,
         cancelReason: 'Kendaraan mogok',
@@ -694,7 +713,8 @@ describe('OrdersService', () => {
 
       const result = await service.cancelOrder(orderId, version, driverId, 'Kendaraan mogok');
 
-      expect(result.status).toBe('CONFIRMED');
+      // K9: balik ke ASSIGNED (pool state) bukan CONFIRMED.
+      expect(result.status).toBe('ASSIGNED');
       expect(result.driverId).toBeUndefined();
       expect(result.cancelledBy).toBe(driverId);
       expect(result.cancelReason).toBe('Kendaraan mogok');
@@ -704,7 +724,7 @@ describe('OrdersService', () => {
       const mockOrder = makeOrderWithDriver(OrderStatusDb.OUT_FOR_DELIVERY);
       const cancelledOrder = {
         ...mockOrder,
-        status: OrderStatusDb.CONFIRMED,
+        status: OrderStatusDb.ASSIGNED,
         driverId: null,
         cancelledBy: driverId,
         cancelReason: null,
@@ -716,7 +736,8 @@ describe('OrdersService', () => {
 
       const result = await service.cancelOrder(orderId, version, driverId);
 
-      expect(result.status).toBe('CONFIRMED');
+      // K9: status ASSIGNED (pool state), bukan CONFIRMED.
+      expect(result.status).toBe('ASSIGNED');
     });
 
     test('gagal: driver bukan owner (403 Forbidden)', async () => {
@@ -867,6 +888,113 @@ describe('OrdersService', () => {
     });
   });
 
+  // ===== releaseToPool tests (K9) =====
+
+  describe('releaseToPool()', () => {
+    // K9: helper terpusat untuk semua back-to-pool operations (reject,
+    // cancel, reassign). Menjamin shape konsisten: ASSIGNED + driverId null,
+    // emitOrderAvailable ke pool, VERSION_CONFLICT untuk OCC miss.
+
+    const mockAssignedOrder = {
+      id: orderId,
+      customerId,
+      driverId,
+      status: OrderStatusDb.PREPARING,
+      itemsJson: [],
+      addressJson: {},
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      version,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    test('success: order kembali ke pool (ASSIGNED + driverId null) + emitOrderAvailable', async () => {
+      const releasedOrder = {
+        ...mockAssignedOrder,
+        status: OrderStatusDb.ASSIGNED,
+        driverId: null,
+        version: version + 1,
+      };
+      mockPrisma.order.update.mockResolvedValue(releasedOrder);
+
+      const result = await service.releaseToPool({
+        orderId,
+        expectedVersion: version,
+        cancelledBy: 'SYSTEM',
+        cancelReason: 'system_timeout',
+      });
+
+      expect(result.status).toBe('ASSIGNED');
+      expect(result.driverId).toBeUndefined();
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: orderId, version },
+        data: expect.objectContaining({
+          status: OrderStatusDb.ASSIGNED,
+          driverId: null,
+          cancelledBy: 'SYSTEM',
+          cancelReason: 'system_timeout',
+          version: { increment: 1 },
+        }),
+      });
+      expect(mockGateway.emitOrderAvailable).toHaveBeenCalledWith(
+        expect.objectContaining({ id: orderId, status: 'ASSIGNED' }),
+      );
+    });
+
+    test('default cancelledBy/cancelReason → null saat tidak diberikan', async () => {
+      const releasedOrder = {
+        ...mockAssignedOrder,
+        status: OrderStatusDb.ASSIGNED,
+        driverId: null,
+        cancelledBy: null,
+        cancelReason: null,
+        version: version + 1,
+      };
+      mockPrisma.order.update.mockResolvedValue(releasedOrder);
+
+      await service.releaseToPool({ orderId, expectedVersion: version });
+
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: orderId, version },
+        data: expect.objectContaining({
+          cancelledBy: null,
+          cancelReason: null,
+        }),
+      });
+    });
+
+    test('OCC conflict: P2025 → ConflictException(VERSION_CONFLICT)', async () => {
+      const prismaError = Object.assign(
+        new Error('Record to update not found.'),
+        { code: 'P2025', name: 'PrismaClientKnownRequestError' },
+      );
+      mockPrisma.order.update.mockRejectedValue(prismaError);
+
+      let caught: unknown;
+      try {
+        await service.releaseToPool({ orderId, expectedVersion: version });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({ code: 'VERSION_CONFLICT' });
+      // Tidak ada emit kalau update gagal
+      expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
+    });
+
+    test('non-P2025 error → rethrow apa adanya', async () => {
+      const dbError = new Error('Database connection failed');
+      mockPrisma.order.update.mockRejectedValue(dbError);
+
+      await expect(
+        service.releaseToPool({ orderId, expectedVersion: version }),
+      ).rejects.toThrow('Database connection failed');
+    });
+  });
+
   // ===== transitionStatus tests =====
 
   describe('transitionStatus()', () => {
@@ -889,7 +1017,15 @@ describe('OrdersService', () => {
       };
     }
 
-    test('order masuk pool (CONFIRMED→ASSIGNED, driverId=null) → emitOrderAvailable', async () => {
+    // FIXUP A (target 2e82436): K9 single-pool-state. Pool entry (CONFIRMED
+    // → ASSIGNED + driverId null) lewat transitionStatus TIDAK lagi broadcast
+    // ke pool — broadcast hanya terjadi di create()/releaseToPool() helpers.
+    // Rationale: status ASSIGNED + driverId null adalah satu-satunya pool
+    // shape, dan create()/releaseToPool() sudah menanganinya atomically.
+    // PATCH endpoint yang bump status ke ASSIGNED (mis. cron reassignment
+    // dari CONFIRMED) tidak pernah menghasilkan pool-item baru — itu hanya
+    // mengubah status baris yang SUDAH eligible pool via query di findAvailable.
+    test('PATCH CONFIRMED→ASSIGNED via transitionStatus: TIDAK memanggil emitOrderAvailable', async () => {
       const currentOrder = makeOrder(OrderStatusDb.CONFIRMED, null);
       const updatedOrder = {
         ...currentOrder,
@@ -903,9 +1039,12 @@ describe('OrdersService', () => {
       const result = await service.transitionStatus(orderId, 'ASSIGNED', version, customerId);
 
       expect(result.status).toBe('ASSIGNED');
-      expect(mockGateway.emitOrderAvailable).toHaveBeenCalledWith(
-        expect.objectContaining({ id: orderId, status: 'ASSIGNED' })
-      );
+      // Bukti fix: emitOrderAvailable TIDAK dipanggil saat transitionStatus
+      // bump status ke ASSIGNED. Broadcast pool hanya dari create()/
+      // releaseToPool() helpers.
+      expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
+      // emitOrderUnavailable hanya untuk leaving-pool; transisi CONFIRMED→
+      // ASSIGNED tidak lewat pool, jadi juga tidak emit unavailable.
       expect(mockGateway.emitOrderUnavailable).not.toHaveBeenCalled();
     });
 

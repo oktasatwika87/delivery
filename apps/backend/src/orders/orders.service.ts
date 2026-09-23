@@ -58,6 +58,11 @@ export class OrdersService {
       (sum, item) => sum + item.unitPriceCents * item.quantity,
       0,
     );
+    // K9: order langsung masuk pool saat dibuat — born ASSIGNED + driverId null.
+    // Single pool state (ASSIGNED + driverId null) berlaku untuk semua
+    // release-to-pool operations (create, releaseToPool helper).
+    // Setelah create kita broadcast ke pool supaya driver yang online
+    // langsung lihat order baru tanpa harus pull REST.
     const row = await this.prisma.order.create({
       data: {
         customerId: userId,
@@ -66,8 +71,11 @@ export class OrdersService {
         notes: input.notes,
         totalCents,
         currency: 'IDR', // TODO: dari tenant config
+        status: OrderStatusDb.ASSIGNED,
+        driverId: null,
       },
     });
+    this.ordersGateway.emitOrderAvailable(this.toDomain(row));
     return this.toDomain(row);
   }
 
@@ -88,9 +96,6 @@ export class OrdersService {
       throw new ForbiddenException('Not your order');
     }
 
-    // Track pool state SEBELUM update
-    const wasInPool = current.status === OrderStatusDb.ASSIGNED && current.driverId === null;
-
     const allowed = ORDER_ALLOWED_TRANSITIONS[current.status as unknown as OrderStatus];
     if (!allowed.includes(nextStatus as OrderStatus)) {
       throw new BadRequestException(
@@ -106,13 +111,17 @@ export class OrdersService {
       },
     });
 
-    // Track pool state SETELAH update
+    // K9 (FIXUP A): pool entry broadcast hanya dari create()/releaseToPool()
+    // helpers (atomic with the row write). transitionStatus tidak lagi broadcast
+    // pool-entry — PATCH yang bump status ke ASSIGNED (mis. cron reassignment
+    // dari CONFIRMED) bukan sumber pool-item baru; query findAvailable()
+    // membaca status baris langsung, jadi row yang berubah sudah eligible
+    // pool tanpa perlu emit terpisah. Pool-exit (ASSIGNED ke status lain)
+    // tetap di-broadcast supaya driver yang pegang order lama tahu order
+    // sudah tidak tersedia.
+    const wasInPool = current.status === OrderStatusDb.ASSIGNED && current.driverId === null;
     const isNowInPool = updated.status === OrderStatusDb.ASSIGNED && updated.driverId === null;
-
-    if (isNowInPool && !wasInPool) {
-      // Order baru masuk pool
-      this.ordersGateway.emitOrderAvailable(this.toDomain(updated));
-    } else if (wasInPool && !isNowInPool) {
+    if (wasInPool && !isNowInPool) {
       // Order keluar dari pool (di-assign driver, atau status berubah keluar ASSIGNED)
       this.ordersGateway.emitOrderUnavailable(id, 'reassigned');
     }
@@ -249,40 +258,29 @@ export class OrdersService {
       });
     }
 
-    try {
-      const updated = await this.prisma.order.update({
-        where: { id, version: expectedVersion },
-        data: {
-          status: OrderStatusDb.CONFIRMED,
-          driverId: null,
-          version: { increment: 1 },
-        },
-      });
+    const updated = await this.releaseToPool({
+      orderId: id,
+      expectedVersion,
+      // reject bukan pembatalan — kedua field ditulis null supaya tidak
+      // bocor dari cancel/timeout sebelumnya.
+      cancelledBy: null,
+      cancelReason: null,
+    });
 
-      // Emit event ke customer via WebSocket
-      this.ordersGateway.emitOrderRejected(
-        current.customerId,
-        id,
-        updated.version,
-      );
+    // Emit event ke customer via WebSocket (reject-specific payload).
+    this.ordersGateway.emitOrderRejected(
+      current.customerId,
+      id,
+      updated.version,
+    );
 
-      // NOTE: tidak ada emitOrderUnavailable() di sini (beda dari implementasi
-      // lama) — order yang di-reject di sini punya driverId terisi (bukan
-      // pool item), jadi tidak pernah terlihat di pool drivers:available
-      // untuk mulai dengan; tidak ada apa pun untuk di-broadcast sebagai
-      // "sudah tidak tersedia". cancelOrder() juga tidak memanggil ini.
+    // NOTE: tidak ada emitOrderUnavailable() di sini — order yang di-reject
+    // di sini punya driverId terisi (bukan pool item), jadi tidak pernah
+    // terlihat di pool drivers:available untuk mulai dengan; releaseToPool
+    // sudah memanggil emitOrderAvailable untuk broadcast availability ke
+    // pool (order sekarang ASSIGNED + driverId null).
 
-      return this.toDomain(updated);
-    } catch (err) {
-      const error = err as { code?: string };
-      if (error.code === 'P2025') {
-        throw new ConflictException({
-          code: 'VERSION_CONFLICT',
-          message: 'Order was modified by another request. Please refresh and try again.',
-        });
-      }
-      throw err;
-    }
+    return updated;
   }
 
   /**
@@ -323,26 +321,63 @@ export class OrdersService {
       });
     }
 
+    const updated = await this.releaseToPool({
+      orderId: id,
+      expectedVersion,
+      cancelledBy: driverId,
+      cancelReason: reason ?? null,
+    });
+
+    // Emit event ke customer via WebSocket (reason pass-through supaya
+    // customer lihat alasan yang driver berikan, lihat OrderCancelledPayload).
+    this.ordersGateway.emitOrderCancelled(
+      current.customerId,
+      id,
+      updated.version,
+      reason,
+    );
+
+    return updated;
+  }
+
+  /**
+   * Lepas order kembali ke pool dengan atomic OCC update.
+   *
+   * K9: helper terpusat untuk semua "release-to-pool" operations —
+   * rejectOrder, cancelOrder, dan ReassignmentService.triggerReassignment
+   * (cron reassignment) semua lewat sini. Single pool state = ASSIGNED +
+   * driverId null, jadi semua release berakhir di shape yang sama dan
+   * findAvailable() bisa find mereka semua dengan satu query.
+   *
+   * Setelah sukses, broadcast ke pool (emitOrderAvailable). Untuk reject
+   * dan cancel, customer juga dikabari lewat emitOrderRejected/emitOrderCancelled
+   * — itu tetap tanggung jawab caller, bukan releaseToPool, karena ada
+   * payload spesifik per event (reason untuk cancel, dll).
+   *
+   * P2025 → ConflictException(VERSION_CONFLICT) supaya caller bisa
+   * translate sesuai konteks (OrdersService.rejectOrder/cancelOrder
+   * propagate ke HTTP 409, ReassignmentService tangkap dan skip silently).
+   */
+  async releaseToPool(args: {
+    orderId: string;
+    expectedVersion: number;
+    cancelledBy?: string | null;
+    cancelReason?: string | null;
+  }): Promise<Order> {
+    const { orderId, expectedVersion, cancelledBy = null, cancelReason = null } = args;
     try {
       const updated = await this.prisma.order.update({
-        where: { id, version: expectedVersion },
+        where: { id: orderId, version: expectedVersion },
         data: {
-          status: OrderStatusDb.CONFIRMED,
+          status: OrderStatusDb.ASSIGNED,
           driverId: null,
-          cancelledBy: driverId,
-          cancelReason: reason,
+          cancelledBy,
+          cancelReason,
           version: { increment: 1 },
         },
       });
-
-      // Emit event ke customer via WebSocket
-      this.ordersGateway.emitOrderCancelled(
-        current.customerId,
-        id,
-        updated.version,
-        reason,
-      );
-
+      // Broadcast ke pool bahwa order tersedia lagi
+      this.ordersGateway.emitOrderAvailable(this.toDomain(updated));
       return this.toDomain(updated);
     } catch (err) {
       const error = err as { code?: string };

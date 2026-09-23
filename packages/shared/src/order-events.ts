@@ -47,24 +47,26 @@ export interface OrderAcceptedPayload {
 }
 
 /**
- * order:rejected — customer-targeted. Status hardcoded 'CONFIRMED' by the
- * server: the order reverts to CONFIRMED (reassign-able), NOT terminal
- * CANCELLED — see OrdersGateway.emitOrderRejected and
- * OrdersService.rejectOrder() for why.
+ * order:rejected — customer-targeted. Status hardcoded 'ASSIGNED' by the
+ * server: the order reverts to the pool state (ASSIGNED + driverId null),
+ * NOT terminal CANCELLED — see OrdersGateway.emitOrderRejected and
+ * OrdersService.rejectOrder() for why. Customer sees "Mencari driver"
+ * lagi setelah reject, sama seperti order baru.
  */
 export interface OrderRejectedPayload {
   orderId: string;
-  status: 'CONFIRMED';
+  status: 'ASSIGNED';
   version: number;
 }
 
 /**
- * order:cancelled — customer-targeted. Status hardcoded 'CONFIRMED' by the
- * server (see OrdersGateway.emitOrderCancelled).
+ * order:cancelled — customer-targeted. Status hardcoded 'ASSIGNED' by the
+ * server (lihat OrdersGateway.emitOrderCancelled dan OrdersService.cancelOrder).
+ * Order balik ke pool — status ASSIGNED + driverId null, bukan terminal.
  */
 export interface OrderCancelledPayload {
   orderId: string;
-  status: 'CONFIRMED';
+  status: 'ASSIGNED';
   version: number;
   reason?: string;
 }

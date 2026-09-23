@@ -99,7 +99,7 @@ export class OrdersController {
    * Driver cancel order mid-delivery.
    * HANYA bisa diakses oleh user dengan role DRIVER.
    * Order harus dalam status ASSIGNED, PREPARING, atau OUT_FOR_DELIVERY.
-   * Setelah cancel, order kembali ke CONFIRMED dan bisa di-assign ke driver lain.
+   * Setelah cancel, order balik ke pool (ASSIGNED tanpa driver).
    */
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)

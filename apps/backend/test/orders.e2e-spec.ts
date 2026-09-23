@@ -1,13 +1,18 @@
 /**
  * E2E tests untuk Orders accept/reject endpoints.
  *
- * Coverage:
+ * Coverage (FIXUP A untuk 2e82436):
  * 1. Driver accept order ASSIGNED → PREPARING
  * 2. Customer ditolak akses accept (403)
- * 3. Order tidak dalam status ASSIGNED → 400
- * 4. Order sudah di-assign driver lain → 409 Conflict
- * 5. Driver reject order ASSIGNED → CONFIRMED (FIX 2026-09: was CANCELLED)
- * 6. Race condition: 2 driver accept bersamaan → cuma 1 sukses, 1 dapat 409
+ * 3. Order tidak dalam status ASSIGNED → 409 ORDER_UNAVAILABLE
+ *    (sebelumnya 400 — naik jadi 409 sejak cafba79 agar match dengan
+ *    ConflictException body code di OrdersService.acceptOrder)
+ * 4. Order sudah di-assign driver lain → 409 ORDER_UNAVAILABLE
+ * 5. Driver reject order ASSIGNED → balik ke pool (ASSIGNED + driverId null)
+ *    (FIX 2026-09: was CANCELLED, lalu CONFIRMED; sekarang ASSIGNED)
+ * 6. Race condition: 2 driver accept bersamaan → cuma 1 sukses, 1 dapat
+ *    409 (OCC) atau 400 (status check)
+ * 7. Driver cancel → balik ke pool (ASSIGNED + driverId null)
  */
 
 // E2E tests boot real AppModule — unmock @nestjs/schedule so ScheduleModule.forRoot()
@@ -161,7 +166,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('400: order tidak dalam status ASSIGNED', async () => {
+    test('409: order tidak dalam status ASSIGNED', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000a03';
       await prisma.order.upsert({
         where: { id: orderId },
@@ -178,11 +183,15 @@ describe('Orders (e2e) - accept/reject', () => {
         update: {},
       });
       try {
-        await request(app.getHttpServer())
+        // K9 (FIXUP A): accept pada status bukan ASSIGNED sekarang
+        // dibalas 409 ORDER_UNAVAILABLE (sebelumnya 400). ConflictException
+        // body code cocok dengan logic isVersionConflict di mobile.
+        const resp = await request(app.getHttpServer())
           .post(`/orders/${orderId}/accept`)
           .set('Authorization', `Bearer ${driverToken}`)
-          .send({ version: 1 })
-          .expect(400);
+          .send({ version: 1 });
+        expect(resp.status).toBe(409);
+        expect(resp.body.code).toBe('ORDER_UNAVAILABLE');
       } finally {
         await cleanupOrder(orderId);
       }
@@ -204,11 +213,12 @@ describe('Orders (e2e) - accept/reject', () => {
   });
 
   describe('POST /orders/:id/reject', () => {
-    // FIX (2026-09): rejectOrder now requires ownership (see orders.service.ts
-    // doc comment) and reverts to CONFIRMED (reassign-able), not terminal
-    // CANCELLED — so these tests assign the order to driverUserId explicitly
-    // (createAssignedOrder's 3rd param) rather than leaving driverId null.
-    test('200: driver reject order yang di-assign ke dirinya → CONFIRMED, driverId null', async () => {
+    // FIX (2026-09, diperkuat FIXUP A untuk 2e82436): rejectOrder now
+    // requires ownership (lihat orders.service.ts doc comment) dan
+    // mengembalikan order ke pool (status ASSIGNED + driverId null),
+    // bukan terminal CANCELLED atau CONFIRMED — sehingga pool fetch
+    // berikutnya bisa langsung pick-up order ini kembali.
+    test('200: driver reject order ASSIGNED yang di-assign ke dirinya → balik ke pool (ASSIGNED + driverId null)', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000b01';
       await createAssignedOrder(orderId, customerUserId, driverUserId);
       try {
@@ -218,7 +228,8 @@ describe('Orders (e2e) - accept/reject', () => {
           .send({ version: 1 })
           .expect(200);
 
-        expect(resp.body.status).toBe(OrderStatus.CONFIRMED);
+        // K9 (FIXUP A): balik ke pool = ASSIGNED + driverId null.
+        expect(resp.body.status).toBe(OrderStatus.ASSIGNED);
         expect(resp.body.driverId).toBeFalsy();
       } finally {
         await cleanupOrder(orderId);
@@ -295,7 +306,7 @@ describe('Orders (e2e) - accept/reject', () => {
   });
 
   describe('cancel mid-delivery: driver cancel order', () => {
-    test('driver cancel dari ASSIGNED - order CONFIRMED, driverId null, bisa di-assign ulang', async () => {
+    test('driver cancel dari ASSIGNED - order balik ke pool (ASSIGNED + driverId null), bisa di-assign ulang', async () => {
       // Setup: buat order di ASSIGNED (tanpa driver), assign ke driver, lalu cancel
       const orderId = 'e2e00000-0000-0000-0000-000000000d01';
       await prisma.order.upsert({
@@ -324,16 +335,17 @@ describe('Orders (e2e) - accept/reject', () => {
         expect(acceptResp.body.status).toBe('PREPARING');
         expect(acceptResp.body.driverId).toBe(driverUserId);
 
-        // Driver cancel - order goes back to CONFIRMED, driver cleared
+        // Driver cancel — order balik ke pool (K9 FIXUP A: ASSIGNED +
+        // driverId null, bukan CONFIRMED).
         const cancelResp = await request(app.getHttpServer())
           .post(`/orders/${orderId}/cancel`)
           .set('Authorization', `Bearer ${driverToken}`)
           .send({ version: 2, reason: 'Kendaraan mogok' })
           .expect(200);
-        expect(cancelResp.body.status).toBe('CONFIRMED');
-        // driverId cleared so order can be re-assigned by dispatcher
+        expect(cancelResp.body.status).toBe('ASSIGNED');
+        // driverId cleared so order can be re-assigned by another driver
+        // via pool fetch
         expect(cancelResp.body.driverId).toBeFalsy();
-        // Note: reassignment from CONFIRMED -> ASSIGNED is handled externally
       } finally {
         await cleanupOrder(orderId);
       }
@@ -537,7 +549,10 @@ describe('Orders (e2e) - accept/reject', () => {
         })
         .expect(201);
 
-      expect(resp.body.status).toBe(OrderStatus.PENDING);
+      // K9 (FIXUP A): order baru lahir ASSIGNED + driverId null (pool state)
+      // — bukan PENDING. Broadcast emitOrderAvailable dipanggil supaya
+      // driver yang online langsung lihat order baru tanpa pull REST.
+      expect(resp.body.status).toBe(OrderStatus.ASSIGNED);
       expect(resp.body.customerId).toBe(customerUserId);
       expect(resp.body.items).toHaveLength(1);
       expect(resp.body.deliveryAddress.recipientName).toBe('Budi');

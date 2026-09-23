@@ -107,20 +107,22 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
   /**
    * Emit event ke customer saat order di-reject oleh driver.
    *
-   * FIX (2026-09): status diubah dari 'CANCELLED' ke 'CONFIRMED' — mengikuti
-   * fix di OrdersService.rejectOrder() (CANCELLED itu status terminal,
-   * membunuh order permanen; reject sekarang balik ke CONFIRMED, sama seperti
-   * cancel, supaya order bisa di-assign ulang). Lihat orders.service.ts.
+   * FIX (2026-09, K9): status diubah dari 'CONFIRMED' ke 'ASSIGNED' — single
+   * pool state sekarang adalah ASSIGNED + driverId null (lihat OrdersService.
+   * releaseToPool & create yang born ASSIGNED). Order yang di-reject
+   * kembali ke pool, jadi status yang benar untuk customer adalah
+   * 'ASSIGNED' (= "Mencari driver"), bukan 'CONFIRMED' (yang sebenarnya
+   * bukan pool state lagi).
    *
    * Payload sekarang di-type dari @delivery/shared (OrderRejectedPayload) —
-   * ini yang bikin `status` di sini nggak bisa diam-diam balik ke 'CANCELLED'
-   * lagi tanpa compile error di sisi mobile juga (lihat order-events.ts untuk
-   * riwayat lengkap kenapa ini penting).
+   * ini yang bikin `status` di sini nggak bisa diam-diam balik ke status
+   * literal lain tanpa compile error di sisi mobile juga (lihat order-events.ts
+   * untuk riwayat lengkap kenapa ini penting).
    */
   emitOrderRejected(customerId: string, orderId: string, newVersion: number): void {
     const payload: OrderRejectedPayload = {
       orderId,
-      status: 'CONFIRMED',
+      status: 'ASSIGNED',
       version: newVersion,
     };
     this.server.to(customerId).emit('order:rejected', payload);
@@ -128,11 +130,15 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   /**
    * Emit event ke customer saat driver cancel mid-delivery.
+   *
+   * FIX (2026-09, K9): status 'ASSIGNED' — order balik ke pool, single pool
+   * state sekarang ASSIGNED + driverId null (lihat releaseToPool). Customer
+   * lihat "Mencari driver", bukan "Dikonfirmasi".
    */
   emitOrderCancelled(customerId: string, orderId: string, newVersion: number, reason?: string): void {
     const payload: OrderCancelledPayload = {
       orderId,
-      status: 'CONFIRMED',
+      status: 'ASSIGNED',
       version: newVersion,
       reason,
     };

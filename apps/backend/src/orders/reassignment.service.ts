@@ -1,10 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ConflictException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaClient, OrderStatusDb } from '@prisma/client';
 
-import { Order, OrderStatus } from '@delivery/shared';
-import { OrdersGateway } from './orders.gateway';
+import { OrdersService } from './orders.service';
 
 const SYSTEM_DRIVER_ID = 'SYSTEM';
 
@@ -27,6 +26,11 @@ const SYSTEM_DRIVER_ID = 'SYSTEM';
  * Pattern OCC (Optimistic Concurrency Control): atomic update dengan composite
  * key `{id, version}` — kalau version berubah antara check dan update, skip silently.
  * Ini aman untuk multi-instance deployment dan race condition dengan acceptOrder().
+ *
+ * K9 (2026-09): release path didelegasikan ke OrdersService.releaseToPool —
+ * single helper untuk semua "back to pool" operations (reject, cancel, reassign).
+ * Kalau helper itu melemparkan ConflictException(VERSION_CONFLICT), cron skip
+ * silently seperti biasa (P2025 semantics).
  */
 @Injectable()
 export class ReassignmentService {
@@ -38,7 +42,7 @@ export class ReassignmentService {
   constructor(
     private readonly prisma: PrismaClient,
     private readonly configService: ConfigService,
-    private readonly ordersGateway: OrdersGateway,
+    private readonly ordersService: OrdersService,
   ) {
     this.timeoutPreparingMinutes = this.configService.get<number>(
       'REASSIGN_TIMEOUT_PREPARING_MINUTES',
@@ -53,8 +57,10 @@ export class ReassignmentService {
   /**
    * Trigger reassignment untuk satu order secara atomik.
    *
-   * Pakai OCC: update WHERE id=X AND version=Y. Kalau version berubah
-   * (acceptOrder/modifikasi lain), Prisma P2025 → skip silently.
+   * Pakai OCC via OrdersService.releaseToPool: update WHERE id=X AND version=Y.
+   * Kalau version berubah (acceptOrder/modifikasi lain), helper melemparkan
+   * ConflictException(VERSION_CONFLICT) → kita tangkap dan return false
+   * (skip silently, normal untuk multi-instance).
    *
    * @returns true kalau reassign berhasil, false kalau skipped/conflict
    */
@@ -63,46 +69,32 @@ export class ReassignmentService {
     expectedVersion: number,
   ): Promise<boolean> {
     try {
-      const updated = await this.prisma.order.update({
-        where: { id: orderId, version: expectedVersion },
-        data: {
-          status: OrderStatusDb.CONFIRMED,
-          driverId: null,
-          cancelledBy: SYSTEM_DRIVER_ID,
-          cancelReason: 'system_timeout',
-          version: { increment: 1 },
-        },
+      const updated = await this.ordersService.releaseToPool({
+        orderId,
+        expectedVersion,
+        cancelledBy: SYSTEM_DRIVER_ID,
+        cancelReason: 'system_timeout',
       });
 
       this.logger.log(
         `[reassign] Order ${orderId} timeout → reassigned to pool (v${expectedVersion}→${updated.version})`,
       );
 
-      // Emit event supaya pool tahu order udah tersedia lagi
-      const orderDomain: Order = {
-        id: updated.id,
-        customerId: updated.customerId,
-        status: updated.status as OrderStatus,
-        items: updated.itemsJson as unknown as Order['items'],
-        deliveryAddress: updated.addressJson as unknown as Order['deliveryAddress'],
-        totalCents: updated.totalCents,
-        currency: updated.currency,
-        version: updated.version,
-        createdAt: updated.createdAt.toISOString(),
-        updatedAt: updated.updatedAt.toISOString(),
-      };
-      this.ordersGateway.emitOrderAvailable(orderDomain);
+      // releaseToPool sudah broadcast ke pool (emitOrderAvailable),
+      // jadi tidak ada emit tambahan di sini.
 
       return true;
     } catch (err) {
-      const error = err as { code?: string };
-      if (error.code === 'P2025') {
-        // OCC conflict — order sudah dimodifikasi (acceptOrder atau cancelOrder),
-        // skip silently. Ini normal di multi-instance atau race condition.
-        this.logger.debug(
-          `[reassign] Order ${orderId} skipped — version changed (OCC conflict)`,
-        );
-        return false;
+      if (err instanceof ConflictException) {
+        const response = err.getResponse() as { code?: string };
+        if (response?.code === 'VERSION_CONFLICT') {
+          // OCC conflict — order sudah dimodifikasi (acceptOrder atau cancelOrder),
+          // skip silently. Ini normal di multi-instance atau race condition.
+          this.logger.debug(
+            `[reassign] Order ${orderId} skipped — version changed (OCC conflict)`,
+          );
+          return false;
+        }
       }
       // Error lain — log dan rethrow
       this.logger.error(`[reassign] Order ${orderId} error:`, err);
