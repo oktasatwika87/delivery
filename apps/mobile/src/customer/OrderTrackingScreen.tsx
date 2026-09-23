@@ -12,16 +12,24 @@
  * subscribe listener untuk orderId yang lagi dibuka.
  *
  * Status updates live (tanpa refresh manual):
- *   - order:accepted → status PREPARING + driverId dari payload
- *   - order:rejected → status CONFIRMED + driverId direset (order bisa
- *     di-assign ulang — lihat fix di orders.service.ts rejectOrder(),
- *     sebelumnya keliru CANCELLED, sudah dibetulkan)
- *   - order:cancelled → status CONFIRMED + cancelReason
+ *   - order:accepted → status PREPARING + driverId + CLEARED cancelReason
+ *     (server clear dua-duanya, COMMIT 1). Kita clear juga di client untuk
+ *     kasus fetch awal punya cancelReason stale dari order yang melalui
+ *     cron reassign sebelum accept.
+ *   - order:rejected → status dari payload (sekarang 'ASSIGNED' per K9),
+ *     driverId di-reset
+ *   - order:cancelled → status dari payload ('ASSIGNED' per K9) + cancelReason
+ *     dari driver
  *   - order:cod_collected → TIDAK mengubah status order (lihat catatan di
  *     PaymentsService.collectCod()/OrdersGateway.emitOrderCodCollected —
  *     status order memang tidak berubah saat COD di-collect). Ini murni
  *     live receipt: tampilkan banner konfirmasi pembayaran, dismissable,
  *     terpisah dari state `order` itu sendiri.
+ *
+ * K9 (2026-09): pool state adalah ASSIGNED + driverId null, bukan CONFIRMED
+ * lagi. OrderTrackingScreen pakai payload.status langsung supaya kontrak
+ * type literal di @delivery/shared jadi penjaga (backend tidak bisa
+ * switch status tanpa compile error di sini juga).
  *
  * Connection banner muncul saat socket disconnect (network drop / airplane
  * mode / background). State order TIDAK hilang — banner hanya indikator.
@@ -62,7 +70,13 @@ const STATUS_COLORS: Record<OrderStatus, { bg: string; text: string }> = {
 const STATUS_DISPLAY: Record<OrderStatus, string> = {
   PENDING: 'Menunggu konfirmasi',
   CONFIRMED: 'Dikonfirmasi, mencari driver...',
-  ASSIGNED: 'Driver ditugaskan',
+  // K9 (2026-09): ASSIGNED = pool state (Mencari driver) — bukan
+  // "Driver ditugaskan" lagi. Order boleh di-broadcast sebagai
+  // ASSIGNED + driverId null yang artinya customer melihatnya lagi
+  // mencari driver setelah reject/cancel/timeout. Backend sekarang
+  // emit status 'ASSIGNED' untuk order:rejected dan order:cancelled,
+  // lihat OrderRejectedPayload/OrderCancelledPayload.
+  ASSIGNED: 'Mencari driver...',
   PREPARING: 'Driver sedang menyiapkan',
   OUT_FOR_DELIVERY: 'Dalam perjalanan',
   DELIVERED: 'Terkirim',
@@ -148,6 +162,11 @@ export function OrderTrackingScreen({
             status: 'PREPARING' as OrderStatus,
             driverId: payload.driverId,
             version: payload.version,
+            // COMMIT 1: server clear cancelReason saat accept. Kita mirror
+            // di client supaya kalau fetch awal dapat cancelReason stale
+            // (mis. order cron-keluar ASSIGNED dengan system_timeout),
+            // banner "Alasan Pembatalan" hilang begitu driver accept.
+            cancelReason: undefined,
           }) ||
           prev,
       );
@@ -159,10 +178,11 @@ export function OrderTrackingScreen({
         (prev) =>
           (prev && {
             ...prev,
-            // FIX (2026-09): reject sekarang balik ke CONFIRMED (reassign-able),
-            // bukan CANCELLED (terminal) — lihat orders.service.ts rejectOrder().
-            // driverId direset sama seperti onOrderCancelled di bawah.
-            status: 'CONFIRMED' as OrderStatus,
+            // K9: pakai payload.status langsung (sekarang 'ASSIGNED') —
+            // kalau backend emit status lain di masa depan, type literal
+            // OrderRejectedPayload.status akan menolak payload sebelum
+            // sampai ke sini, jadi tidak ada silent drift.
+            status: payload.status as OrderStatus,
             driverId: undefined,
             version: payload.version,
           }) ||
@@ -176,7 +196,8 @@ export function OrderTrackingScreen({
         (prev) =>
           (prev && {
             ...prev,
-            status: 'CONFIRMED' as OrderStatus,
+            // K9: pakai payload.status langsung ('ASSIGNED').
+            status: payload.status as OrderStatus,
             driverId: undefined,
             cancelReason: payload.reason,
             version: payload.version,

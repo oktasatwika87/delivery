@@ -5,9 +5,9 @@
  * 1. Render → loading spinner awal
  * 2. Fetch sukses → render order detail
  * 3. Fetch gagal → render error UI dengan tombol Coba Lagi
- * 4. order:accepted event → update status PREPARING + driverId (filter by orderId)
- * 5. order:rejected event → update status CONFIRMED (reassign-able)
- * 6. order:cancelled event → update status CONFIRMED + cancelReason
+ * 4. order:accepted event → update status PREPARING + driverId + clear cancelReason (filter by orderId)
+ * 5. order:rejected event → pakai payload.status ('ASSIGNED' per K9)
+ * 6. order:cancelled event → pakai payload.status + cancelReason
  * 7. Disconnect → tampil banner; Connect → hilang
  * 8. Event untuk orderId lain di-ignore (filter)
  * 9. Cleanup: subscribers di-remove saat unmount
@@ -15,6 +15,7 @@
  * 11. order:cod_collected untuk orderId lain di-ignore
  * 12. Tombol "Tutup" pada cod banner dismiss banner
  * 13. order:cod_collected TIDAK mengubah status order (bukan state-sync event)
+ * 14. STATUS_DISPLAY.ASSIGNED = "Mencari driver..." (K9 — pool state)
  */
 
 import React from 'react';
@@ -227,8 +228,16 @@ describe('OrderTrackingScreen', () => {
     });
   });
 
-  it('order:accepted event → update status PREPARING + driverId (matching orderId)', async () => {
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+  it('order:accepted event → update status PREPARING + driverId + clear cancelReason (matching orderId)', async () => {
+    // COMMIT 1 (2026-09): server clear cancelReason saat accept, mobile mirror.
+    // Start dengan order yang punya cancelReason stale (mis. cron-keluar
+    // ASSIGNED dengan system_timeout, customer buka tracking, lalu driver accept).
+    const orderWithStaleCancel = {
+      ...MOCK_ORDER,
+      cancelReason: 'system_timeout',
+      cancelledBy: 'SYSTEM',
+    };
+    mockGetOrderById.mockResolvedValueOnce(orderWithStaleCancel);
 
     const { getByText, queryByText } = render(
       <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
@@ -253,13 +262,13 @@ describe('OrderTrackingScreen', () => {
 
     // Status lama (PENDING) sudah tidak tampil
     expect(queryByText('Menunggu konfirmasi')).toBeNull();
+    // cancelReason stale dari fetch harus hilang setelah accept
+    expect(queryByText('Alasan Pembatalan')).toBeNull();
   });
 
-  it('order:rejected event → update status CONFIRMED (reassign-able, not CANCELLED)', async () => {
-    // FIX (2026-09): backend rejectOrder() now reverts to CONFIRMED instead
-    // of terminal CANCELLED — see orders.service.ts rejectOrder() doc
-    // comment. This test previously asserted the old (buggy) CANCELLED
-    // behavior.
+  it('order:rejected event → pakai payload.status ASSIGNED (K9 pool state)', async () => {
+    // K9 (2026-09): backend emit status 'ASSIGNED' untuk reject — pool state.
+    // Type literal OrderRejectedPayload.status yang jamin compile-time.
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText } = render(
@@ -273,17 +282,18 @@ describe('OrderTrackingScreen', () => {
     act(() => {
       triggerRejected({
         orderId: 'order-abc-123',
-        status: 'CONFIRMED',
+        status: 'ASSIGNED',
         version: 3,
       });
     });
 
     await waitFor(() => {
-      expect(getByText('Dikonfirmasi, mencari driver...')).toBeTruthy();
+      expect(getByText('Mencari driver...')).toBeTruthy();
     });
   });
 
-  it('order:cancelled event → update status CONFIRMED + cancelReason', async () => {
+  it('order:cancelled event → pakai payload.status ASSIGNED + cancelReason', async () => {
+    // K9: status 'ASSIGNED' di payload, mobile pakai langsung dari payload.
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText } = render(
@@ -297,14 +307,14 @@ describe('OrderTrackingScreen', () => {
     act(() => {
       triggerCancelled({
         orderId: 'order-abc-123',
-        status: 'CONFIRMED',
+        status: 'ASSIGNED',
         version: 4,
         reason: 'Kendaraan mogok',
       });
     });
 
     await waitFor(() => {
-      expect(getByText('Dikonfirmasi, mencari driver...')).toBeTruthy();
+      expect(getByText('Mencari driver...')).toBeTruthy();
       expect(getByText('Kendaraan mogok')).toBeTruthy();
     });
   });
