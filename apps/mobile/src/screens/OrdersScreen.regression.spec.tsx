@@ -15,6 +15,7 @@
  */
 
 import React from 'react';
+import { Alert } from 'react-native';
 import { render, waitFor } from '@testing-library/react-native';
 import { Database } from '@nozbe/watermelondb';
 import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
@@ -23,6 +24,7 @@ import type { Model } from '@nozbe/watermelondb';
 import { schema } from '../db/schema';
 import { OrderModel } from '../db/models/OrderModel';
 import { OrdersScreenBase } from './OrdersScreen';
+import { ApiError } from '../sync/client';
 import type { AvailableOrderItem } from '../sync/client';
 
 // yang ditiru: jaringan dan modul pendukung layar (database tetap asli)
@@ -953,9 +955,13 @@ describe('handleAccept - accept order lewat REST', () => {
     const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
     const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
     const syncEvents = jest.requireMock('../sync/syncEvents') as { syncEvents: { emit: jest.Mock } };
-    // ApiError dengan status 409: {status: 409, message: "...409..."}
-    const apiError409 = new Error('Order already accepted by another driver. Please refresh and try again. — 409');
-    (apiError409 as any).status = 409;
+    // ApiError dengan status 409: pakai kelas ApiError asli
+    const apiError409 = new ApiError(
+      'acceptOrder failed: 409 - order conflict',
+      409,
+      'ORDER_UNAVAILABLE',
+      { code: 'ORDER_UNAVAILABLE', message: 'order conflict' },
+    );
     client.acceptOrder = jest.fn().mockRejectedValue(apiError409);
     session.getCurrentUserId.mockResolvedValue('driver-AC21');
     syncEvents.syncEvents.emit = jest.fn();
@@ -979,6 +985,137 @@ describe('handleAccept - accept order lewat REST', () => {
     expect(syncEvents.syncEvents.emit).toHaveBeenCalledWith('pool-refresh', {});
     // Baris pool TIDAK dihapus manual oleh handleAccept
     expect(await rowExistsInAdapter(rowId)).toBe(true);
+  });
+
+  // Tes 4: 409 ORDER_UNAVAILABLE (cron melepas order ke CONFIRMED) → K2 Alert + pool-refresh
+  it('409 ORDER_UNAVAILABLE → Alert pesan K2 + syncEvents.emit("pool-refresh")', async () => {
+    const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
+    const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
+    const syncEventsMod = jest.requireMock('../sync/syncEvents') as { syncEvents: { emit: jest.Mock } };
+    // Backend throw ConflictException({ code: 'ORDER_UNAVAILABLE', message: 'Cannot accept order in status CONFIRMED. Expected ASSIGNED.' })
+    const apiError = new ApiError(
+      'acceptOrder failed: 409 - ' +
+        JSON.stringify({
+          code: 'ORDER_UNAVAILABLE',
+          message: 'Cannot accept order in status CONFIRMED. Expected ASSIGNED.',
+        }),
+      409,
+      'ORDER_UNAVAILABLE',
+      {
+        code: 'ORDER_UNAVAILABLE',
+        message: 'Cannot accept order in status CONFIRMED. Expected ASSIGNED.',
+      },
+    );
+    client.acceptOrder = jest.fn().mockRejectedValue(apiError);
+    session.getCurrentUserId.mockResolvedValue('driver-AC21');
+    syncEventsMod.syncEvents.emit = jest.fn();
+    (Alert.alert as jest.Mock).mockClear();
+
+    const { handleAcceptRef } = require('../screens/OrdersScreen') as {
+      handleAcceptRef: { current: ((order: OrderModel) => Promise<void>) | null };
+    };
+    const rowId = 'pool-accept-409-unavail';
+    await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
+    buildFetchPoolMock(rowId, poolAcceptFields);
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(handleAcceptRef.current).not.toBeNull();
+    });
+
+    const order = await db.get<OrderModel>('orders').find(rowId);
+    await handleAcceptRef.current!(order);
+
+    // Alert pesan K2 dipanggil dengan satu argumen (title-only Alert.alert(message))
+    expect(Alert.alert as jest.Mock).toHaveBeenCalledWith(
+      'Order sudah berubah atau diambil driver lain. Daftar diperbarui.',
+    );
+    // syncEvents.emit('pool-refresh') dipicu oleh 409
+    expect(syncEventsMod.syncEvents.emit).toHaveBeenCalledWith('pool-refresh', {});
+  });
+
+  // Tes 5: 409 VERSION_CONFLICT (OCC version mismatch) → K2 Alert + pool-refresh
+  it('409 VERSION_CONFLICT → Alert pesan K2 + syncEvents.emit("pool-refresh")', async () => {
+    const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
+    const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
+    const syncEventsMod = jest.requireMock('../sync/syncEvents') as { syncEvents: { emit: jest.Mock } };
+    // Backend throw ConflictException({ code: 'VERSION_CONFLICT', message: 'Order was modified by another request...' })
+    const apiError = new ApiError(
+      'acceptOrder failed: 409 - ' +
+        JSON.stringify({
+          code: 'VERSION_CONFLICT',
+          message: 'Order was modified by another request. Please refresh and try again.',
+        }),
+      409,
+      'VERSION_CONFLICT',
+      {
+        code: 'VERSION_CONFLICT',
+        message: 'Order was modified by another request. Please refresh and try again.',
+      },
+    );
+    client.acceptOrder = jest.fn().mockRejectedValue(apiError);
+    session.getCurrentUserId.mockResolvedValue('driver-AC21');
+    syncEventsMod.syncEvents.emit = jest.fn();
+    (Alert.alert as jest.Mock).mockClear();
+
+    const { handleAcceptRef } = require('../screens/OrdersScreen') as {
+      handleAcceptRef: { current: ((order: OrderModel) => Promise<void>) | null };
+    };
+    const rowId = 'pool-accept-409-version';
+    await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
+    buildFetchPoolMock(rowId, poolAcceptFields);
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(handleAcceptRef.current).not.toBeNull();
+    });
+
+    const order = await db.get<OrderModel>('orders').find(rowId);
+    await handleAcceptRef.current!(order);
+
+    expect(Alert.alert as jest.Mock).toHaveBeenCalledWith(
+      'Order sudah berubah atau diambil driver lain. Daftar diperbarui.',
+    );
+    expect(syncEventsMod.syncEvents.emit).toHaveBeenCalledWith('pool-refresh', {});
+  });
+
+  // Tes 6: 400 dengan pesan "conflict" + "already accepted" → TIDAK pool-refresh, Alert gagal umum
+  // (handler lama cocok-teks pada err.message sehingga akan menganggap ini konflik dan
+  // memancarkan pool-refresh — perubahan ini memastikan pool-refresh HANYA dipicu oleh 409.)
+  it('400 dengan pesan "conflict" dan "already accepted" → TIDAK pool-refresh; Alert gagal umum', async () => {
+    const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
+    const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
+    const syncEventsMod = jest.requireMock('../sync/syncEvents') as { syncEvents: { emit: jest.Mock } };
+    const apiError = new ApiError(
+      'acceptOrder failed: 400 - conflict: order already accepted by another driver',
+      400,
+      'BAD_REQUEST',
+      { message: 'conflict: order already accepted by another driver' },
+    );
+    client.acceptOrder = jest.fn().mockRejectedValue(apiError);
+    session.getCurrentUserId.mockResolvedValue('driver-AC21');
+    syncEventsMod.syncEvents.emit = jest.fn();
+    (Alert.alert as jest.Mock).mockClear();
+
+    const { handleAcceptRef } = require('../screens/OrdersScreen') as {
+      handleAcceptRef: { current: ((order: OrderModel) => Promise<void>) | null };
+    };
+    const rowId = 'pool-accept-400-textmatch';
+    await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
+    buildFetchPoolMock(rowId, poolAcceptFields);
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(handleAcceptRef.current).not.toBeNull();
+    });
+
+    const order = await db.get<OrderModel>('orders').find(rowId);
+    await handleAcceptRef.current!(order);
+
+    // pool-refresh TIDAK dipancarkan — handler baru hanya merespons status 409
+    expect(syncEventsMod.syncEvents.emit).not.toHaveBeenCalledWith('pool-refresh', expect.anything());
+    // Alert gagal umum dipanggil dengan judul 'Gagal' dan pesan 'Terima order gagal. Coba lagi.'
+    expect(Alert.alert as jest.Mock).toHaveBeenCalledWith('Gagal', 'Terima order gagal. Coba lagi.');
   });
 
   // Tes 3: error jaringan/5xx → baris lokal TIDAK diubah sama sekali

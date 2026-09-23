@@ -57,6 +57,9 @@ jest.mock('../sync/client', () => {
     fetchAvailableOrders: jest.fn().mockResolvedValue({ items: [], hasMore: false }),
     UnauthorizedError,
     acceptOrder: jest.fn(),
+    // Ambil ApiError dari modul asli — dipakai oleh OrdersScreen.tsx
+    // untuk `err instanceof ApiError` di catch handleAccept.
+    ApiError: jest.requireActual('../sync/client').ApiError,
   };
 });
 

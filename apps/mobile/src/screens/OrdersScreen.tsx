@@ -18,7 +18,7 @@ import { of } from 'rxjs';
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
 import { getCurrentUserId } from '../sync/session';
-import { fetchAvailableOrders, UnauthorizedError, acceptOrder } from '../sync/client';
+import { fetchAvailableOrders, UnauthorizedError, acceptOrder, ApiError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
 import { hasPendingAction, hasStalePendingAction } from '../sync/outbox';
@@ -367,14 +367,12 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
       try {
         // _getRaw karena dekorator model tidak aktif di Jest.
         response = await acceptOrder(order.id, order._getRaw('server_version') as number);
-      } catch (err: any) {
-        const isConflict =
-          err.status === 409 ||
-          err.message?.includes('409') ||
-          err.message?.includes('conflict') ||
-          err.message?.includes('already accepted') ||
-          err.message?.includes('modified by another');
-        if (isConflict) {
+      } catch (err: unknown) {
+        // Hanya ApiError dengan status 409 dianggap konflik (status backend
+        // ConflictException, code bisa ORDER_UNAVAILABLE atau VERSION_CONFLICT).
+        // Pesan teks TIDAK lagi dicocokkan — backend kini mengirim body
+        // { code, message } dan caller diharap pakai err.code, bukan parse pesan.
+        if (err instanceof ApiError && err.status === 409) {
           Alert.alert(
             'Order sudah berubah atau diambil driver lain. Daftar diperbarui.',
           );
