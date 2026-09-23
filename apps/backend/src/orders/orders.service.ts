@@ -161,6 +161,12 @@ export class OrdersService {
         data: {
           status: OrderStatusDb.PREPARING,
           driverId, // assign driver saat accept
+          // Bersihkan data batal lama — order barulang ASSIGNED setelah cron
+          // (cancelledBy 'SYSTEM', cancelReason 'system_timeout') akan overwrite
+          // ke null di sini supaya toDomain tidak lagi bawa cancelReason saat
+          // accept berikutnya.
+          cancelledBy: null,
+          cancelReason: null,
           version: { increment: 1 },
         },
       });

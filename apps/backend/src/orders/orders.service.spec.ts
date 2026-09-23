@@ -316,6 +316,46 @@ describe('OrdersService', () => {
         message: expect.stringContaining('Order was modified by another request'),
       });
     });
+
+    // Temuan 4: order di-cron keluar ASSIGNED dengan cancelReason 'system_timeout',
+    // lalu di-accept → data update harus menghapus cancelledBy/cancelReason dan
+    // toDomain tidak membawa cancelReason.
+    test('accept order yang sebelumnya di-cron: cancelledBy & cancelReason di-clear', async () => {
+      const reassignedOrder = {
+        ...mockOrderAssigned,
+        cancelledBy: 'SYSTEM',
+        cancelReason: 'system_timeout',
+      };
+      const acceptedOrder = {
+        ...reassignedOrder,
+        status: OrderStatusDb.PREPARING,
+        driverId,
+        cancelledBy: null,
+        cancelReason: null,
+        version: version + 1,
+      };
+
+      mockPrisma.order.findUnique.mockResolvedValue(reassignedOrder);
+      mockPrisma.order.update.mockResolvedValue(acceptedOrder);
+
+      const result = await service.acceptOrder(orderId, version, driverId);
+
+      // Update call harus menulis kedua field ke null
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: orderId, version },
+        data: expect.objectContaining({
+          status: OrderStatusDb.PREPARING,
+          driverId,
+          cancelledBy: null,
+          cancelReason: null,
+          version: { increment: 1 },
+        }),
+      });
+      // toDomain tidak bawa cancelReason (null → undefined)
+      expect(result.cancelReason).toBeUndefined();
+      expect(result.cancelledBy).toBeUndefined();
+      expect(result.status).toBe('PREPARING');
+    });
   });
 
   // ===== create() tests =====
