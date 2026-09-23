@@ -13,14 +13,17 @@
  *   3. Handle response: success/conflict/orphaned
  *
  * Response handling:
- * - Success (2xx): delete pending_action row, clear pending flag on order
+ * - Success (2xx): delete pending_action row + (untuk reject/cancel)
+ *   tulis baris lokal order dari response dalam single batch (K15)
+ *   supaya pool fetch berikutnya pickup order yang baru
+ *   ASSIGNED + driverId null lagi
  * - Conflict (version mismatch): pull fresh order data, delete pending_action,
  *   emit conflict notification to UI
  * - Orphaned COD (special): mark status = 'orphaned_needs_review', don't delete,
  *   don't auto-retry (requires manual business decision per HSIN)
  */
 
-import { Q } from '@nozbe/watermelondb';
+import { Model, Q } from '@nozbe/watermelondb';
 import type { Database } from '@nozbe/watermelondb';
 
 import { database } from '../db';
@@ -343,16 +346,71 @@ async function processPendingAction(
 
 /**
  * Process a reject action.
+ *
+ * K15 (2026-09): setelah server balikin response sukses, tulis baris lokal
+ * dari response dalam single batch dengan delete pending_action. Tanpa
+ * ini, order row lokal masih punya status lama (mis. PREPARING/ASSIGNED
+ * with driverId set) — pool fetch berikutnya filter berdasarkan
+ * (status=ASSIGNED + driverId null), jadi order tidak muncul lagi di pool
+ * setelah driver reject offline. Setelah commit ini, baris lokal reflect
+ * server (status=ASSIGNED + driverId null + version baru) sehingga order
+ * muncul kembali di pool fetch berikutnya.
  */
 async function processReject(action: PendingActionModel, db: Database): Promise<ProcessResult> {
   try {
     const response = await rejectOrder(action.targetOrderId, action.expectedVersion);
     console.log(`[outbox] Reject succeeded for order ${action.targetOrderId}:`, response);
 
-    // Success: delete the pending action
-    await deletePendingAction(action, db);
+    // Lookup order lokal lebih dulu (read-only, di luar transaction) supaya
+    // bisa di-batch dengan delete pending_action di bawah. Kalau order tidak
+    // ada di lokal (sangat jarang — biasanya server data sudah di-pull
+    // sebelum sync berikutnya), skip update — delete pending_action saja.
+    let orderRow: OrderModel | null = null;
+    try {
+      orderRow = await db.get<OrderModel>('orders').find(action.targetOrderId);
+    } catch (err) {
+      console.warn(
+        `[outbox] Order ${action.targetOrderId} not found locally for reject write:`,
+        err,
+      );
+    }
 
-    // Emit conflict event to refresh UI
+    // Single batch: delete pending_action + (kalau ada) update order row lokal.
+    // db.write() + db.batch() atomic (lihat handleVersionConflict untuk
+    // pattern paralel).
+    await db.write(async () => {
+      const ops: Model[] = [action.prepareDestroyPermanently()];
+      if (orderRow) {
+        ops.push(orderRow.prepareUpdate((r) => {
+          r._setRaw('status', response.status);
+          r._setRaw('driver_id', null);
+          r._setRaw('server_version', response.version);
+          // Reject bukan pembatalan — clear cancel signal lama supaya
+          // banner "Alasan Pembatalan" tidak muncul lagi untuk order ini.
+          r._setRaw('cancelled_by', null);
+          r._setRaw('cancel_reason', null);
+          // Clear persisted banner signal — driver sudah synced successfully,
+          // jadi banner conflict lama sudah tidak relevan.
+          r._setRaw('last_conflict_reason', null);
+          r._setRaw('last_conflict_at', null);
+          // Sinkronkan internal WatermelonDB state supaya _status='synced'
+          // dan _changed kosong. Direct _raw mutation karena _setRaw
+          // bypass internal fields (lihat OrdersScreen.tsx comment
+          // "prepareUpdate+batch" — pola yang sama).
+          r._raw._status = 'synced';
+          r._raw._changed = '';
+        }));
+      }
+      await db.batch(...ops);
+    });
+
+    // Emit pool-refresh supaya OrdersScreen fetch ulang dan pickup order
+    // yang baru ASSIGNED + driverId null (= pool-eligible lagi).
+    syncEvents.emit('pool-refresh', { source: 'reject-success', orderId: action.targetOrderId });
+
+    // Tetap emit orderConflict juga — ada UI yang listen untuk refresh
+    // detail panel (lihat syncEvents taxonomy). OrderTrackingScreen
+    // customer-side tidak terpengaruh (event ini driver-targeted).
     syncEvents.emit('orderConflict', {
       orderId: action.targetOrderId,
       reason: 'rejected-oc',
@@ -376,6 +434,12 @@ async function processReject(action: PendingActionModel, db: Database): Promise<
 
 /**
  * Process a cancel action.
+ *
+ * K15 (2026-09): setelah server balikin response sukses, tulis baris lokal
+ * dari response dalam single batch dengan delete pending_action. Pola
+ * paralel dengan processReject di atas — bedanya cancel menyimpan
+ * cancelledBy + cancelReason ke baris lokal supaya UI bisa tampilkan
+ * alasan pembatalan di OrderDetailScreen.
  */
 async function processCancel(action: PendingActionModel, db: Database): Promise<ProcessResult> {
   try {
@@ -383,10 +447,45 @@ async function processCancel(action: PendingActionModel, db: Database): Promise<
     const response = await cancelOrder(action.targetOrderId, action.expectedVersion, payload?.reason);
     console.log(`[outbox] Cancel succeeded for order ${action.targetOrderId}:`, response);
 
-    // Success: delete the pending action
-    await deletePendingAction(action, db);
+    // Lookup order lokal — lihat processReject untuk rationale.
+    let orderRow: OrderModel | null = null;
+    try {
+      orderRow = await db.get<OrderModel>('orders').find(action.targetOrderId);
+    } catch (err) {
+      console.warn(
+        `[outbox] Order ${action.targetOrderId} not found locally for cancel write:`,
+        err,
+      );
+    }
 
-    // Emit conflict event to refresh UI
+    await db.write(async () => {
+      const ops: Model[] = [action.prepareDestroyPermanently()];
+      if (orderRow) {
+        ops.push(orderRow.prepareUpdate((r) => {
+          r._setRaw('status', response.status);
+          r._setRaw('driver_id', null);
+          r._setRaw('server_version', response.version);
+          // Cancel menyimpan cancelledBy + cancelReason. response fields
+          // typed `unknown` (DriverActionResponse index signature), jadi
+          // narrow ke string via typeof — bukan `as any`.
+          const cancelledBy = typeof response.cancelledBy === 'string' ? response.cancelledBy : null;
+          const cancelReason = typeof response.cancelReason === 'string' ? response.cancelReason : null;
+          r._setRaw('cancelled_by', cancelledBy);
+          r._setRaw('cancel_reason', cancelReason);
+          // Clear persisted banner signal — driver sudah synced successfully.
+          r._setRaw('last_conflict_reason', null);
+          r._setRaw('last_conflict_at', null);
+          r._raw._status = 'synced';
+          r._raw._changed = '';
+        }));
+      }
+      await db.batch(...ops);
+    });
+
+    // pool-refresh supaya OrdersScreen fetch ulang dan pickup order
+    // (yang sekarang ASSIGNED + driverId null lagi setelah cancel).
+    syncEvents.emit('pool-refresh', { source: 'cancel-success', orderId: action.targetOrderId });
+
     syncEvents.emit('orderConflict', {
       orderId: action.targetOrderId,
       reason: 'order-status-conflict',
@@ -546,7 +645,7 @@ async function handleVersionConflict(action: PendingActionModel, db: Database, r
   // Tidak buka transaksi terpisah untuk lastConflictReason/lastConflictAt —
   // gabung dengan delete pending_action (sesuai spec Temuan 1).
   await db.write(async () => {
-    const ops: any[] = [action.prepareDestroyPermanently()];
+    const ops: Model[] = [action.prepareDestroyPermanently()];
     if (cancelOrder) {
       ops.push(cancelOrder.prepareUpdate((o: any) => {
         o.lastConflictReason = 'cancelled-by-server';

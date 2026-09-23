@@ -28,6 +28,15 @@ function attachMethods(row: any) {
     fn(row);
     return row;
   };
+  // K15 (2026-09): commit "baris lokal driver ditulis dari respons" pakai
+  // r._setRaw('column', value) di processReject/processCancel. Mock ini
+  // tulis ke r._raw[column] supaya assertions (status, driver_id, dll)
+  // bisa baca lewat mockState.orders.get(id)._raw.column. Sama dengan
+  // produksi: OrderModel decorator _setRaw mutate internal _raw.
+  row._setRaw = function(column: string, value: unknown) {
+    if (!row._raw) row._raw = {};
+    row._raw[column] = value;
+  };
   row.prepareDestroyPermanently = function() {
     // Prepared destroy op — batch() detects _isDestroy dan remove from map.
     return { _isDestroy: true, _targetRow: row, id: row.id };
@@ -96,6 +105,10 @@ jest.mock('./idempotency', () => ({
 
 jest.mock('./syncEvents', () => ({
   syncEvents: { emit: jest.fn(), on: jest.fn(), off: jest.fn() },
+}));
+
+jest.mock('./coordinator', () => ({
+  syncCoordinator: { pullNow: jest.fn().mockResolvedValue(undefined) },
 }));
 
 jest.mock('../db', () => ({
@@ -423,7 +436,7 @@ describe('outbox', () => {
       const action = makeRecord({ actionType: 'reject', targetOrderId: 'order-success', expectedVersion: 3 });
       mockState.records.set('success-action', action);
       attachMethods(action);
-      mockRejectOrder.mockResolvedValue({ id: 'order-success', status: 'CONFIRMED', version: 4 } as any);
+      mockRejectOrder.mockResolvedValue({ id: 'order-success', status: 'ASSIGNED', version: 4 } as any);
       const results = await drainPendingActions();
       expect(results[0].status).toBe('success');
       expect(mockState.records.has('success-action')).toBe(false);
@@ -478,7 +491,7 @@ describe('outbox', () => {
 
       // Third try - now succeed
       mockRejectOrder.mockClear();
-      mockRejectOrder.mockResolvedValue({ id: 'order-retry', status: 'CONFIRMED', version: 4 } as any);
+      mockRejectOrder.mockResolvedValue({ id: 'order-retry', status: 'ASSIGNED', version: 4 } as any);
       const results3 = await drainPendingActions();
       expect(results3[0].status).toBe('success');
       // Action should now be deleted
@@ -504,6 +517,143 @@ describe('outbox', () => {
       expect(mockCollectCodOrder).toHaveBeenCalledWith('order-idempotent', 40000, 'cod:stable-key-123');
     });
 
+    // K15 (2026-09): setelah reject/cancel sukses, server kembalikan
+    // response { status:'ASSIGNED', driverId:null, version, ... } dan
+    // baris lokal order harus ter-update dari response (single batch
+    // dengan delete pending_action). Tanpa ini, pool fetch berikutnya
+    // filter status=ASSIGNED + driverId null, jadi order tidak muncul
+    // lagi di pool setelah reject offline.
+    test('K15: reject success → tulis baris lokal dari response (status=ASSIGNED, driverId null)', async () => {
+      // Setup order lokal dengan status ASSIGNED + driverId terisi
+      // (driver sudah accept, lalu offline → tap reject)
+      const order = {
+        id: 'order-k15-reject',
+        _raw: { id: 'order-k15-reject', _status: 'synced' },
+        status: 'PREPARING',
+        serverVersion: 3,
+        driverId: 'driver-123',
+      };
+      mockState.orders.set('order-k15-reject', order);
+
+      const action = makeRecord({
+        actionType: 'reject',
+        targetOrderId: 'order-k15-reject',
+        expectedVersion: 3,
+      });
+      mockState.records.set('k15-reject-action', action);
+      attachMethods(action);
+
+      // Server response setelah releaseToPool (K9/COMMIT 3): status ASSIGNED,
+      // driverId null, version incremented
+      mockRejectOrder.mockResolvedValue({
+        id: 'order-k15-reject',
+        status: 'ASSIGNED',
+        driverId: null,
+        version: 4,
+      } as any);
+
+      await drainPendingActions();
+
+      // Pending action harus ter-delete
+      expect(mockState.records.has('k15-reject-action')).toBe(false);
+
+      // Order row harus reflect response: status ASSIGNED, driver_id null,
+      // server_version baru. _setRaw mock menulis ke _raw[column].
+      const updatedOrder = mockState.orders.get('order-k15-reject')!;
+      expect(updatedOrder._raw.status).toBe('ASSIGNED');
+      expect(updatedOrder._raw.driver_id).toBeNull();
+      expect(updatedOrder._raw.server_version).toBe(4);
+      // Reject bukan pembatalan — cancelled_by/cancel_reason harus null
+      expect(updatedOrder._raw.cancelled_by).toBeNull();
+      expect(updatedOrder._raw.cancel_reason).toBeNull();
+
+      // pool-refresh harus ter-emit supaya OrdersScreen fetch ulang
+      expect(syncEvents.emit).toHaveBeenCalledWith(
+        'pool-refresh',
+        expect.objectContaining({ orderId: 'order-k15-reject' }),
+      );
+    });
+
+    test('K15: cancel success → tulis baris lokal (ASSIGNED + cancelledBy/cancelReason dari response)', async () => {
+      const order = {
+        id: 'order-k15-cancel',
+        _raw: { id: 'order-k15-cancel', _status: 'synced' },
+        status: 'PREPARING',
+        serverVersion: 5,
+        driverId: 'driver-123',
+      };
+      mockState.orders.set('order-k15-cancel', order);
+
+      const action = makeRecord({
+        actionType: 'cancel',
+        targetOrderId: 'order-k15-cancel',
+        expectedVersion: 5,
+        payloadJson: { reason: 'Customer tidak ada di lokasi' },
+      });
+      mockState.records.set('k15-cancel-action', action);
+      attachMethods(action);
+
+      // Server response: status ASSIGNED (pool state), driverId null,
+      // version incremented, cancelledBy + cancelReason diset oleh server
+      mockCancelOrder.mockResolvedValue({
+        id: 'order-k15-cancel',
+        status: 'ASSIGNED',
+        driverId: null,
+        version: 6,
+        cancelledBy: 'driver-123',
+        cancelReason: 'Customer tidak ada di lokasi',
+      } as any);
+
+      await drainPendingActions();
+
+      expect(mockState.records.has('k15-cancel-action')).toBe(false);
+
+      const updatedOrder = mockState.orders.get('order-k15-cancel')!;
+      expect(updatedOrder._raw.status).toBe('ASSIGNED');
+      expect(updatedOrder._raw.driver_id).toBeNull();
+      expect(updatedOrder._raw.server_version).toBe(6);
+      // Cancel menyimpan cancelledBy/cancelReason untuk UI banner
+      expect(updatedOrder._raw.cancelled_by).toBe('driver-123');
+      expect(updatedOrder._raw.cancel_reason).toBe('Customer tidak ada di lokasi');
+
+      expect(syncEvents.emit).toHaveBeenCalledWith(
+        'pool-refresh',
+        expect.objectContaining({ orderId: 'order-k15-cancel' }),
+      );
+    });
+
+    test('K15: reject success tapi order tidak ada lokal → no crash, hanya delete pending_action', async () => {
+      // Order TIDAK ada di mockState.orders (kasus langka: server data
+      // belum di-pull sebelum sync berikutnya). Pastikan processReject
+      // skip update order row tanpa throw.
+      const action = makeRecord({
+        actionType: 'reject',
+        targetOrderId: 'order-not-local',
+        expectedVersion: 1,
+      });
+      mockState.records.set('k15-orphan-action', action);
+      attachMethods(action);
+
+      mockRejectOrder.mockResolvedValue({
+        id: 'order-not-local',
+        status: 'ASSIGNED',
+        driverId: null,
+        version: 2,
+      } as any);
+
+      const results = await drainPendingActions();
+      expect(results[0].status).toBe('success');
+
+      // Pending action tetap ter-delete
+      expect(mockState.records.has('k15-orphan-action')).toBe(false);
+
+      // pool-refresh tetap ter-emit — server tahu order ada lagi
+      expect(syncEvents.emit).toHaveBeenCalledWith(
+        'pool-refresh',
+        expect.objectContaining({ orderId: 'order-not-local' }),
+      );
+    });
+
     test('processes actions in FIFO order (oldest first)', async () => {
       const action1 = makeRecord({ actionType: 'reject', targetOrderId: 'order-fifo', createdAt: Date.now() - 100 });
       const action2 = makeRecord({ actionType: 'cancel', targetOrderId: 'order-fifo' });
@@ -511,8 +661,8 @@ describe('outbox', () => {
       mockState.records.set('second-action', action2);
       attachMethods(action1);
       attachMethods(action2);
-      mockRejectOrder.mockResolvedValue({ id: 'order-fifo', status: 'CONFIRMED', version: 2 } as any);
-      mockCancelOrder.mockResolvedValue({ id: 'order-fifo', status: 'CANCELLED', version: 3 } as any);
+      mockRejectOrder.mockResolvedValue({ id: 'order-fifo', status: 'ASSIGNED', version: 2 } as any);
+      mockCancelOrder.mockResolvedValue({ id: 'order-fifo', status: 'ASSIGNED', version: 3 } as any);
       const results = await drainPendingActions();
       expect(results).toHaveLength(2);
       expect(mockRejectOrder.mock.invocationCallOrder[0]).toBeLessThan(mockCancelOrder.mock.invocationCallOrder[0]);
@@ -816,6 +966,141 @@ describe('outbox', () => {
         orderId: 'order-cancel-apierror-test',
         reason: 'order-status-conflict',
       }));
+    });
+  });
+
+  // Regression K15 (2026-09): processReject/processCancel dulu
+  // hardcoded 'ASSIGNED' — response.status seharusnya tertulis apa adanya.
+  // Juga regresi: cancel network failure tidak tulis baris, 409 konflik tidak lewat sukses path.
+  describe('K15 regression: response.status written as-is, network failure / 409 tidak write baris', () => {
+    // Respons sukses dengan status non-ASSIGNED (mis. backend mengembalikan
+    // status lain seperti 'X') harus tertulis apa adanya — merah di kode
+    // lama yang hardcode 'ASSIGNED'.
+    test('K15 regression: reject success dengan status X → tulis response.status (bukan hardcoded ASSIGNED)', async () => {
+      const order = {
+        id: 'order-reject-status-x',
+        _raw: { id: 'order-reject-status-x', _status: 'synced' },
+        status: 'PREPARING',
+        serverVersion: 1,
+      };
+      mockState.orders.set('order-reject-status-x', order);
+
+      const action = makeRecord({
+        actionType: 'reject',
+        targetOrderId: 'order-reject-status-x',
+        expectedVersion: 1,
+      });
+      mockState.records.set('reject-status-x-action', action);
+      attachMethods(action);
+
+      // Server kembalikan status non-ASSIGNED — harus tertulis apa adanya.
+      mockRejectOrder.mockResolvedValue({
+        id: 'order-reject-status-x',
+        status: 'X',
+        driverId: null,
+        version: 2,
+      } as any);
+
+      await drainPendingActions();
+
+      expect(mockState.records.has('reject-status-x-action')).toBe(false);
+      const updatedOrder = mockState.orders.get('order-reject-status-x')!;
+      expect(updatedOrder._raw.status).toBe('X'); // bukan 'ASSIGNED'
+    });
+
+    test('K15 regression: cancel success dengan status Y → tulis response.status (bukan hardcoded ASSIGNED)', async () => {
+      const order = {
+        id: 'order-cancel-status-y',
+        _raw: { id: 'order-cancel-status-y', _status: 'synced' },
+        status: 'PREPARING',
+        serverVersion: 1,
+      };
+      mockState.orders.set('order-cancel-status-y', order);
+
+      const action = makeRecord({
+        actionType: 'cancel',
+        targetOrderId: 'order-cancel-status-y',
+        expectedVersion: 1,
+      });
+      mockState.records.set('cancel-status-y-action', action);
+      attachMethods(action);
+
+      mockCancelOrder.mockResolvedValue({
+        id: 'order-cancel-status-y',
+        status: 'Y',
+        driverId: null,
+        version: 2,
+        cancelledBy: 'driver-123',
+        cancelReason: 'test',
+      } as any);
+
+      await drainPendingActions();
+
+      expect(mockState.records.has('cancel-status-y-action')).toBe(false);
+      const updatedOrder = mockState.orders.get('order-cancel-status-y')!;
+      expect(updatedOrder._raw.status).toBe('Y'); // bukan 'ASSIGNED'
+    });
+
+    // Cancel gagal jaringan: baris order tidak ditulis, pending action tetap ada
+    // (retry di next drain).
+    test('cancel network failure → baris order TIDAK ditulis, pending action tetap pending', async () => {
+      const order = {
+        id: 'order-cancel-netfail',
+        _raw: { id: 'order-cancel-netfail', _status: 'synced', status: 'PREPARING', driver_id: 'driver-123' },
+        status: 'PREPARING',
+        serverVersion: 5,
+      };
+      mockState.orders.set('order-cancel-netfail', order);
+
+      const action = makeRecord({
+        actionType: 'cancel',
+        targetOrderId: 'order-cancel-netfail',
+        expectedVersion: 5,
+      });
+      mockState.records.set('cancel-netfail-action', action);
+      attachMethods(action);
+
+      mockCancelOrder.mockRejectedValue(new Error('Network request failed'));
+
+      const results = await drainPendingActions();
+      expect(results[0].status).toBe('failed');
+      // Pending action masih ada (status kembali ke 'pending')
+      expect(mockState.records.get('cancel-netfail-action')!.status).toBe('pending');
+      // Baris order TIDAK berubah
+      const unchangedOrder = mockState.orders.get('order-cancel-netfail')!;
+      expect(unchangedOrder._raw.status).toBe('PREPARING');
+      expect(unchangedOrder._raw.driver_id).toBe('driver-123');
+    });
+
+    // Cancel 409: handleVersionConflict jalan, TIDAK menulis baris order
+    // (jalur sukses write dari response tidak boleh terpanggil).
+    test('cancel 409 conflict → baris order TIDAK ditulis (handleVersionConflict, bukan success path)', async () => {
+      const order = {
+        id: 'order-cancel-409',
+        _raw: { id: 'order-cancel-409', _status: 'synced', status: 'PREPARING', driver_id: 'driver-123' },
+        status: 'PREPARING',
+        serverVersion: 5,
+      };
+      mockState.orders.set('order-cancel-409', order);
+
+      const action = makeRecord({
+        actionType: 'cancel',
+        targetOrderId: 'order-cancel-409',
+        expectedVersion: 5,
+      });
+      mockState.records.set('cancel-409-action', action);
+      attachMethods(action);
+
+      mockCancelOrder.mockRejectedValue({ status: 409 });
+
+      const results = await drainPendingActions();
+      expect(results[0].status).toBe('conflict');
+      // Pending action terhapus (handleVersionConflict delete)
+      expect(mockState.records.has('cancel-409-action')).toBe(false);
+      // Baris order TIDAK ditulis oleh jalur sukses → status tetap PREPARING
+      const unchangedOrder = mockState.orders.get('order-cancel-409')!;
+      expect(unchangedOrder._raw.status).toBe('PREPARING');
+      expect(unchangedOrder._raw.driver_id).toBe('driver-123');
     });
   });
 });
