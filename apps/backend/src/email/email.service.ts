@@ -65,7 +65,7 @@ export class EmailService {
     const amountFormatted = new Intl.NumberFormat('id-ID', {
       style: 'currency',
       currency: data.currency,
-    }).format(data.amountCents / 100);
+    }).format(data.amountCents);
 
     const subject = `[Delivery] Orphaned COD — Order ${data.orderId.slice(0, 8)}`;
     const text = `
