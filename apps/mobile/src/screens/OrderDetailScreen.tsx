@@ -16,6 +16,7 @@ import type { Database } from '@nozbe/watermelondb';
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
 import { PaymentModel } from '../db/models/PaymentModel';
+import { formatCurrency } from '../formatCurrency';
 import { getCurrentUserId } from '../sync/session';
 import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
@@ -185,15 +186,6 @@ function ItemRow({ item }: { item: ItemRow }): React.JSX.Element {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-function formatCurrency(cents: number, currency: string): string {
-  const amount = cents / 100;
-  return new Intl.NumberFormat('id-ID', {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: 0,
-  }).format(amount);
-}
 
 function formatDate(date: Date): string {
   const months = [
@@ -391,7 +383,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     const amount = formatCurrency(orderToCollect.totalCents, orderToCollect.currency);
     Alert.alert(
       'Terima Cash (COD)',
-      `Kumpulkan payment cash Rp ${amount} dari customer?`,
+      `Kumpulkan payment cash ${amount} dari customer?`,
       [
         { text: 'Batal', style: 'cancel' },
         {

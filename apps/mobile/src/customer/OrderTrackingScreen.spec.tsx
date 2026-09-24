@@ -488,4 +488,39 @@ describe('OrderTrackingScreen', () => {
     expect(mockConnectSubscribers.length).toBe(connectBefore - 1);
     expect(mockDisconnectSubscribers.length).toBe(disconnectBefore - 1);
   });
+
+  it('tampilan harga: totalCents 23000 dan item unitPriceCents 23000 tampil Rp 23.000, bukan 230', async () => {
+    // formatCurrency tanpa /100. Nilai dalam rupiah apa adanya.
+    // Bug lama, /100 menyebabkan 23000 muncul sebagai Rp 230 (sen).
+    // Pastikan tidak NaN, bukan Rp 230.
+    const orderRp23k = {
+      ...MOCK_ORDER,
+      totalCents: 23000,
+      currency: 'IDR',
+      items: [
+        {
+          id: 'item-price-1',
+          productId: 'prod-price-1',
+          name: 'Mie Goreng',
+          quantity: 1,
+          unitPriceCents: 23000,
+        },
+      ],
+    };
+    mockGetOrderById.mockResolvedValueOnce(orderRp23k);
+
+    const { getAllByText, getByText } = render(
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Order #12345678')).toBeTruthy();
+    });
+
+    // Total baris, Rp 23.000
+    const priceTexts = getAllByText(/Rp\s23\.000/);
+    expect(priceTexts).toHaveLength(2); // item + total
+    // Item harga, Rp 23.000 (bukan Rp 230 dari bug /100)
+    expect(getByText('1x Mie Goreng')).toBeTruthy();
+  });
 });

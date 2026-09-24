@@ -48,6 +48,7 @@ import {
 
 import type { Order, OrderStatus } from '@delivery/shared';
 
+import { formatCurrency } from '../formatCurrency';
 import { getOrderById, UnauthorizedError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
@@ -91,15 +92,6 @@ function StatusBadge({ status }: { status: OrderStatus }): React.JSX.Element {
       <Text style={[styles.badgeText, { color: colors.text }]}>{display}</Text>
     </View>
   );
-}
-
-function formatCurrency(cents: number, currency: string): string {
-  const amount = cents / 100;
-  return new Intl.NumberFormat('id-ID', {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: 0,
-  }).format(amount);
 }
 
 interface CodReceipt {
