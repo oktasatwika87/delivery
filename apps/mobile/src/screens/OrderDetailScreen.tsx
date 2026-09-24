@@ -28,7 +28,7 @@ import { enqueueCancel, enqueueCollectCod, hasPendingAction, drainPendingActions
 interface ItemRow {
   name: string;
   quantity: number;
-  priceCents: number;
+  unitPriceCents: number;
 }
 
 interface AddressData {
@@ -179,7 +179,7 @@ function ItemRow({ item }: { item: ItemRow }): React.JSX.Element {
         {item.quantity}x {item.name}
       </Text>
       <Text style={styles.itemPrice}>
-        {formatCurrency(item.priceCents * item.quantity, 'IDR')}
+        {formatCurrency(item.unitPriceCents * item.quantity, 'IDR')}
       </Text>
     </View>
   );

@@ -55,13 +55,18 @@ jest.mock('../sync/outbox', () => ({
 }));
 
 // ─── WatermelonDB mock ─────────────────────────────────────────────────────────
+interface MockOrderItem {
+  name: string;
+  quantity: number;
+  unitPriceCents: number;
+}
 const mockOrderUpdate = jest.fn();
 const mockOrder = {
   id: 'order-123',
   driverId: 'driver-456',
   status: OrderStatus.ASSIGNED,
   customerId: 'customer-789',
-  itemsJson: [],
+  itemsJson: [] as MockOrderItem[],
   addressJson: { street: 'Test St' },
   totalCents: 50000,
   currency: 'IDR',
@@ -853,5 +858,56 @@ describe('Stale Pending Action Banner', () => {
     await waitFor(() => {
       expect(queryByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeNull();
     });
+  });
+});
+
+// ─── Tests: Item Price Display ─────────────────────────────────────────────────
+
+describe('Item price display', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockOrder.itemsJson = []; // reset items each test
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockHasPendingAction.mockResolvedValue(false);
+  });
+
+  test('unitPriceCents 23000 * quantity 1 tampil Rp 23.000 (bukan 230)', async () => {
+    // ItemRow pakai unitPriceCents (bukan priceCents yang tidak ada di data).
+    // Bug lama, /100 di formatCurrency menyebabkan 23000 muncul Rp 230.
+    // mockOrder.itemsJson harus di-set SEBELUM renderScreen() karena
+    // mockFindAndObserve(next) hanya dipanggil sekali saat subscribe.
+    mockOrder.itemsJson = [
+      { name: 'Mie Goreng', quantity: 1, unitPriceCents: 23000 },
+    ];
+    mockOrder.totalCents = 23000;
+
+    const { getByText, getAllByText } = renderScreen();
+
+    await waitFor(() => {
+      expect(getByText('1x Mie Goreng')).toBeTruthy();
+    });
+
+    // Item price, Rp 23.000 (bukan 230)
+    const priceEls = getAllByText(/Rp\s23\.000/);
+    expect(priceEls.length).toBeGreaterThanOrEqual(1);
+    // Bukan 230 (sen)
+    expect(() => getByText(/Rp\s230(?!0)/)).toThrow();
+  });
+
+  test('totalCents 50000 tampil Rp 50.000 di baris Total', async () => {
+    mockOrder.itemsJson = [
+      { name: 'Nasi Goreng', quantity: 2, unitPriceCents: 25000 },
+    ];
+    mockOrder.totalCents = 50000;
+    mockOrder.currency = 'IDR';
+
+    const { getAllByText } = renderScreen();
+
+    await waitFor(() => {
+      expect(getAllByText(/Total/)).toBeTruthy();
+    });
+
+    const totalPriceEls = getAllByText(/Rp\s50\.000/);
+    expect(totalPriceEls.length).toBeGreaterThanOrEqual(1);
   });
 });
