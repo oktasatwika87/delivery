@@ -34,22 +34,6 @@ export class PaymentsService {
     return this.toDomain(row);
   }
 
-  async capture(orderId: string, userId: string): Promise<Payment> {
-    // Verify user owns the order (customer)
-    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
-    if (!order || order.customerId !== userId) {
-      throw new ForbiddenException('Not your order');
-    }
-
-    const row = await this.prisma.payment.findFirst({ where: { orderId } });
-    if (!row) throw new Error(`No payment for order ${orderId}`);
-    const updated = await this.prisma.payment.update({
-      where: { id: row.id },
-      data: { status: 'CAPTURED', version: { increment: 1 } },
-    });
-    return this.toDomain(updated);
-  }
-
   /**
    * Driver collects COD (cash on delivery) for an order.
    * Reuses the existing idempotency key pattern to prevent double-collection.

@@ -958,4 +958,268 @@ describe('Orders (e2e) - accept/reject', () => {
       expect(loserCount).toBe(1);
     });
   });
+
+  // E2E: sync push menolak order/payment; capture endpoint dihapus.
+  describe('sync push — order/payment ditolak', () => {
+    const deviceId = 'e2e-sync-device';
+    const orderId = 'e2e00000-0000-0000-0000-00000000e001';
+
+    async function cleanupOrder() {
+      await prisma.payment.deleteMany({ where: { orderId } }).catch(() => {});
+      await prisma.order.deleteMany({ where: { id: orderId } }).catch(() => {});
+    }
+
+    test('push order baru → rejected, tidak ada baris order', async () => {
+      await cleanupOrder();
+      try {
+        const resp = await request(app.getHttpServer())
+          .post('/sync/push')
+          .set('Authorization', `Bearer ${customerToken}`)
+          .send({
+            deviceId,
+            userId: customerUserId,
+            sinceCursor: null,
+            records: [{
+              entityType: 'order',
+              id: orderId,
+              data: {
+                id: orderId,
+                customerId: customerUserId,
+                driverId: undefined,
+                status: 'PENDING',
+                items: [],
+                deliveryAddress: { recipientName: 'Budi', phone: '0812', street: 'Jl Merdeka', city: 'Jakarta', postalCode: '10110' },
+                totalCents: 50000,
+                currency: 'IDR',
+                notes: undefined,
+                version: 1,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+              op: 'create',
+              clientChangedAt: new Date().toISOString(),
+              baseVersion: null,
+            }],
+          });
+        // NestJS default POST status = 201
+        expect(resp.status).toBe(201);
+        expect(resp.body.acks).toHaveLength(1);
+        expect(resp.body.acks[0].status).toBe('rejected');
+        expect(resp.body.acks[0].reason).toBe('Order hanya bisa diubah lewat endpoint order');
+        // Tidak ada baris order di DB
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder).toBeNull();
+      } finally {
+        await cleanupOrder();
+      }
+    });
+
+    test('push order update (versi cocok) → rejected', async () => {
+      // Buat order dulu via REST, lalu push update via sync
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: OrderStatusDb.PREPARING,
+          itemsJson: [],
+          addressJson: { recipientName: 'Budi', phone: '0812', street: 'Jl Merdeka', city: 'Jakarta', postalCode: '10110' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+        },
+        update: {},
+      });
+      try {
+        const resp = await request(app.getHttpServer())
+          .post('/sync/push')
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({
+            deviceId,
+            userId: driverUserId,
+            sinceCursor: null,
+            records: [{
+              entityType: 'order',
+              id: orderId,
+              data: {
+                id: orderId,
+                customerId: customerUserId,
+                driverId: driverUserId,
+                status: 'OUT_FOR_DELIVERY',
+                items: [],
+                deliveryAddress: { recipientName: 'Budi', phone: '0812', street: 'Jl Merdeka', city: 'Jakarta', postalCode: '10110' },
+                totalCents: 50000,
+                currency: 'IDR',
+                notes: undefined,
+                version: 2,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+              op: 'update',
+              clientChangedAt: new Date().toISOString(),
+              baseVersion: 1,
+            }],
+          });
+        // NestJS default POST status = 201
+        expect(resp.status).toBe(201);
+        expect(resp.body.acks).toHaveLength(1);
+        expect(resp.body.acks[0].status).toBe('rejected');
+        expect(resp.body.acks[0].reason).toBe('Order hanya bisa diubah lewat endpoint order');
+        // Versi order tidak berubah
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.version).toBe(1);
+      } finally {
+        await cleanupOrder();
+      }
+    });
+
+    test('push order update mengubah driverId (versi cocok) → rejected', async () => {
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: OrderStatusDb.PREPARING,
+          itemsJson: [],
+          addressJson: { recipientName: 'Budi', phone: '0812', street: 'Jl Merdeka', city: 'Jakarta', postalCode: '10110' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+        },
+        update: {},
+      });
+      try {
+        const resp = await request(app.getHttpServer())
+          .post('/sync/push')
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({
+            deviceId,
+            userId: driverUserId,
+            sinceCursor: null,
+            records: [{
+              entityType: 'order',
+              id: orderId,
+              data: {
+                id: orderId,
+                customerId: customerUserId,
+                driverId: driver2UserId, // driver lain
+                status: 'PREPARING',
+                items: [],
+                deliveryAddress: { recipientName: 'Budi', phone: '0812', street: 'Jl Merdeka', city: 'Jakarta', postalCode: '10110' },
+                totalCents: 50000,
+                currency: 'IDR',
+                notes: undefined,
+                version: 2,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+              op: 'update',
+              clientChangedAt: new Date().toISOString(),
+              baseVersion: 1,
+            }],
+          });
+        // NestJS default POST status = 201
+        expect(resp.status).toBe(201);
+        expect(resp.body.acks[0].status).toBe('rejected');
+        // driverId tidak berubah
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.driverId).toBe(driverUserId);
+      } finally {
+        await cleanupOrder();
+      }
+    });
+
+    test('push payment create CAPTURED → rejected, tidak ada baris payment', async () => {
+      await cleanupOrder();
+      const paymentId = 'e2e00000-0000-0000-0000-00000000e002';
+      try {
+        const resp = await request(app.getHttpServer())
+          .post('/sync/push')
+          .set('Authorization', `Bearer ${customerToken}`)
+          .send({
+            deviceId,
+            userId: customerUserId,
+            sinceCursor: null,
+            records: [{
+              entityType: 'payment',
+              id: paymentId,
+              data: {
+                id: paymentId,
+                orderId,
+                idempotencyKey: 'e2e-capture-push',
+                method: 'CARD',
+                status: 'CAPTURED',
+                amountCents: 50000,
+                currency: 'IDR',
+                kind: 'PAYMENT',
+                externalRef: 'ref-123',
+                version: 1,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+              op: 'create',
+              clientChangedAt: new Date().toISOString(),
+              baseVersion: null,
+            }],
+          });
+        // NestJS default POST status = 201
+        expect(resp.status).toBe(201);
+        expect(resp.body.acks).toHaveLength(1);
+        expect(resp.body.acks[0].status).toBe('rejected');
+        expect(resp.body.acks[0].reason).toBe('Pembayaran hanya bisa diubah lewat endpoint pembayaran');
+        // Tidak ada baris payment di DB
+        const dbPayment = await prisma.payment.findUnique({ where: { id: paymentId } });
+        expect(dbPayment).toBeNull();
+      } finally {
+        await prisma.payment.deleteMany({ where: { id: 'e2e00000-0000-0000-0000-00000000e002' } }).catch(() => {});
+      }
+    });
+
+    test('POST /payments/:orderId/capture → 404 (endpoint dihapus)', async () => {
+      // Buat order + payment di DB dulu
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: null,
+          status: OrderStatusDb.ASSIGNED,
+          itemsJson: [],
+          addressJson: { recipientName: 'Budi', phone: '0812', street: 'Jl Merdeka', city: 'Jakarta', postalCode: '10110' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+        },
+        update: {},
+      });
+      const paymentId = 'e2e00000-0000-0000-0000-00000000e003';
+      await prisma.payment.upsert({
+        where: { id: paymentId },
+        create: {
+          id: paymentId,
+          orderId,
+          idempotencyKey: 'e2e-capture-test',
+          method: 'CARD',
+          status: 'PENDING',
+          amountCents: 50000,
+          currency: 'IDR',
+          kind: 'PAYMENT',
+          externalRef: null,
+          version: 1,
+        },
+        update: {},
+      });
+      try {
+        await request(app.getHttpServer())
+          .post(`/payments/${orderId}/capture`)
+          .set('Authorization', `Bearer ${customerToken}`)
+          .expect(404);
+      } finally {
+        await prisma.payment.deleteMany({ where: { id: paymentId } }).catch(() => {});
+        await cleanupOrder();
+      }
+    });
+  });
 });

@@ -25,14 +25,6 @@ export class PaymentsController {
     return this.service.create(input, userId);
   }
 
-  @Post(':orderId/capture')
-  capture(
-    @Param('orderId', new ParseUUIDPipe()) orderId: string,
-    @CurrentUser('id') userId: string,
-  ) {
-    return this.service.capture(orderId, userId);
-  }
-
   /**
    * Driver collects COD (cash on delivery) for an order.
    * HANYA bisa diakses oleh user dengan role DRIVER.

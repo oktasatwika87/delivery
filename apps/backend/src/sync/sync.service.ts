@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
-import { OrderStatus, ORDER_ALLOWED_TRANSITIONS } from '@delivery/shared';
 import type {
   ChatMessage,
   Order,
@@ -121,7 +120,7 @@ export class SyncService {
     };
   }
 
-  // ============ applyOne dengan OCC + idempotency ============
+  // ============ applyOne: order/payment ditolak, chat_message tidak berubah ============
 
   public async applyOne(
     entityType: string,
@@ -130,247 +129,126 @@ export class SyncService {
     const { id, data, baseVersion, op } = record;
     const now = new Date().toISOString();
 
-    // Idempotency check untuk CREATE payment saja
-    if (entityType === 'payment' && op === 'create') {
-      const paymentData = data as Payment;
-      const existing = await this.prisma.payment.findUnique({
-        where: { idempotencyKey: paymentData.idempotencyKey },
-      });
-      if (existing) {
-        // Record sudah pernah diproses — return data lengkap supaya client
-        // bisa match balugin ack ke local row yang punya `idempotencyKey`
-        // sama. Tanpa serverData, client tidak punya cara match ack.id
-        // (server-side UUID) ke local.id (WatermelonDB UUID) ketika ACK
-        // pertama hilang dan row stuck dirty sampai retry cap.
-        return {
-          id: existing.id,
-          entityType: 'payment',
-          status: 'accepted',
-          serverVersion: existing.version,
-          serverChangedAt: existing.updatedAt.toISOString(),
-          serverData: this.paymentToDomain(existing),
-        };
-      }
+    // entityType tak dikenal — tolak segera
+    if (entityType !== 'order' && entityType !== 'payment' && entityType !== 'chat_message') {
+      return this.nack(id, entityType, 'rejected', 'Tipe data tidak dikenal', now);
     }
 
-    // OCC untuk update/delete
+    // Order: semua push ditolak. Update/delete cek OCC duluan.
+    if (entityType === 'order') {
+      if (op === 'create') {
+        // Create: langsung nack tanpa query DB
+        return this.nack(id, entityType, 'rejected',
+          'Order hanya bisa diubah lewat endpoint order', now);
+      }
+      // Update/delete: OCC conflict harus didahulukan dari penolakan
+      const row = await this.prisma.order.findUnique({ where: { id } });
+      if (!row) {
+        return this.nack(id, entityType, 'rejected',
+          `Entity ${id} not found`, now);
+      }
+      if (row.version !== baseVersion) {
+        return {
+          id: row.id,
+          entityType: 'order',
+          status: 'conflict',
+          reason: `Version mismatch: base=${baseVersion}, server=${row.version}`,
+          serverVersion: row.version,
+          serverChangedAt: row.updatedAt.toISOString(),
+          serverData: this.orderToDomain(row),
+        };
+      }
+      return this.nack(id, entityType, 'rejected',
+        'Order hanya bisa diubah lewat endpoint order', now, row.version);
+    }
+
+    // Payment: semua push ditolak. Update/delete cek OCC duluan.
+    if (entityType === 'payment') {
+      if (op === 'create') {
+        // Create: langsung nack tanpa query DB
+        return this.nack(id, entityType, 'rejected',
+          'Pembayaran hanya bisa diubah lewat endpoint pembayaran', now);
+      }
+      // Update/delete: OCC conflict harus didahulukan dari penolakan
+      const row = await this.prisma.payment.findUnique({ where: { id } });
+      if (!row) {
+        return this.nack(id, entityType, 'rejected',
+          `Entity ${id} not found`, now);
+      }
+      if (row.version !== baseVersion) {
+        return {
+          id: row.id,
+          entityType: 'payment',
+          status: 'conflict',
+          reason: `Version mismatch: base=${baseVersion}, server=${row.version}`,
+          serverVersion: row.version,
+          serverChangedAt: row.updatedAt.toISOString(),
+          serverData: this.paymentToDomain(row),
+        };
+      }
+      return this.nack(id, entityType, 'rejected',
+        'Pembayaran hanya bisa diubah lewat endpoint pembayaran', now, row.version);
+    }
+
+    // Chat message: tidak berubah — masih dipakai untuk offline-first chat
     if (op === 'update' || op === 'delete') {
-      const row = await this.fetchDbRow(entityType, id);
+      const row = await this.prisma.chatMessage.findUnique({ where: { id } });
       if (!row) {
         return this.nack(id, entityType, 'rejected', `Entity ${id} not found`, now);
       }
       if (row.version !== baseVersion) {
-        // Conflict — server lebih baru, return data server
         return {
           id: row.id,
-          entityType: entityType as SyncRecordAck['entityType'],
+          entityType: 'chat_message',
           status: 'conflict',
           reason: `Version mismatch: base=${baseVersion}, server=${row.version}`,
           serverVersion: row.version,
-          serverChangedAt: (row.updatedAt as Date).toISOString(),
-          serverData: this.rowToDomain(entityType, row),
+          serverChangedAt: row.updatedAt.toISOString(),
+          serverData: this.chatToDomain(row),
         };
-      }
-
-      // Order business validation — transition + ownership rules
-      if (entityType === 'order' && op === 'update') {
-        const orderData = data as Order;
-        const orderRow = row as { status: string; driverId: string | null; version: number };
-        const currentStatus = orderRow.status as OrderStatus;
-        const newStatus = orderData.status as OrderStatus;
-
-        // Rule 1: status transition valid per ORDER_ALLOWED_TRANSITIONS
-        // SKIP for * -> PREPARING transitions — Rule 3 will provide specific reason
-        // for accept attempts from non-ACCEPTED states (CANCELLED/DELIVERED).
-        // Rule 2 will catch ownership mismatches for PREPARING pushes where driverId already set.
-        if (
-          newStatus !== OrderStatus.PREPARING &&
-          !ORDER_ALLOWED_TRANSITIONS[currentStatus]?.includes(newStatus)
-        ) {
-          return this.nack(id, entityType, 'rejected',
-            `Tidak bisa mengubah status order dari ${currentStatus} ke ${newStatus}`,
-            now, orderRow.version);
-        }
-
-        // Rule 2: ownership — driverId must match (or server driverId is null)
-        const requestDriverId = orderData.driverId;
-        if (requestDriverId !== undefined && orderRow.driverId !== null && orderRow.driverId !== requestDriverId) {
-          return this.nack(id, entityType, 'rejected',
-            'Order sudah di-reassign ke driver lain',
-            now, orderRow.version);
-        }
-
-        // Rule 3B: PREPARING push tanpa driverId — reject as invariant violation.
-        // ASSUMPTION: tidak ada path di codebase saat ini yang bisa push PREPARING tanpa driverId.
-        // Mobile: localRowToSyncRecord() selalu menyertakan driverId (null→undefined, bukan absent).
-        // REST: acceptOrder() selalu assign driverId. transitionStatus() tidak menerima PREPARING tanpa driverId.
-        // Rule 3B ini defensive — pastikan invariant tidak bocor kalau fitur baru ditambahkan.
-        if (newStatus === OrderStatus.PREPARING && orderData.driverId === undefined) {
-          return this.nack(id, entityType, 'rejected',
-            `Tidak bisa mengubah status order dari ${currentStatus} ke PREPARING tanpa driverId`,
-            now, orderRow.version);
-        }
-        // If push PREPARING with driverId set AND server.driverId=null
-        // AND server.status bukan ASSIGNED → accept tidak valid
-        if (
-          newStatus === OrderStatus.PREPARING &&
-          orderData.driverId !== undefined &&
-          orderRow.driverId === null
-        ) {
-          if (currentStatus !== OrderStatus.ASSIGNED) {
-            return this.nack(id, entityType, 'rejected',
-              'Order sudah tidak tersedia untuk di-accept',
-              now, orderRow.version);
-          }
-        }
       }
     }
 
-    // Apply: create/update/delete
+    // Apply: create/update/delete untuk chat_message
     let serverVersion: number;
     if (op === 'delete') {
-      const deleted = await this.deleteDbRow(entityType, id);
+      const deleted = await this.prisma.chatMessage.update({
+        where: { id },
+        data: { deletedAt: new Date(), version: { increment: 1 } },
+      });
       serverVersion = deleted.version;
     } else {
-      const result = await this.upsertDbRow(entityType, id, data);
+      const c = data as ChatMessage;
+      const result = await this.prisma.chatMessage.upsert({
+        where: { id },
+        create: {
+          id,
+          roomId: c.roomId,
+          senderId: c.senderId,
+          body: c.body,
+          attachmentJson: c.attachment,
+          status: c.status,
+          clientCreatedAt: new Date(c.clientCreatedAt),
+          serverCreatedAt: c.serverCreatedAt ? new Date(c.serverCreatedAt) : null,
+          version: 1,
+        },
+        update: {
+          body: c.body,
+          attachmentJson: c.attachment,
+          status: c.status,
+          version: { increment: 1 },
+        },
+      });
       serverVersion = result.version;
     }
 
     return {
       id,
-      entityType: entityType as SyncRecordAck['entityType'],
+      entityType: 'chat_message' as const,
       status: 'accepted',
       serverVersion,
       serverChangedAt: now,
     };
-  }
-
-  private async fetchDbRow(entityType: string, id: string) {
-    switch (entityType) {
-      case 'order':
-        return this.prisma.order.findUnique({ where: { id } });
-      case 'payment':
-        return this.prisma.payment.findUnique({ where: { id } });
-      case 'chat_message':
-        return this.prisma.chatMessage.findUnique({ where: { id } });
-      default:
-        return null;
-    }
-  }
-
-  private async upsertDbRow(
-    entityType: string,
-    id: string,
-    data: Order | Payment | ChatMessage,
-  ) {
-    switch (entityType) {
-      case 'order': {
-        const o = data as Order;
-        return this.prisma.order.upsert({
-          where: { id },
-          create: {
-            id,
-            customerId: o.customerId,
-            driverId: o.driverId ?? null,
-            status: o.status,
-            itemsJson: o.items as any,
-            addressJson: o.deliveryAddress as any,
-            totalCents: o.totalCents,
-            currency: o.currency,
-            notes: o.notes,
-            version: 1,
-          },
-          update: {
-            status: o.status,
-            itemsJson: o.items as any,
-            addressJson: o.deliveryAddress as any,
-            totalCents: o.totalCents,
-            currency: o.currency,
-            notes: o.notes,
-            driverId: o.driverId ?? null,
-            version: { increment: 1 },
-          },
-        });
-      }
-      case 'payment': {
-        const p = data as Payment;
-        return this.prisma.payment.upsert({
-          where: { id },
-          create: {
-            id,
-            orderId: p.orderId,
-            idempotencyKey: p.idempotencyKey,
-            method: p.method,
-            status: p.status,
-            amountCents: p.amountCents,
-            currency: p.currency,
-            kind: p.kind,
-            externalRef: p.externalRef,
-            version: 1,
-          },
-          update: {
-            method: p.method,
-            status: p.status,
-            amountCents: p.amountCents,
-            currency: p.currency,
-            kind: p.kind,
-            externalRef: p.externalRef,
-            version: { increment: 1 },
-          },
-        });
-      }
-      case 'chat_message': {
-        const c = data as ChatMessage;
-        return this.prisma.chatMessage.upsert({
-          where: { id },
-          create: {
-            id,
-            roomId: c.roomId,
-            senderId: c.senderId,
-            body: c.body,
-            attachmentJson: c.attachment,
-            status: c.status,
-            clientCreatedAt: new Date(c.clientCreatedAt),
-            serverCreatedAt: c.serverCreatedAt ? new Date(c.serverCreatedAt) : null,
-            version: 1,
-          },
-          update: {
-            body: c.body,
-            attachmentJson: c.attachment,
-            status: c.status,
-            version: { increment: 1 },
-          },
-        });
-      }
-      default:
-        throw new Error(`Unknown entityType: ${entityType}`);
-    }
-  }
-
-  private async deleteDbRow(entityType: string, id: string) {
-    switch (entityType) {
-      case 'order':
-        return this.prisma.order.update({ where: { id }, data: { deletedAt: new Date(), version: { increment: 1 } } });
-      case 'payment':
-        return this.prisma.payment.update({ where: { id }, data: { deletedAt: new Date(), version: { increment: 1 } } });
-      case 'chat_message':
-        return this.prisma.chatMessage.update({ where: { id }, data: { deletedAt: new Date(), version: { increment: 1 } } });
-      default:
-        throw new Error(`Unknown entityType: ${entityType}`);
-    }
-  }
-
-  private rowToDomain(entityType: string, row: Record<string, unknown>) {
-    switch (entityType) {
-      case 'order':
-        return this.orderToDomain(row as Parameters<typeof this.orderToDomain>[0]);
-      case 'payment':
-        return this.paymentToDomain(row as Parameters<typeof this.paymentToDomain>[0]);
-      case 'chat_message':
-        return this.chatToDomain(row as Parameters<typeof this.chatToDomain>[0]);
-      default:
-        throw new Error(`Unknown entityType: ${entityType}`);
-    }
   }
 
   private nack(

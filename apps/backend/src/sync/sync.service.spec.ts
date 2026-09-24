@@ -70,9 +70,9 @@ describe('SyncService.applyOne', () => {
     jest.clearAllMocks();
   });
 
-  // ============ Scenario 1: Insert record baru ============
+  // ============ Hari 4 commit 2: order/payment sync push ditolak ============
 
-  it('should insert new record and return version 1', async () => {
+  it('should reject order create via sync', async () => {
     const record = makeRecord();
 
     // Row belum ada di DB
@@ -85,22 +85,21 @@ describe('SyncService.applyOne', () => {
 
     const ack = await service.applyOne(record.entityType, record);
 
-    expect(ack.status).toBe('accepted');
-    expect(ack.serverVersion).toBe(1);
-    expect(prisma.order.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: record.id }, create: expect.objectContaining({ version: 1 }) }),
-    );
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Order hanya bisa diubah lewat endpoint order');
+    // upsert TIDAK boleh dipanggil untuk entity yang ditolak
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
   });
 
   // ============ Scenario 2: Update dengan baseVersion yang cocok ============
 
-  it('should update record when baseVersion matches', async () => {
+  it('should reject order update via sync when baseVersion matches', async () => {
     const record = makeRecord({
       op: 'update',
       baseVersion: 3, // client punya versi 3
       data: {
         ...makeRecord().data,
-        status: 'ASSIGNED', // valid transition CONFIRMED -> ASSIGNED
+        status: 'ASSIGNED',
       },
     });
 
@@ -109,7 +108,7 @@ describe('SyncService.applyOne', () => {
       id: record.id,
       customerId: 'customer-uuid',
       driverId: null,
-      status: 'CONFIRMED', // initial state
+      status: 'CONFIRMED',
       itemsJson: [],
       addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
       totalCents: 50000,
@@ -121,18 +120,25 @@ describe('SyncService.applyOne', () => {
     });
     (prisma.order.upsert as jest.Mock).mockResolvedValue({
       id: record.id,
-      version: 4, // versi naik setelah update
+      version: 4,
       updatedAt: new Date(),
     });
 
     const ack = await service.applyOne(record.entityType, record);
 
-    expect(ack.status).toBe('accepted');
-    expect(ack.serverVersion).toBe(4);
-    expect(prisma.order.upsert).toHaveBeenCalled(); // upsert dipanggil untuk update
+    // Hari 4 commit 2: order update via sync ditolak walaupun versi cocok.
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Order hanya bisa diubah lewat endpoint order');
+    expect(ack.serverVersion).toBe(3); // kembalikan versi server supaya client bisa sync
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
   });
 
   // ============ Scenario 3: Update dengan baseVersion tidak cocok (CONFLICT) ============
+  //
+  // Hari 4 commit 2: OCC conflict HARUS didahulukan dari penolakan entity.
+  // Walau order update via sync selalu ditolak, client yang mengirim
+  // baseVersion basi tetap perlu tahu versi server terbaru — kalau tidak,
+  // client tidak bisa reconciliation.
 
   it('should return conflict when baseVersion does not match', async () => {
     const record = makeRecord({
@@ -158,6 +164,8 @@ describe('SyncService.applyOne', () => {
 
     const ack = await service.applyOne(record.entityType, record);
 
+    // Hari 4 commit 2: order OCC conflict masih 'conflict' + serverData,
+    // bukan 'rejected' — supaya mobile bisa pulih dengan data server.
     expect(ack.status).toBe('conflict');
     expect(ack.serverVersion).toBe(4); // return versi server
     expect(ack.serverData).toBeDefined(); // wajib ada data server terbaru
@@ -239,8 +247,11 @@ describe('SyncService.applyOne', () => {
   });
 
   // ============ Payment OCC: Update dengan baseVersion cocok ============
+  //
+  // Hari 4 commit 2: payment update via sync SELALU ditolak walaupun
+  // versi cocok (entitas harus lewat endpoint payments, bukan sync push).
 
-  it('should update payment record when baseVersion matches', async () => {
+  it('should reject payment update via sync when baseVersion matches', async () => {
     const paymentRecord = {
       entityType: 'payment' as const,
       id: 'payment-uuid',
@@ -249,7 +260,7 @@ describe('SyncService.applyOne', () => {
         orderId: 'order-uuid',
         idempotencyKey: 'idem-key-456',
         method: 'CASH',
-        status: 'CAPTURED', // client mau update status
+        status: 'CAPTURED',
         amountCents: 50000,
         currency: 'IDR',
         kind: 'PAYMENT',
@@ -260,10 +271,9 @@ describe('SyncService.applyOne', () => {
       },
       op: 'update' as const,
       clientChangedAt: new Date().toISOString(),
-      baseVersion: 2, // client punya versi 2
+      baseVersion: 2,
     };
 
-    // Row di DB masih versi 2
     (prisma.payment.findUnique as jest.Mock).mockResolvedValue({
       id: 'payment-uuid',
       orderId: 'order-uuid',
@@ -274,24 +284,28 @@ describe('SyncService.applyOne', () => {
       currency: 'IDR',
       kind: 'PAYMENT',
       externalRef: null,
-      version: 2, // server masih versi 2
+      version: 2,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
     (prisma.payment.upsert as jest.Mock).mockResolvedValue({
       id: 'payment-uuid',
-      version: 3, // versi naik setelah update
+      version: 3,
       updatedAt: new Date(),
     });
 
     const ack = await service.applyOne('payment', paymentRecord);
 
-    expect(ack.status).toBe('accepted');
-    expect(ack.serverVersion).toBe(3);
-    expect(prisma.payment.upsert).toHaveBeenCalled();
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Pembayaran hanya bisa diubah lewat endpoint pembayaran');
+    expect(ack.serverVersion).toBe(2);
+    expect(prisma.payment.upsert).not.toHaveBeenCalled();
   });
 
   // ============ Payment OCC: Update dengan baseVersion stale (CONFLICT) ============
+  //
+  // Hari 4 commit 2: payment OCC conflict masih 'conflict' + serverData,
+  // bukan 'rejected' — supaya mobile bisa pulih dengan data server terbaru.
 
   it('should return conflict when updating payment with stale baseVersion', async () => {
     const paymentRecord = {
@@ -342,36 +356,25 @@ describe('SyncService.applyOne', () => {
     expect(prisma.payment.upsert).not.toHaveBeenCalled();
   });
 
-  // ============ Bonus: Idempotency check untuk payment ============
+  // ============ Hari 4 commit 2: payment create ditolak langsung ============
+  //
+  // Tidak ada lagi idempotency check — semua payment create lewat sync
+  // ditolak tanpa menyentuh DB.
 
-  it('should skip duplicate payment with same idempotencyKey', async () => {
-    const existingPayment = {
-      id: 'existing-payment-id',
-      idempotencyKey: 'idem-key-123',
-      version: 2,
-      updatedAt: new Date(),
-      createdAt: new Date(),
-      orderId: 'order-uuid',
-      method: 'CASH',
-      status: 'PENDING',
-      amountCents: 50000,
-      currency: 'IDR',
-      kind: 'PAYMENT',
-      externalRef: null,
-    };
-
+  it('should reject payment create via sync', async () => {
     const paymentRecord = {
       entityType: 'payment' as const,
       id: 'new-payment-id',
       data: {
         id: 'new-payment-id',
         orderId: 'order-uuid',
-        idempotencyKey: 'idem-key-123', // sama dengan yang sudah ada
+        idempotencyKey: 'idem-key-new',
         method: 'CASH',
         status: 'PENDING',
         amountCents: 50000,
         currency: 'IDR',
         kind: 'PAYMENT',
+        externalRef: undefined,
         version: 1,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -381,23 +384,221 @@ describe('SyncService.applyOne', () => {
       baseVersion: null,
     };
 
-    (prisma.payment.findUnique as jest.Mock).mockResolvedValue(existingPayment);
+    const ack = await service.applyOne('payment', paymentRecord);
+
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Pembayaran hanya bisa diubah lewat endpoint pembayaran');
+    // Tidak ada idempotency check — payment.create TIDAK dipanggil
+    expect(prisma.payment.findUnique).not.toHaveBeenCalled();
+    expect(prisma.payment.upsert).not.toHaveBeenCalled();
+  });
+
+  // ============ Hari 4 commit 2: payment delete ditolak ============
+
+  it('should reject payment delete with matching baseVersion', async () => {
+    const paymentRecord = {
+      entityType: 'payment' as const,
+      id: 'payment-uuid',
+      data: {
+        id: 'payment-uuid',
+        orderId: 'order-uuid',
+        idempotencyKey: 'idem-key-456',
+        method: 'CASH',
+        status: 'PENDING',
+        amountCents: 50000,
+        currency: 'IDR',
+        kind: 'PAYMENT',
+        externalRef: undefined,
+        version: 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      op: 'delete' as const,
+      clientChangedAt: new Date().toISOString(),
+      baseVersion: 2,
+    };
+
+    (prisma.payment.findUnique as jest.Mock).mockResolvedValue({
+      id: 'payment-uuid',
+      orderId: 'order-uuid',
+      idempotencyKey: 'idem-key-456',
+      method: 'CASH',
+      status: 'PENDING',
+      amountCents: 50000,
+      currency: 'IDR',
+      kind: 'PAYMENT',
+      externalRef: null,
+      version: 2,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
     const ack = await service.applyOne('payment', paymentRecord);
 
-    expect(ack.status).toBe('accepted');
-    expect(ack.serverVersion).toBe(2); // return versi record lama
-    // upsert TIDAK boleh dipanggil karena sudah ada
-    expect(prisma.payment.upsert).not.toHaveBeenCalled();
-    // serverData should be included for ack-id mismatch recovery (Tier 4)
-    expect(ack.serverData).toBeDefined();
-    expect(ack.serverData).toMatchObject({
-      idempotencyKey: 'idem-key-123',
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Pembayaran hanya bisa diubah lewat endpoint pembayaran');
+    expect(ack.serverVersion).toBe(2);
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+  });
+
+  // ============ entityType tak dikenal: nack 'rejected' ============
+
+  it('should reject unknown entityType with "Tipe data tidak dikenal"', async () => {
+    const record = {
+      entityType: 'inventory_item' as const,
+      id: 'unknown-uuid',
+      data: { id: 'unknown-uuid', name: 'Test' } as any,
+      op: 'create' as const,
+      clientChangedAt: new Date().toISOString(),
+      baseVersion: null,
+    };
+
+    const ack = await service.applyOne(record.entityType, record);
+
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Tipe data tidak dikenal');
+  });
+
+  // ============ Hari 4 commit 2: chat_message sync TIDAK berubah ============
+  //
+  // Regression guard: penolakan order/payment TIDAK boleh bocor ke
+  // chat_message. Mobile chat offline-first masih pakai sync push.
+
+  it('should accept chat_message create via sync (tidak berubah)', async () => {
+    const chatRecord = {
+      entityType: 'chat_message' as const,
+      id: 'chat-uuid',
+      data: {
+        id: 'chat-uuid',
+        roomId: 'order-uuid',
+        senderId: 'customer-uuid',
+        body: 'Halo',
+        attachment: undefined,
+        status: 'SENT' as const,
+        clientCreatedAt: new Date().toISOString(),
+        serverCreatedAt: undefined,
+        version: 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      op: 'create' as const,
+      clientChangedAt: new Date().toISOString(),
+      baseVersion: null,
+    };
+
+    (prisma.chatMessage.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.chatMessage.upsert as jest.Mock).mockResolvedValue({
+      id: 'chat-uuid',
+      version: 1,
+      updatedAt: new Date(),
     });
+
+    const ack = await service.applyOne('chat_message', chatRecord);
+
+    expect(ack.status).toBe('accepted');
+    expect(ack.serverVersion).toBe(1);
+    expect(prisma.chatMessage.upsert).toHaveBeenCalled();
+  });
+
+  it('should accept chat_message update with matching baseVersion (tidak berubah)', async () => {
+    const chatRecord = {
+      entityType: 'chat_message' as const,
+      id: 'chat-uuid',
+      data: {
+        id: 'chat-uuid',
+        roomId: 'order-uuid',
+        senderId: 'customer-uuid',
+        body: 'Halo (edited)',
+        attachment: undefined,
+        status: 'SENT' as const,
+        clientCreatedAt: new Date().toISOString(),
+        serverCreatedAt: new Date().toISOString(),
+        version: 2,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      op: 'update' as const,
+      clientChangedAt: new Date().toISOString(),
+      baseVersion: 1,
+    };
+
+    (prisma.chatMessage.findUnique as jest.Mock).mockResolvedValue({
+      id: 'chat-uuid',
+      roomId: 'order-uuid',
+      senderId: 'customer-uuid',
+      body: 'Halo',
+      attachmentJson: null,
+      status: 'SENT',
+      clientCreatedAt: new Date(),
+      serverCreatedAt: new Date(),
+      version: 1,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    (prisma.chatMessage.upsert as jest.Mock).mockResolvedValue({
+      id: 'chat-uuid',
+      version: 2,
+      updatedAt: new Date(),
+    });
+
+    const ack = await service.applyOne('chat_message', chatRecord);
+
+    expect(ack.status).toBe('accepted');
+    expect(ack.serverVersion).toBe(2);
+    expect(prisma.chatMessage.upsert).toHaveBeenCalled();
+  });
+
+  it('should return conflict for chat_message update with stale baseVersion (tidak berubah)', async () => {
+    const chatRecord = {
+      entityType: 'chat_message' as const,
+      id: 'chat-uuid',
+      data: {
+        id: 'chat-uuid',
+        roomId: 'order-uuid',
+        senderId: 'customer-uuid',
+        body: 'Halo (edited)',
+        attachment: undefined,
+        status: 'SENT' as const,
+        clientCreatedAt: new Date().toISOString(),
+        serverCreatedAt: new Date().toISOString(),
+        version: 2,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      op: 'update' as const,
+      clientChangedAt: new Date().toISOString(),
+      baseVersion: 1,
+    };
+
+    (prisma.chatMessage.findUnique as jest.Mock).mockResolvedValue({
+      id: 'chat-uuid',
+      roomId: 'order-uuid',
+      senderId: 'customer-uuid',
+      body: 'Halo (someone else edited)',
+      attachmentJson: null,
+      status: 'SENT',
+      clientCreatedAt: new Date(),
+      serverCreatedAt: new Date(),
+      version: 3,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const ack = await service.applyOne('chat_message', chatRecord);
+
+    expect(ack.status).toBe('conflict');
+    expect(ack.serverVersion).toBe(3);
+    expect(ack.serverData).toBeDefined();
+    expect(ack.reason).toContain('Version mismatch');
+    expect(prisma.chatMessage.upsert).not.toHaveBeenCalled();
   });
 });
 
-describe('applyOne — order update validation', () => {
+// Hari 4 commit 2: order push via sync SELALU ditolak (entity apapun,
+// op apapun). Untuk update/delete, OCC conflict masih didahulukan dari
+// penolakan entity supaya mobile yang mengirim baseVersion basi tetap
+// bisa pulih dengan data server.
+describe('applyOne — order sync records (rejected)', () => {
   let service: SyncService;
   let prisma: PrismaClient;
 
@@ -464,7 +665,10 @@ describe('applyOne — order update validation', () => {
     jest.clearAllMocks();
   });
 
-  it('accepts valid transition PREPARING -> OUT_FOR_DELIVERY', async () => {
+  // Hari 4 commit 2: order update lewat sync SELALU ditolak, tanpa
+  // melihat status transisi, ownership, atau Rule 1/2/3B apapun.
+
+  it('rejects order update with matching baseVersion (regardless of transition)', async () => {
     (prisma.order.findUnique as jest.Mock).mockResolvedValue({
       id: 'order-validate-uuid',
       customerId: 'customer-uuid',
@@ -479,128 +683,60 @@ describe('applyOne — order update validation', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    (prisma.order.upsert as jest.Mock).mockResolvedValue({
-      id: 'order-validate-uuid',
-      version: 6,
-      updatedAt: new Date(),
-    });
 
-    const record = makeOrderRecord({ data: { ...makeOrderRecord().data, status: 'OUT_FOR_DELIVERY' } });
+    const record = makeOrderRecord({ baseVersion: 5, data: { ...makeOrderRecord().data, status: 'OUT_FOR_DELIVERY' } });
     const ack = await service.applyOne(record.entityType, record);
 
-    expect(ack.status).toBe('accepted');
-    expect(ack.serverVersion).toBe(6);
-    expect(prisma.order.upsert).toHaveBeenCalled();
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Order hanya bisa diubah lewat endpoint order');
+    expect(ack.serverVersion).toBe(5);
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
   });
 
-  it('rejects invalid transition DELIVERED -> CANCELLED (terminal state)', async () => {
+  // OCC conflict HARUS didahulukan dari penolakan entity. Client yang
+  // mengirim baseVersion basi untuk order update harus mendapat 'conflict'
+  // + serverData supaya bisa pulih. Kalau kita letakkan penolakan entity
+  // sebelum OCC, mobile tidak akan pernah bisa reconciliation.
+
+  it('returns conflict for order update with stale baseVersion (OCC fires first)', async () => {
     (prisma.order.findUnique as jest.Mock).mockResolvedValue({
       id: 'order-validate-uuid',
       customerId: 'customer-uuid',
       driverId: 'driver-uuid',
-      status: 'DELIVERED',
-      itemsJson: [],
-      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
-      totalCents: 50000,
-      currency: 'IDR',
-      notes: null,
-      version: 6,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    const record = makeOrderRecord({ baseVersion: 6, data: { ...makeOrderRecord().data, status: 'CANCELLED' } });
-    const ack = await service.applyOne(record.entityType, record);
-
-    expect(ack.status).toBe('rejected');
-    expect(ack.reason).toContain('Tidak bisa mengubah status');
-    expect(ack.serverVersion).toBe(6); // harus return versi server
-  });
-
-  it('rejects invalid transition CANCELLED -> any state (terminal state)', async () => {
-    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
-      id: 'order-validate-uuid',
-      customerId: 'customer-uuid',
-      driverId: null,
-      status: 'CANCELLED',
-      itemsJson: [],
-      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
-      totalCents: 50000,
-      currency: 'IDR',
-      notes: null,
-      version: 3,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    // CANCELLED -> PREPARING: Rule 1 allows *->PREPARING, Rule 3 catches with accept-specific reason
-    const record = makeOrderRecord({ baseVersion: 3, data: { ...makeOrderRecord().data, status: 'PREPARING' } });
-    const ack = await service.applyOne(record.entityType, record);
-
-    expect(ack.status).toBe('rejected');
-    expect(ack.reason).toBe('Order sudah tidak tersedia untuk di-accept');
-  });
-
-  it('rejects when driverId request differs from server.driverId (ownership invalid)', async () => {
-    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
-      id: 'order-validate-uuid',
-      customerId: 'customer-uuid',
-      driverId: 'bob', // server punya bob
       status: 'OUT_FOR_DELIVERY',
       itemsJson: [],
       addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
       totalCents: 50000,
       currency: 'IDR',
       notes: null,
-      version: 5,
+      version: 7,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
 
-    // driver 'me' mencoba push cancel
-    const record = makeOrderRecord({
-      data: { ...makeOrderRecord().data, driverId: 'me', status: 'CANCELLED' },
-    });
+    // baseVersion stale: client kirim 5, server sudah 7
+    const record = makeOrderRecord({ baseVersion: 5 });
+    const ack = await service.applyOne(record.entityType, record);
+
+    expect(ack.status).toBe('conflict');
+    expect(ack.serverVersion).toBe(7);
+    expect(ack.serverData).toBeDefined();
+    expect(ack.reason).toContain('Version mismatch');
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects order update when entity not found (existing behavior preserved)', async () => {
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue(null);
+
+    const record = makeOrderRecord({ baseVersion: 1 });
     const ack = await service.applyOne(record.entityType, record);
 
     expect(ack.status).toBe('rejected');
-    expect(ack.reason).toContain('reassign');
-    expect(ack.serverVersion).toBe(5);
+    expect(ack.reason).toContain('not found');
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
   });
 
-  it('allows when server.driverId is null (reassignment to me is valid)', async () => {
-    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
-      id: 'order-validate-uuid',
-      customerId: 'customer-uuid',
-      driverId: null, // order tidak punya driver
-      status: 'CONFIRMED',
-      itemsJson: [],
-      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
-      totalCents: 50000,
-      currency: 'IDR',
-      notes: null,
-      version: 3,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-    (prisma.order.upsert as jest.Mock).mockResolvedValue({
-      id: 'order-validate-uuid',
-      version: 4,
-      updatedAt: new Date(),
-    });
-
-    // driver 'me' assign dirinya ke order
-    const record = makeOrderRecord({
-      baseVersion: 3,
-      data: { ...makeOrderRecord().data, driverId: 'me', status: 'ASSIGNED' },
-    });
-    const ack = await service.applyOne(record.entityType, record);
-
-    expect(ack.status).toBe('accepted');
-    expect(prisma.order.upsert).toHaveBeenCalled();
-  });
-
-  it('create op bypasses validation (defensive)', async () => {
+  it('rejects order create via sync (no OCC check)', async () => {
     (prisma.order.findUnique as jest.Mock).mockResolvedValue(null);
     (prisma.order.upsert as jest.Mock).mockResolvedValue({
       id: 'order-validate-uuid',
@@ -611,16 +747,16 @@ describe('applyOne — order update validation', () => {
     const record = makeOrderRecord({ op: 'create', baseVersion: null });
     const ack = await service.applyOne(record.entityType, record);
 
-    expect(ack.status).toBe('accepted');
-    expect(ack.serverVersion).toBe(1);
-    expect(prisma.order.upsert).toHaveBeenCalled();
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Order hanya bisa diubah lewat endpoint order');
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
   });
 
-  it('rejects valid transition but ownership mismatch — ownership check is priority', async () => {
+  it('rejects order delete with matching baseVersion', async () => {
     (prisma.order.findUnique as jest.Mock).mockResolvedValue({
       id: 'order-validate-uuid',
       customerId: 'customer-uuid',
-      driverId: 'bob',
+      driverId: 'driver-uuid',
       status: 'PREPARING',
       itemsJson: [],
       addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
@@ -632,202 +768,38 @@ describe('applyOne — order update validation', () => {
       updatedAt: new Date(),
     });
 
-    // Transition PREPARING -> OUT_FOR_DELIVERY valid, tapi driverId mismatch
-    const record = makeOrderRecord({
-      data: { ...makeOrderRecord().data, driverId: 'me', status: 'OUT_FOR_DELIVERY' },
-    });
+    const record = makeOrderRecord({ op: 'delete', baseVersion: 5 });
     const ack = await service.applyOne(record.entityType, record);
 
     expect(ack.status).toBe('rejected');
-    expect(ack.reason).toContain('reassign');
+    expect(ack.reason).toBe('Order hanya bisa diubah lewat endpoint order');
+    expect(ack.serverVersion).toBe(5);
+    expect(prisma.order.update).not.toHaveBeenCalled();
   });
 
-  // ===== Rule 3: accept-specific reason =====
-
-  it('Rule 3: push accept untuk order CANCELLED → reject dengan reason spesifik', async () => {
-    // Server order CANCELLED, driver coba push accept (PREPARING, driverId=me)
+  it('returns conflict for order delete with stale baseVersion', async () => {
     (prisma.order.findUnique as jest.Mock).mockResolvedValue({
       id: 'order-validate-uuid',
       customerId: 'customer-uuid',
-      driverId: null, // order di pool (null)
-      status: 'CANCELLED',
-      itemsJson: [],
-      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
-      totalCents: 50000,
-      currency: 'IDR',
-      notes: null,
-      version: 3,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    const record = makeOrderRecord({
-      baseVersion: 3,
-      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: 'me' },
-    });
-    const ack = await service.applyOne(record.entityType, record);
-
-    expect(ack.status).toBe('rejected');
-    expect(ack.reason).toBe('Order sudah tidak tersedia untuk di-accept');
-    expect(ack.serverVersion).toBe(3);
-    expect(prisma.order.upsert).not.toHaveBeenCalled();
-  });
-
-  it('Rule 3: push accept untuk order DELIVERED → reject dengan reason spesifik', async () => {
-    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
-      id: 'order-validate-uuid',
-      customerId: 'customer-uuid',
-      driverId: null,
+      driverId: 'driver-uuid',
       status: 'DELIVERED',
       itemsJson: [],
       addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
       totalCents: 50000,
       currency: 'IDR',
       notes: null,
-      version: 10,
+      version: 9,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
 
-    const record = makeOrderRecord({
-      baseVersion: 10,
-      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: 'me' },
-    });
+    const record = makeOrderRecord({ op: 'delete', baseVersion: 5 });
     const ack = await service.applyOne(record.entityType, record);
 
-    expect(ack.status).toBe('rejected');
-    expect(ack.reason).toBe('Order sudah tidak tersedia untuk di-accept');
-    expect(ack.serverVersion).toBe(10);
-    expect(prisma.order.upsert).not.toHaveBeenCalled();
-  });
-
-  it('Rule 3: push accept untuk order ASSIGNED → accept (Rule 3 pass, Rule 1 juga lolos)', async () => {
-    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
-      id: 'order-validate-uuid',
-      customerId: 'customer-uuid',
-      driverId: null, // order di pool
-      status: 'ASSIGNED',
-      itemsJson: [],
-      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
-      totalCents: 50000,
-      currency: 'IDR',
-      notes: null,
-      version: 5,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-    (prisma.order.upsert as jest.Mock).mockResolvedValue({
-      id: 'order-validate-uuid',
-      version: 6,
-      updatedAt: new Date(),
-    });
-
-    // Driver push: PREPARING, driverId=me
-    const record = makeOrderRecord({
-      baseVersion: 5,
-      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: 'me' },
-    });
-    const ack = await service.applyOne(record.entityType, record);
-
-    // ACCEPTED: server.ASSIGNED -> client.PREPARING valid (ASSIGNED->PREPARING allowed)
-    // server.driverId=null -> Rule 3 condition met, currentStatus=ASSIGNED matches -> pass
-    expect(ack.status).toBe('accepted');
-    expect(ack.serverVersion).toBe(6);
-    expect(prisma.order.upsert).toHaveBeenCalled();
-  });
-
-  it('Rule 3: push accept untuk order yang driverId sudah terisi driver lain → Rule 2 menang', async () => {
-    // Server: order PREPARING, driverId=bob
-    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
-      id: 'order-validate-uuid',
-      customerId: 'customer-uuid',
-      driverId: 'bob', // sudah ada driver
-      status: 'PREPARING',
-      itemsJson: [],
-      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
-      totalCents: 50000,
-      currency: 'IDR',
-      notes: null,
-      version: 6,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    // Driver 'me' coba push accept
-    const record = makeOrderRecord({
-      baseVersion: 6,
-      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: 'me' },
-    });
-    const ack = await service.applyOne(record.entityType, record);
-
-    // DITOLAK oleh Rule 2 (ownership mismatch), BUKAN Rule 3
-    // Reason harus dari Rule 2, bukan Rule 3
-    expect(ack.status).toBe('rejected');
-    expect(ack.reason).toBe('Order sudah di-reassign ke driver lain');
-    expect(ack.serverVersion).toBe(6);
-    expect(prisma.order.upsert).not.toHaveBeenCalled();
-  });
-
-  // ===== Regression: bypass Rule 1 HANYA untuk accept flow, bukan semua PREPARING =====
-
-  it('Rule 1 regression: push PREPARING tanpa driverId dari CANCELLED → ditolak Rule 1', async () => {
-    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
-      id: 'order-validate-uuid',
-      customerId: 'customer-uuid',
-      driverId: null,
-      status: 'CANCELLED',
-      itemsJson: [],
-      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
-      totalCents: 50000,
-      currency: 'IDR',
-      notes: null,
-      version: 3,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    // Push PREPARING TANPA driverId — bukan accept flow
-    const record = makeOrderRecord({
-      baseVersion: 3,
-      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: undefined },
-    });
-    const ack = await service.applyOne(record.entityType, record);
-
-    expect(ack.status).toBe('rejected');
-    expect(ack.reason).toContain('Tidak bisa mengubah status');
-    expect(ack.reason).toContain('CANCELLED');
-    expect(ack.reason).toContain('PREPARING');
-    expect(prisma.order.upsert).not.toHaveBeenCalled();
-  });
-
-  it('Rule 1 regression: push PREPARING tanpa driverId dari PENDING → ditolak Rule 1', async () => {
-    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
-      id: 'order-validate-uuid',
-      customerId: 'customer-uuid',
-      driverId: null,
-      status: 'PENDING',
-      itemsJson: [],
-      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
-      totalCents: 50000,
-      currency: 'IDR',
-      notes: null,
-      version: 1,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-
-    // Push PREPARING TANPA driverId — bukan accept flow
-    const record = makeOrderRecord({
-      baseVersion: 1,
-      data: { ...makeOrderRecord().data, status: 'PREPARING', driverId: undefined },
-    });
-    const ack = await service.applyOne(record.entityType, record);
-
-    expect(ack.status).toBe('rejected');
-    expect(ack.reason).toContain('Tidak bisa mengubah status');
-    expect(ack.reason).toContain('PENDING');
-    expect(ack.reason).toContain('PREPARING');
-    expect(prisma.order.upsert).not.toHaveBeenCalled();
+    expect(ack.status).toBe('conflict');
+    expect(ack.serverVersion).toBe(9);
+    expect(ack.serverData).toBeDefined();
+    expect(prisma.order.update).not.toHaveBeenCalled();
   });
 });
 
