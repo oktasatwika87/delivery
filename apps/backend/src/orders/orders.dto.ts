@@ -1,5 +1,7 @@
 import {
   IsArray,
+  IsEnum,
+  IsInt,
   IsNotEmpty,
   IsNumber,
   IsObject,
@@ -10,6 +12,8 @@ import {
   ArrayMinSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+
+import { OrderStatus } from '@delivery/shared';
 
 /** Item dalam order. */
 export class OrderItemDto {
@@ -80,4 +84,25 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   notes?: string;
+}
+
+/**
+ * Request body untuk PATCH /orders/:id/status.
+ *
+ * Endpoint ini mempersempit — hanya menerima dua transisi:
+ * PREPARING → OUT_FOR_DELIVERY dan OUT_FOR_DELIVERY → DELIVERED,
+ * dilakukan driver pemilik order. ValidationPipe global di main.ts
+ * mengembalikan 400 untuk body yang tidak lolos aturan di sini.
+ *
+ * Status di sini adalah full OrderStatus enum (bukan hanya dua nilai yang
+ * diizinkan) — controller yang menyempitkan ke dua nilai, sehingga
+ * respons 403 untuk target lain seragam dengan pola cancel/reject.
+ */
+export class UpdateOrderStatusDto {
+  @IsEnum(OrderStatus, { message: 'status harus salah satu dari OrderStatus enum' })
+  status!: OrderStatus;
+
+  @IsInt({ message: 'version harus bilangan bulat' })
+  @Min(1, { message: 'version minimal 1' })
+  version!: number;
 }

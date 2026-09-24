@@ -89,3 +89,19 @@ export interface OrderCodCollectedPayload {
   currency: string;
   collectedAt: string;
 }
+
+/**
+ * order:status_updated — customer-targeted. Dipakai oleh PATCH /orders/:id/status
+ * untuk dua transisi yang sempit: PREPARING → OUT_FOR_DELIVERY
+ * dan OUT_FOR_DELIVERY → DELIVERED, dilakukan driver pemilik order. Customer
+ * room menerima event ini supaya OrderTrackingScreen tahu tanpa pull REST.
+ *
+ * Payload identik shape dengan OrderAcceptedPayload kecuali tanpa driverId
+ * (transisi ini tidak mengubah driver — driver yang sama dengan order.driverId).
+ */
+export interface OrderStatusUpdatedPayload {
+  orderId: string;
+  status: 'OUT_FOR_DELIVERY' | 'DELIVERED';
+  version: number;
+  updatedAt: string;
+}

@@ -313,4 +313,38 @@ describe('OrdersGateway', () => {
       jest.useRealTimers();
     });
   });
+
+  describe('emitOrderStatusUpdated', () => {
+    // Event baru untuk PATCH /orders/:id/status. Dipakai setelah transisi
+    // PREPARING→OUT_FOR_DELIVERY atau OUT_FOR_DELIVERY→DELIVERED sukses,
+    // dikirim ke customer room supaya OrderTrackingScreen tahu tanpa pull REST.
+    test('broadcasts to customerId room with order:status_updated payload', () => {
+      gateway.emitOrderStatusUpdated('customer-uuid', {
+        orderId: 'order-123',
+        status: 'OUT_FOR_DELIVERY',
+        version: 4,
+        updatedAt: '2026-09-24T08:00:00.000Z',
+      });
+
+      expect(mockServer.to).toHaveBeenCalledWith('customer-uuid');
+      expect(mockServer.emit).toHaveBeenCalledWith('order:status_updated', {
+        orderId: 'order-123',
+        status: 'OUT_FOR_DELIVERY',
+        version: 4,
+        updatedAt: '2026-09-24T08:00:00.000Z',
+      });
+    });
+
+    test('status field is the raw literal that comes in (not hardcoded)', () => {
+      gateway.emitOrderStatusUpdated('customer-uuid', {
+        orderId: 'order-456',
+        status: 'DELIVERED',
+        version: 7,
+        updatedAt: '2026-09-24T08:30:00.000Z',
+      });
+
+      const payload = mockServer.emit.mock.calls[0][1];
+      expect(payload.status).toBe('DELIVERED');
+    });
+  });
 });

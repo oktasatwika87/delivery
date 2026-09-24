@@ -16,6 +16,7 @@ import {
   type OrderRejectedPayload,
   type OrderCancelledPayload,
   type OrderCodCollectedPayload,
+  type OrderStatusUpdatedPayload,
 } from '@delivery/shared';
 
 /**
@@ -198,5 +199,17 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ): void {
     const payload: OrderUnavailablePayload = { orderId, reason };
     this.server.to(OrdersGateway.DRIVERS_AVAILABLE_ROOM).emit('order:unavailable', payload);
+  }
+
+  /**
+   * Emit event ke customer saat driver pemilik melakukan transisi status
+   * sempit via PATCH /orders/:id/status.
+   *
+   * Hanya dua transisi yang dipancarkan:
+   * PREPARING → OUT_FOR_DELIVERY dan OUT_FOR_DELIVERY → DELIVERED.
+   * Dipanggil tepat sekali per PATCH sukses (lihat OrdersService.transitionStatus).
+   */
+  emitOrderStatusUpdated(customerId: string, payload: OrderStatusUpdatedPayload): void {
+    this.server.to(customerId).emit('order:status_updated', payload);
   }
 }

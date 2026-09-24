@@ -1,8 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException, ForbiddenException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+  ConflictException,
+} from '@nestjs/common';
 import { PrismaClient, OrderStatusDb } from '@prisma/client';
 
 import {
-  ORDER_ALLOWED_TRANSITIONS,
   OrderStatus,
   type CreateOrderInput,
   type Order,
@@ -79,54 +84,116 @@ export class OrdersService {
     return this.toDomain(row);
   }
 
+  /**
+   * PATCH /orders/:id/status — driver pemilik order meng-update status.
+   * Hanya dua transisi yang diizinkan: PREPARING → OUT_FOR_DELIVERY dan
+   * OUT_FOR_DELIVERY → DELIVERED. Role check dilakukan di controller (lihat
+   * OrdersController.updateStatus).
+   *
+   * Urutan cek:
+   * 1. Order tidak ditemukan → 404 NotFound
+   * 2. userId !== order.driverId → 403 Forbidden
+   * 3. nextStatus bukan OUT_FOR_DELIVERY atau DELIVERED → 403 Forbidden
+   * 4. current.status tidak cocok dengan sumber yang diharapkan untuk
+   *    nextStatus → 409 INVALID_TRANSITION
+   *    (mis. DELIVERED diminta dari PREPARING, OUT_FOR_DELIVERY diminta
+   *    saat sudah OUT_FOR_DELIVERY)
+   * 5. Prisma update P2025 → 409 VERSION_CONFLICT
+   *
+   * Setelah sukses: emit order:status_updated ke customer room (satu kali).
+   * Tidak ada emitOrderUnavailable — dua transisi ini tidak pernah berasal
+   * dari pool, jadi order tidak pernah "leaving pool".
+   *
+   * Daftar transisi disimpan lokal di sini (bukan pakai
+   * ORDER_ALLOWED_TRANSITIONS shared) karena tabel shared masih memetakan
+   * transisi lama yang dipakai endpoint lain (accept, cancel, dll).
+   */
+  private static readonly PATCH_STATUS_ALLOWED_TARGETS: readonly OrderStatus[] = [
+    OrderStatus.OUT_FOR_DELIVERY,
+    OrderStatus.DELIVERED,
+  ];
+
+  /**
+   * Untuk setiap target yang diizinkan, sumber yang diharapkan. Disimpan
+   * sebagai Readonly<Partial<...>> karena OrderStatus union termasuk status
+   * yang tidak pernah jadi target PATCH (PENDING, PENDING, CONFIRMED, dll) —
+   * Partial<T> memungkinkan Record tanpa harus isi semua key secara literal.
+   */
+  private static readonly PATCH_STATUS_EXPECTED_SOURCE: Readonly<
+    Partial<Record<OrderStatus, OrderStatus>>
+  > = {
+    [OrderStatus.OUT_FOR_DELIVERY]: OrderStatus.PREPARING,
+    [OrderStatus.DELIVERED]: OrderStatus.OUT_FOR_DELIVERY,
+  };
+
+  /** Type guard: apakah s adalah salah satu target valid PATCH status. */
+  private static isPatchStatusTarget(
+    s: OrderStatus,
+  ): s is 'OUT_FOR_DELIVERY' | 'DELIVERED' {
+    return OrdersService.PATCH_STATUS_ALLOWED_TARGETS.includes(s);
+  }
+
   async transitionStatus(
     id: string,
-    nextStatus: string,
+    nextStatus: OrderStatus,
     expectedVersion: number,
     userId: string,
   ): Promise<Order> {
-    if (!(nextStatus in OrderStatus)) {
-      throw new BadRequestException(`Invalid status ${nextStatus}`);
-    }
     const current = await this.prisma.order.findUnique({ where: { id } });
     if (!current) throw new NotFoundException(`Order ${id} not found`);
 
-    // Validate ownership: customer atau driver boleh transition
-    if (current.customerId !== userId && current.driverId !== userId) {
+    // Cek 2: bukan driver order → 403
+    if (current.driverId !== userId) {
       throw new ForbiddenException('Not your order');
     }
 
-    const allowed = ORDER_ALLOWED_TRANSITIONS[current.status as unknown as OrderStatus];
-    if (!allowed.includes(nextStatus as OrderStatus)) {
-      throw new BadRequestException(
-        `Transition ${current.status} -> ${nextStatus} not allowed`,
+    // Cek 3: target bukan OUT_FOR_DELIVERY atau DELIVERED → 403
+    if (!OrdersService.isPatchStatusTarget(nextStatus)) {
+      throw new ForbiddenException(
+        'Status tujuan tidak diizinkan lewat endpoint ini',
       );
     }
 
-    const updated = await this.prisma.order.update({
-      where: { id, version: expectedVersion },
-      data: {
-        status: nextStatus as OrderStatusDb,
-        version: { increment: 1 },
-      },
-    });
-
-    // K9 (FIXUP A): pool entry broadcast hanya dari create()/releaseToPool()
-    // helpers (atomic with the row write). transitionStatus tidak lagi broadcast
-    // pool-entry — PATCH yang bump status ke ASSIGNED (mis. cron reassignment
-    // dari CONFIRMED) bukan sumber pool-item baru; query findAvailable()
-    // membaca status baris langsung, jadi row yang berubah sudah eligible
-    // pool tanpa perlu emit terpisah. Pool-exit (ASSIGNED ke status lain)
-    // tetap di-broadcast supaya driver yang pegang order lama tahu order
-    // sudah tidak tersedia.
-    const wasInPool = current.status === OrderStatusDb.ASSIGNED && current.driverId === null;
-    const isNowInPool = updated.status === OrderStatusDb.ASSIGNED && updated.driverId === null;
-    if (wasInPool && !isNowInPool) {
-      // Order keluar dari pool (di-assign driver, atau status berubah keluar ASSIGNED)
-      this.ordersGateway.emitOrderUnavailable(id, 'reassigned');
+    // Cek 4: sumber tidak cocok dengan target → 409 INVALID_TRANSITION
+    const expectedSource = OrdersService.PATCH_STATUS_EXPECTED_SOURCE[nextStatus];
+    if (current.status !== expectedSource) {
+      throw new ConflictException({
+        code: 'INVALID_TRANSITION',
+        message: `Tidak bisa transisi dari ${current.status} ke ${nextStatus}`,
+      });
     }
 
-    return this.toDomain(updated);
+    try {
+      const updated = await this.prisma.order.update({
+        where: { id, version: expectedVersion },
+        data: {
+          status: nextStatus as OrderStatusDb,
+          version: { increment: 1 },
+        },
+      });
+
+      // Emit ke customer — satu kali per PATCH sukses. Cek 3 di atas
+      // sudah menyempitkan nextStatus ke OUT_FOR_DELIVERY | DELIVERED.
+      this.ordersGateway.emitOrderStatusUpdated(current.customerId, {
+        orderId: updated.id,
+        status: nextStatus,
+        version: updated.version,
+        updatedAt: updated.updatedAt.toISOString(),
+      });
+
+      return this.toDomain(updated);
+    } catch (err) {
+      // Cek 5: OCC conflict → 409 VERSION_CONFLICT (pola sama dengan
+      // releaseToPool/acceptOrder).
+      const error = err as { code?: string };
+      if (error.code === 'P2025') {
+        throw new ConflictException({
+          code: 'VERSION_CONFLICT',
+          message: 'Order was modified by another request. Please refresh and try again.',
+        });
+      }
+      throw err;
+    }
   }
 
   /**

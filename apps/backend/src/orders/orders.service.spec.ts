@@ -47,6 +47,7 @@ describe('OrdersService', () => {
     emitOrderCancelled: jest.Mock;
     emitOrderAvailable: jest.Mock;
     emitOrderUnavailable: jest.Mock;
+    emitOrderStatusUpdated: jest.Mock;
   };
 
   // Test data
@@ -73,6 +74,7 @@ describe('OrdersService', () => {
       emitOrderCancelled: jest.fn(),
       emitOrderAvailable: jest.fn(),
       emitOrderUnavailable: jest.fn(),
+      emitOrderStatusUpdated: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -997,12 +999,16 @@ describe('OrdersService', () => {
 
   // ===== transitionStatus tests =====
 
+  // Endpoint PATCH /orders/:id/status dipersempit — hanya driver pemilik order
+  // yang boleh lakukan dua transisi: PREPARING→OUT_FOR_DELIVERY dan
+  // OUT_FOR_DELIVERY→DELIVERED. Sumber bukan PREPARING/OUT_FOR_DELIVERY,
+  // tujuan di luar dua itu, atau bukan driverId order → error.
   describe('transitionStatus()', () => {
-    function makeOrder(status: OrderStatusDb, driverId: string | null) {
+    function makeOrder(status: OrderStatusDb, driverIdValue: string | null) {
       return {
         id: orderId,
         customerId,
-        driverId,
+        driverId: driverIdValue,
         status,
         itemsJson: [],
         addressJson: {},
@@ -1017,71 +1023,306 @@ describe('OrdersService', () => {
       };
     }
 
-    // FIXUP A (target 2e82436): K9 single-pool-state. Pool entry (CONFIRMED
-    // → ASSIGNED + driverId null) lewat transitionStatus TIDAK lagi broadcast
-    // ke pool — broadcast hanya terjadi di create()/releaseToPool() helpers.
-    // Rationale: status ASSIGNED + driverId null adalah satu-satunya pool
-    // shape, dan create()/releaseToPool() sudah menanganinya atomically.
-    // PATCH endpoint yang bump status ke ASSIGNED (mis. cron reassignment
-    // dari CONFIRMED) tidak pernah menghasilkan pool-item baru — itu hanya
-    // mengubah status baris yang SUDAH eligible pool via query di findAvailable.
-    test('PATCH CONFIRMED→ASSIGNED via transitionStatus: TIDAK memanggil emitOrderAvailable', async () => {
+    // Tes lama yang DIUBAH: transisi CONFIRMED→ASSIGNED sebelumnya
+    // diizinkan, sekarang ditolak karena target ASSIGNED bukan OUT_FOR_DELIVERY
+    // atau DELIVERED → 403.
+    test('PATCH CONFIRMED→ASSIGNED → ditolak 403 karena target bukan salah satu dari OUT_FOR_DELIVERY/DELIVERED', async () => {
       const currentOrder = makeOrder(OrderStatusDb.CONFIRMED, null);
-      const updatedOrder = {
-        ...currentOrder,
-        status: OrderStatusDb.ASSIGNED,
-        version: version + 1,
-      };
-
       mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
-      mockPrisma.order.update.mockResolvedValue(updatedOrder);
 
-      const result = await service.transitionStatus(orderId, 'ASSIGNED', version, customerId);
+      let caught: unknown;
+      try {
+        await service.transitionStatus(orderId, 'ASSIGNED', version, driverId);
+      } catch (err) {
+        caught = err;
+      }
 
-      expect(result.status).toBe('ASSIGNED');
-      // Bukti fix: emitOrderAvailable TIDAK dipanggil saat transitionStatus
-      // bump status ke ASSIGNED. Broadcast pool hanya dari create()/
-      // releaseToPool() helpers.
+      expect(caught).toBeInstanceOf(ForbiddenException);
+      // Service TIDAK boleh panggil update ketika target invalid.
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
       expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
-      // emitOrderUnavailable hanya untuk leaving-pool; transisi CONFIRMED→
-      // ASSIGNED tidak lewat pool, jadi juga tidak emit unavailable.
       expect(mockGateway.emitOrderUnavailable).not.toHaveBeenCalled();
     });
 
-    test('order keluar pool (ASSIGNED→CANCELLED, driverId=null) → emitOrderUnavailable reassigned', async () => {
+    // Tes lama yang DIUBAH: transisi ASSIGNED→CANCELLED via transitionStatus
+    // Tes lama yang DIUBAH: transisi ASSIGNED→CANCELLED sebelumnya
+    // dianggap "order keluar pool". Sekarang CANCELLED bukan target yang
+    // diizinkan — endpoint cancel mid-delivery yang punya proper rejection
+    // (OrdersService.cancelOrder) tetap dipakai untuk itu.
+    test('PATCH ASSIGNED→CANCELLED → ditolak 403 karena target bukan salah satu dari OUT_FOR_DELIVERY/DELIVERED', async () => {
       const currentOrder = makeOrder(OrderStatusDb.ASSIGNED, null);
-      const updatedOrder = {
-        ...currentOrder,
-        status: OrderStatusDb.CANCELLED,
-        version: version + 1,
-      };
-
       mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
-      mockPrisma.order.update.mockResolvedValue(updatedOrder);
 
-      const result = await service.transitionStatus(orderId, 'CANCELLED', version, customerId);
+      let caught: unknown;
+      try {
+        await service.transitionStatus(orderId, 'CANCELLED', version, driverId);
+      } catch (err) {
+        caught = err;
+      }
 
-      expect(result.status).toBe('CANCELLED');
-      expect(mockGateway.emitOrderUnavailable).toHaveBeenCalledWith(orderId, 'reassigned');
-      expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
+      expect(caught).toBeInstanceOf(ForbiddenException);
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      expect(mockGateway.emitOrderUnavailable).not.toHaveBeenCalled();
     });
 
-    test('transisi tidak melibatkan pool (PREPARING→OUT_FOR_DELIVERY) → neither emit', async () => {
+    // Tes lama yang DIUBAH: PREPARING→OUT_FOR_DELIVERY sebelumnya hanya
+    // dites "tidak ada emit". Sekarang transisi ini sumber-tujuan cocok,
+    // TIDAK memanggil emitOrderUnavailable, TETAPI memanggil
+    // emitOrderStatusUpdated satu kali (event baru).
+    test('PREPARING→OUT_FOR_DELIVERY sukses: emit order:status_updated, tanpa emit unavailable', async () => {
       const currentOrder = makeOrder(OrderStatusDb.PREPARING, driverId);
       const updatedOrder = {
         ...currentOrder,
         status: OrderStatusDb.OUT_FOR_DELIVERY,
         version: version + 1,
       };
-
       mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
       mockPrisma.order.update.mockResolvedValue(updatedOrder);
 
       const result = await service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId);
 
       expect(result.status).toBe('OUT_FOR_DELIVERY');
-      expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: orderId, version },
+        data: expect.objectContaining({
+          status: OrderStatusDb.OUT_FOR_DELIVERY,
+          version: { increment: 1 },
+        }),
+      });
+      // Event baru: order:status_updated ke customer, sekali per PATCH sukses.
+      expect(mockGateway.emitOrderStatusUpdated).toHaveBeenCalledTimes(1);
+      expect(mockGateway.emitOrderStatusUpdated).toHaveBeenCalledWith(
+        customerId,
+        expect.objectContaining({
+          orderId,
+          status: 'OUT_FOR_DELIVERY',
+          version: version + 1,
+        }),
+      );
+      // Tidak boleh panggil unavailable (dua transisi ini bukan dari pool).
       expect(mockGateway.emitOrderUnavailable).not.toHaveBeenCalled();
+      expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
+    });
+
+    // Tes BARU — happy path kedua: OUT_FOR_DELIVERY→DELIVERED.
+    test('OUT_FOR_DELIVERY→DELIVERED sukses: emit order:status_updated, version naik', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.OUT_FOR_DELIVERY, driverId);
+      const updatedOrder = {
+        ...currentOrder,
+        status: OrderStatusDb.DELIVERED,
+        version: version + 1,
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+      mockPrisma.order.update.mockResolvedValue(updatedOrder);
+
+      const result = await service.transitionStatus(orderId, 'DELIVERED', version, driverId);
+
+      expect(result.status).toBe('DELIVERED');
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: orderId, version },
+        data: expect.objectContaining({
+          status: OrderStatusDb.DELIVERED,
+          version: { increment: 1 },
+        }),
+      });
+      expect(mockGateway.emitOrderStatusUpdated).toHaveBeenCalledTimes(1);
+      expect(mockGateway.emitOrderStatusUpdated).toHaveBeenCalledWith(
+        customerId,
+        expect.objectContaining({
+          orderId,
+          status: 'DELIVERED',
+          version: version + 1,
+        }),
+      );
+      expect(mockGateway.emitOrderUnavailable).not.toHaveBeenCalled();
+    });
+
+    // Tes BARU: chain PREPARING→OUT_FOR_DELIVERY→DELIVERED, masing-masing
+    // menaikkan versi dan memancarkan order:status_updated sekali.
+    test('PREPARING→OUT_FOR_DELIVERY lalu OUT_FOR_DELIVERY→DELIVERED: 2 emit, masing-masing naik satu versi', async () => {
+      const preparing = makeOrder(OrderStatusDb.PREPARING, driverId);
+      const outForDelivery = {
+        ...preparing,
+        status: OrderStatusDb.OUT_FOR_DELIVERY,
+        version: version + 1,
+      };
+      const delivered = {
+        ...outForDelivery,
+        status: OrderStatusDb.DELIVERED,
+        version: version + 2,
+      };
+
+      // Step 1: PREPARING → OUT_FOR_DELIVERY
+      mockPrisma.order.findUnique.mockResolvedValueOnce(preparing);
+      mockPrisma.order.update.mockResolvedValueOnce(outForDelivery);
+      const r1 = await service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId);
+      expect(r1.status).toBe('OUT_FOR_DELIVERY');
+
+      // Step 2: OUT_FOR_DELIVERY → DELIVERED (versi baru dari step 1)
+      mockPrisma.order.findUnique.mockResolvedValueOnce(outForDelivery);
+      mockPrisma.order.update.mockResolvedValueOnce(delivered);
+      const r2 = await service.transitionStatus(orderId, 'DELIVERED', version + 1, driverId);
+      expect(r2.status).toBe('DELIVERED');
+      expect(r2.version).toBe(version + 2);
+
+      expect(mockGateway.emitOrderStatusUpdated).toHaveBeenCalledTimes(2);
+      expect(mockGateway.emitOrderStatusUpdated).toHaveBeenNthCalledWith(
+        1,
+        customerId,
+        expect.objectContaining({ status: 'OUT_FOR_DELIVERY', version: version + 1 }),
+      );
+      expect(mockGateway.emitOrderStatusUpdated).toHaveBeenNthCalledWith(
+        2,
+        customerId,
+        expect.objectContaining({ status: 'DELIVERED', version: version + 2 }),
+      );
+    });
+
+    // Tes BARU — cek 2: order tidak ada → 404.
+    test('order tidak ditemukan → 404 NotFound', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId),
+      ).rejects.toThrow(NotFoundException);
+      await expect(
+        service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId),
+      ).rejects.toThrow(`Order ${orderId} not found`);
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    // Tes BARU — cek 3 (driver ownership): userId berbeda dari order.driverId → 403.
+    test('userId bukan driverId order → 403 Forbidden', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.PREPARING, driverId);
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+
+      await expect(
+        service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, anotherDriverId),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      expect(mockGateway.emitOrderStatusUpdated).not.toHaveBeenCalled();
+    });
+
+    // Tes BARU — cek 4: status tujuan bukan salah satu dari OUT_FOR_DELIVERY/DELIVERED → 403.
+    test.each([
+      ['PENDING'],
+      ['CONFIRMED'],
+      ['ASSIGNED'],
+      ['PREPARING'],
+      ['CANCELLED'],
+    ])('target %s → 403 Forbidden (bukan OUT_FOR_DELIVERY/DELIVERED)', async (target) => {
+      const currentOrder = makeOrder(OrderStatusDb.PREPARING, driverId);
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+
+      await expect(
+        service.transitionStatus(orderId, target, version, driverId),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    // Tes BARU — cek 5: DELIVERED diminta dari PREPARING (sumber seharusnya OUT_FOR_DELIVERY) → 409 INVALID_TRANSITION.
+    test('DELIVERED diminta saat source PREPARING → 409 INVALID_TRANSITION', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.PREPARING, driverId);
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+
+      let caught: unknown;
+      try {
+        await service.transitionStatus(orderId, 'DELIVERED', version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'INVALID_TRANSITION',
+      });
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    // Tes BARU — cek 5: OUT_FOR_DELIVERY diminta saat source sudah OUT_FOR_DELIVERY → 409 INVALID_TRANSITION.
+    test('OUT_FOR_DELIVERY diminta saat source sudah OUT_FOR_DELIVERY → 409 INVALID_TRANSITION', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.OUT_FOR_DELIVERY, driverId);
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+
+      let caught: unknown;
+      try {
+        await service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'INVALID_TRANSITION',
+      });
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    // Tes BARU — cek 5: transisi dari terminal (DELIVERED/CANCELLED) → 409 INVALID_TRANSITION.
+    test.each([['DELIVERED'], ['CANCELLED']])(
+      'transisi dari status %s → 409 INVALID_TRANSITION',
+      async (sourceStatus) => {
+        const currentOrder = makeOrder(sourceStatus as OrderStatusDb, driverId);
+        mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+
+        let caught: unknown;
+        try {
+          await service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId);
+        } catch (err) {
+          caught = err;
+        }
+
+        expect(caught).toBeInstanceOf(ConflictException);
+        const response = (caught as ConflictException).getResponse();
+        expect(response).toMatchObject({ code: 'INVALID_TRANSITION' });
+        expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      },
+    );
+
+    // Tes BARU — cek 6: P2025 (OCC) → 409 VERSION_CONFLICT.
+    test('OCC conflict (P2025) → 409 VERSION_CONFLICT', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.PREPARING, driverId);
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+
+      const prismaError = Object.assign(
+        new Error('Record to update not found.'),
+        { code: 'P2025', name: 'PrismaClientKnownRequestError' },
+      );
+      mockPrisma.order.update.mockRejectedValue(prismaError);
+
+      let caught: unknown;
+      try {
+        await service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'VERSION_CONFLICT',
+      });
+      // Tidak ada emit kalau update gagal.
+      expect(mockGateway.emitOrderStatusUpdated).not.toHaveBeenCalled();
+    });
+
+    // Tes BARU: order di pool (ASSIGNED, driverId null) bukan driver
+    // manapun → cek 2 gagal duluan, 403 Forbidden (bukan 409).
+    test('source ASSIGNED (driverId null) target OUT_FOR_DELIVERY → 403 (bukan driver order)', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.ASSIGNED, null);
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+
+      let caught: unknown;
+      try {
+        await service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ForbiddenException);
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
   });
 

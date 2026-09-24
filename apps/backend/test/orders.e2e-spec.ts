@@ -305,6 +305,221 @@ describe('Orders (e2e) - accept/reject', () => {
     });
   });
 
+  // PATCH /orders/:id/status — hanya driver owner yang boleh transisi
+  // PREPARING→OUT_FOR_DELIVERY atau OUT_FOR_DELIVERY→DELIVERED,
+  // dengan DTO + OCC.
+  describe('PATCH /orders/:id/status', () => {
+    // Helper: bikin order PREPARING dengan driver tertentu.
+    async function createOrderWithDriver(
+      id: string,
+      status: OrderStatusDb,
+      driverIdValue: string | null = driverUserId,
+    ) {
+      return prisma.order.upsert({
+        where: { id },
+        create: {
+          id,
+          customerId: customerUserId,
+          driverId: driverIdValue,
+          status,
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+        },
+        update: {},
+      });
+    }
+
+    test('200: driver pemilik PREPARING → OUT_FOR_DELIVERY, version naik', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f01';
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
+      try {
+        const resp = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'OUT_FOR_DELIVERY', version: 1 })
+          .expect(200);
+
+        expect(resp.body.status).toBe(OrderStatus.OUT_FOR_DELIVERY);
+        expect(resp.body.version).toBe(2);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('200: chain PREPARING → OUT_FOR_DELIVERY → DELIVERED, masing-masing naik satu versi', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f02';
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
+      try {
+        const r1 = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'OUT_FOR_DELIVERY', version: 1 })
+          .expect(200);
+        expect(r1.body.status).toBe(OrderStatus.OUT_FOR_DELIVERY);
+        expect(r1.body.version).toBe(2);
+
+        const r2 = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'DELIVERED', version: 2 })
+          .expect(200);
+        expect(r2.body.status).toBe(OrderStatus.DELIVERED);
+        expect(r2.body.version).toBe(3);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('403: customer pemilik → ditolak untuk semua target', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f03';
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
+      try {
+        for (const target of ['OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED']) {
+          await request(app.getHttpServer())
+            .patch(`/orders/${orderId}/status`)
+            .set('Authorization', `Bearer ${customerToken}`)
+            .send({ status: target, version: 1 })
+            .expect(403);
+        }
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('403: driver lain (bukan driverId order) → ditolak', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f04';
+      // Order ini dimiliki driverUserId. driver2UserId (driver lain) coba PATCH.
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING, driverUserId);
+      const driver2Token = generateToken(driver2UserId, UserRole.DRIVER);
+      try {
+        // driver2Token != driverUserId → 403
+        await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driver2Token}`)
+          .send({ status: 'OUT_FOR_DELIVERY', version: 1 })
+          .expect(403);
+        // Tetap 403 untuk target DELIVERED juga
+        await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driver2Token}`)
+          .send({ status: 'DELIVERED', version: 1 })
+          .expect(403);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('403: driver pemilik → target ASSIGNED/CANCELLED ditolak', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f05';
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
+      try {
+        for (const target of ['CANCELLED', 'ASSIGNED']) {
+          await request(app.getHttpServer())
+            .patch(`/orders/${orderId}/status`)
+            .set('Authorization', `Bearer ${driverToken}`)
+            .send({ status: target, version: 1 })
+            .expect(403);
+        }
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('400: tanpa version di body → 400 validasi', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f06';
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
+      try {
+        const resp = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'OUT_FOR_DELIVERY' })
+          .expect(400);
+        expect(resp.body.message).toEqual(expect.arrayContaining([expect.stringMatching(/version/)]));
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('400: status bukan enum OrderStatus → 400 validasi', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f07';
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
+      try {
+        await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'BOGUS_STATUS', version: 1 })
+          .expect(400);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('409 INVALID_TRANSITION: DELIVERED diminta saat source PREPARING', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f08';
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
+      try {
+        const resp = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'DELIVERED', version: 1 });
+        expect(resp.status).toBe(409);
+        expect(resp.body.code).toBe('INVALID_TRANSITION');
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('409 VERSION_CONFLICT: versi basi', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f09';
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
+      try {
+        // Order masih version 1, tapi kita kirim version 99
+        const resp = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'OUT_FOR_DELIVERY', version: 99 });
+        expect(resp.status).toBe(409);
+        expect(resp.body.code).toBe('VERSION_CONFLICT');
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('404: order tidak ada → 404', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f0a';
+      // Tidak membuat order
+      await request(app.getHttpServer())
+        .patch(`/orders/${orderId}/status`)
+        .set('Authorization', `Bearer ${driverToken}`)
+        .send({ status: 'OUT_FOR_DELIVERY', version: 1 })
+        .expect(404);
+    });
+
+    test('tidak ada event order:unavailable untuk transition ini', async () => {
+      // Regression guard: dua transisi PREPARING→OUT_FOR_DELIVERY dan
+      // OUT_FOR_DELIVERY→DELIVERED tidak pernah berasal dari pool,
+      // jadi transitionStatus tidak memanggil emitOrderUnavailable.
+      // Assertion ditegakkan via mock Gateway (lihat unit test) — di e2e
+      // cukup verifikasi endpoint sukses untuk transisi yang dulu allowed.
+      const orderId = 'e2e00000-0000-0000-0000-000000000f0b';
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
+      try {
+        const resp = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'OUT_FOR_DELIVERY', version: 1 })
+          .expect(200);
+        // Status pasti OUT_FOR_DELIVERY (bukan canceled/dll)
+        expect(resp.body.status).toBe(OrderStatus.OUT_FOR_DELIVERY);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+  });
+
   describe('cancel mid-delivery: driver cancel order', () => {
     test('driver cancel dari ASSIGNED - order balik ke pool (ASSIGNED + driverId null), bisa di-assign ulang', async () => {
       // Setup: buat order di ASSIGNED (tanpa driver), assign ke driver, lalu cancel

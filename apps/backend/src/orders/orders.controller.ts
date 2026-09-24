@@ -17,7 +17,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { OrdersService } from './orders.service';
 import { UserRole } from '@delivery/shared';
-import { CreateOrderDto } from './orders.dto';
+import { CreateOrderDto, UpdateOrderStatusDto } from './orders.dto';
 
 interface CancelOrderDto {
   version: number;
@@ -67,13 +67,31 @@ export class OrdersController {
     return this.ordersService.create(dto, userId);
   }
 
+  /**
+   * PATCH /orders/:id/status — driver pemilik order meng-update status
+   * order-nya. Hanya dua transisi yang diizinkan:
+   * PREPARING → OUT_FOR_DELIVERY dan OUT_FOR_DELIVERY → DELIVERED.
+   *
+   * Urutan cek penuh ada di OrdersService.transitionStatus doc comment.
+   * - DTO (status enum OrderStatus, version int min 1) → 400 oleh ValidationPipe global
+   * - role !== DRIVER → 403 di sini
+   * - Sisa cek (404/403/409) dilakukan di service
+   *
+   * POLA: throw ForbiddenException dengan kode generik ('Only drivers can
+   * update order status'), sama seperti handler cancel/reject — bukan
+   * bocor kode spesifik kenapa ditolak.
+   */
   @Patch(':id/status')
   updateStatus(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() body: { status: string; version: number },
+    @Body() dto: UpdateOrderStatusDto,
     @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: string,
   ) {
-    return this.ordersService.transitionStatus(id, body.status, body.version, userId);
+    if (role !== UserRole.DRIVER) {
+      throw new ForbiddenException('Only drivers can update order status');
+    }
+    return this.ordersService.transitionStatus(id, dto.status, dto.version, userId);
   }
 
   /**
