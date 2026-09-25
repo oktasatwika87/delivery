@@ -212,6 +212,10 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
 
   const { orderId } = route.params;
   const [order, setOrder] = useState<OrderModel | null>(null);
+  // findAndObserve mengirim ulang objek model yang sama setiap baris berubah, dan React
+  // melewati setState dengan referensi yang sama. Angka ini dinaikkan tiap data datang
+  // supaya layar tetap digambar ulang.
+  const [, setOrderRev] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -254,6 +258,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         subscription = collection.findAndObserve(orderId).subscribe({
           next: (record) => {
             setOrder(record);
+            setOrderRev((rev) => rev + 1);
             setIsLoading(false);
             setError(null);
           },

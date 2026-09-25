@@ -128,8 +128,12 @@ const mockOrder = {
   prepareUpdate: mockOrderPrepareUpdate,
 };
 
+// Callback next dari findAndObserve, supaya tes bisa mengirim ulang objek yang sama.
+let mockFindAndObserveNext: ((record: typeof mockOrder) => void) | null = null;
+
 const mockFindAndObserve = jest.fn(() => ({
-  subscribe: ({ next }: any) => {
+  subscribe: ({ next }: { next: (record: typeof mockOrder) => void }) => {
+    mockFindAndObserveNext = next;
     next(mockOrder);
     return { unsubscribe: jest.fn() };
   },
@@ -1548,5 +1552,57 @@ describe('driver status button behavior', () => {
       expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Status gagal diubah. Coba lagi.');
     });
     expect(mockOrderPrepareUpdate).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Tests: OrderDetail re-renders on same-object next() ───────────────────────
+// Bug: findAndObserve mengirim objek model yang SAMA setiap baris berubah, dan
+// setOrder(record) dengan referensi sama tidak memicu render ulang. Setelah
+// driver sukses ganti status PREPARING → OUT_FOR_DELIVERY (tulis baris lokal),
+// layar tetap menampilkan status lama sampai observer memicu render paksa.
+
+describe('OrderDetail re-renders when findAndObserve emits same object reference', () => {
+  let originalStatus: OrderStatus;
+  let originalDriverId: string | undefined;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    pendingActionsSubscriptionCallback = null;
+    mockFindAndObserveNext = null;
+    originalStatus = mockOrder.status;
+    originalDriverId = mockOrder.driverId;
+  });
+
+  afterEach(() => {
+    // Kembalikan nilai mockOrder supaya tidak mengganggu tes lain.
+    Object.assign(mockOrder, { status: originalStatus, driverId: originalDriverId });
+  });
+
+  test('status PREPARING → OUT_FOR_DELIVERY via next() yang sama: Mulai antar hilang, Terima Cash tampil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+
+    // Ubah status objek YANG SAMA jadi OUT_FOR_DELIVERY (referensi tidak berubah).
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    // next() dipanggil lagi dengan objek yang sama (di dalam act supaya state flush).
+    await act(async () => {
+      mockFindAndObserveNext?.(mockOrder);
+    });
+
+    // Layar harus ikut berubah: tombol Mulai antar hilang, Terima Cash (COD) tampil.
+    await waitFor(() => {
+      expect(queryByText('Mulai antar')).toBeNull();
+    });
+    await waitFor(() => {
+      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+    });
   });
 });
