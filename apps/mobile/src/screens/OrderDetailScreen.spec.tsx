@@ -8,6 +8,37 @@ import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 
 import { OrderDetailScreen } from './OrderDetailScreen';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
+import { ApiError } from '../sync/client';
+import { networkMonitor } from '../map/networkMonitor';
+import type { NetworkStatus } from '../map/networkMonitor';
+
+// ─── Client mocks ───────────────────────────────────────────────────────────────
+const mockUpdateOrderStatus = jest.fn();
+const mockGetOrderById = jest.fn();
+
+jest.mock('../sync/client', () => {
+  const actual = jest.requireActual('../sync/client') as typeof import('../sync/client');
+  return {
+    ...actual,
+    updateOrderStatus: (...args: unknown[]) => mockUpdateOrderStatus(...args),
+    getOrderById: (...args: unknown[]) => mockGetOrderById(...args),
+  };
+});
+
+// ─── networkMonitor mock ────────────────────────────────────────────────────────
+// mockGetStatusFn is module-level so the spy (created after jest.mock runs) can
+// still reference it. See ordersSocket.spec.ts pattern.
+var mockGetStatusFn = jest.fn(() => 'online');
+
+jest.mock('../map/networkMonitor', () => ({
+  networkMonitor: {
+    getStatus: () => mockGetStatusFn(),
+    subscribe: jest.fn((cb: (s: NetworkStatus) => void) => {
+      cb('online');
+      return () => {};
+    }),
+  },
+}));
 
 jest.mock('react-native', () => {
   const actual = jest.requireActual('react-native');
@@ -36,7 +67,21 @@ const mockEnqueueCollectCod = jest.fn();
 const mockHasPendingAction = jest.fn();
 const mockDrainPendingActions = jest.fn();
 const mockGetPendingActionsForOrder = jest.fn();
-const mockIsPendingActionStale = jest.fn();
+// Inline implementasi isPendingActionStale (sama dengan outbox.ts) supaya tes stale akurat
+// tanpa perlu jest.requireActual yang bisa gagal karena native module.
+const STALE_THRESHOLD_MS = 60 * 60 * 1000;
+// Minimal shape pending action buat test mock — hanya field yang dipakai tes.
+interface MockPendingAction {
+  id: string;
+  createdAt: Date | number | string;
+}
+function computeIsPendingActionStale(action: MockPendingAction | null | undefined): boolean {
+  if (!action?.createdAt) return false;
+  const createdAt = action.createdAt;
+  const timestamp = createdAt instanceof Date ? createdAt.getTime() : Number(createdAt);
+  return Date.now() - timestamp > STALE_THRESHOLD_MS;
+}
+const mockIsPendingActionStale = jest.fn().mockImplementation(computeIsPendingActionStale);
 
 // NOTE: __esModule: true is required here — OrderDetailScreen.tsx uses a
 // dynamic `await import('../sync/outbox')` for drainPendingActions (to avoid
@@ -61,6 +106,7 @@ interface MockOrderItem {
   unitPriceCents: number;
 }
 const mockOrderUpdate = jest.fn();
+let mockOrderPrepareUpdate = jest.fn();
 const mockOrder = {
   id: 'order-123',
   driverId: 'driver-456',
@@ -75,6 +121,10 @@ const mockOrder = {
   createdAt: new Date(),
   updatedAt: new Date(),
   update: mockOrderUpdate,
+  _getRaw: jest.fn().mockReturnValue({}),
+  _setRaw: jest.fn(),
+  _raw: { _status: 'synced', _changed: '' },
+  prepareUpdate: mockOrderPrepareUpdate,
 };
 
 const mockFindAndObserve = jest.fn(() => ({
@@ -88,6 +138,10 @@ const mockFindAndObserve = jest.fn(() => ({
 const mockPayments: any[] = [];
 let paymentsSubscriptionCallback: ((payments: any[]) => void) | null = null;
 let mockPaymentsQuery: any = null;
+
+// Mock pending_actions for observe
+const mockPendingActions: MockPendingAction[] = [];
+let pendingActionsSubscriptionCallback: ((actions: MockPendingAction[]) => void) | null = null;
 
 const mockPaymentsCollection: any = {
   query: jest.fn().mockImplementation((_query: any) => {
@@ -115,16 +169,41 @@ const mockPaymentsCollection: any = {
   }),
 };
 
+// Mock pending_actions collection — observe terpanggil saat komponen mount
+const mockPendingActionsCollection: { query: jest.Mock } = {
+  query: jest.fn().mockImplementation((_query: unknown) => ({
+    observe: jest.fn().mockReturnValue({
+      subscribe: jest.fn().mockImplementation(({ next }: { next: (actions: MockPendingAction[]) => void }) => {
+        pendingActionsSubscriptionCallback = next;
+        next([...mockPendingActions]);
+        return { unsubscribe: jest.fn() };
+      }),
+    }),
+  })),
+};
+
+// Mock order untuk prepareUpdate dalam database.write
+const mockOrdersCollection: { findAndObserve: typeof mockFindAndObserve; find: jest.Mock } = {
+  findAndObserve: mockFindAndObserve,
+  find: jest.fn().mockImplementation(() => Promise.resolve({
+    ...mockOrder,
+    _getRaw: mockOrder._getRaw,
+    prepareUpdate: mockOrderPrepareUpdate,
+  })),
+};
+
+const mockDatabaseBatch = jest.fn();
 const mockDatabase: any = {
   get: (name: string) => {
     if (name === 'payments') return mockPaymentsCollection;
-    return { findAndObserve: mockFindAndObserve };
+    return mockOrdersCollection;
   },
   write: async (fn: () => Promise<void>) => {
     // Simulate async database write - allows state to update between calls
     await new Promise<void>((resolve) => setImmediate(() => resolve()));
     await fn();
   },
+  batch: (...args: unknown[]) => mockDatabaseBatch(...args),
 };
 
 jest.mock('@nozbe/watermelondb/react', () => ({ withDatabase: (C: any) => C }));
@@ -147,6 +226,13 @@ describe('cancel button visibility', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockUpdateOrderStatus.mockReset();
+    mockGetOrderById.mockReset();
+    mockOrderPrepareUpdate.mockReset();
+    mockOrderPrepareUpdate.mockImplementation(function(this: OrderModel, fn: (r: OrderModel) => void) {
+      fn(this);
+      return this;
+    });
   });
 
   test('appears for ASSIGNED status with matching driver', async () => {
@@ -795,9 +881,8 @@ describe('Stale Pending Action Banner', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetCurrentUserId.mockResolvedValue('driver-456');
-    mockHasPendingAction.mockResolvedValue(false);
-    mockGetPendingActionsForOrder.mockResolvedValue([]);
-    mockIsPendingActionStale.mockReturnValue(false);
+    mockPendingActions.length = 0;
+    pendingActionsSubscriptionCallback = null;
   });
 
   test('shows normal pending banner when pending action is fresh', async () => {
@@ -909,5 +994,408 @@ describe('Item price display', () => {
 
     const totalPriceEls = getAllByText(/Rp\s50\.000/);
     expect(totalPriceEls.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ─── Tests: Driver Status Button Visibility ─────────────────────────────────
+
+describe('driver status button visibility', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockUpdateOrderStatus.mockReset();
+    mockGetOrderById.mockReset();
+    mockOrderPrepareUpdate.mockReset();
+    mockOrderPrepareUpdate.mockImplementation(function(this: OrderModel, fn: (r: OrderModel) => void) {
+      fn(this);
+      return this;
+    });
+    mockHasPendingAction.mockResolvedValue(false);
+    mockPayments.length = 0;
+  });
+
+  test('appears for PREPARING status with matching driver and no pending', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+  });
+
+  test('appears for OUT_FOR_DELIVERY status with matching driver and no pending', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+  });
+
+  test('NOT shown for ASSIGNED status', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Mulai antar')).toBeNull();
+      expect(queryByText('Selesai diantar')).toBeNull();
+    });
+  });
+
+  test('NOT shown for DELIVERED status', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.DELIVERED, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Mulai antar')).toBeNull();
+      expect(queryByText('Selesai diantar')).toBeNull();
+    });
+  });
+
+  test('NOT shown when driverId does not match current user', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'other-driver' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Mulai antar')).toBeNull();
+    });
+  });
+
+  test('NOT shown when hasPending', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    mockHasPendingAction.mockResolvedValue(true);
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Mulai antar')).toBeNull();
+    });
+  });
+});
+
+// ─── Tests: Driver Status Button Behavior ───────────────────────────────────
+
+describe('driver status button behavior', () => {
+  let alertSpy: jest.SpyInstance;
+  let nmSubscribeSpy: jest.SpyInstance | undefined;
+
+  beforeEach(() => {
+    alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockUpdateOrderStatus.mockReset();
+    mockGetOrderById.mockReset();
+    mockOrderPrepareUpdate.mockReset();
+    mockOrderPrepareUpdate.mockImplementation(function(this: OrderModel, fn: (r: OrderModel) => void) {
+      fn(this);
+      return this;
+    });
+    mockHasPendingAction.mockResolvedValue(false);
+    mockDatabaseBatch.mockReset();
+    mockPayments.length = 0;
+  });
+
+  afterEach(() => {
+    alertSpy.mockRestore();
+    nmSubscribeSpy?.mockRestore();
+    nmSubscribeSpy = undefined;
+    mockGetStatusFn.mockReset();
+    mockGetStatusFn.mockReturnValue('online');
+  });
+
+  test('offline: button nonaktif dengan pesan', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
+    // Subscribe fires synchronously so isOnline=true from the start → button enabled.
+    nmSubscribeSpy = jest.spyOn(networkMonitor, 'subscribe').mockImplementation((cb: (s: NetworkStatus) => void) => {
+      cb('online');
+      return () => {};
+    });
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+    // Press main button → confirmation alert fires
+    await act(async () => {
+      fireEvent.press(getByText('Mulai antar'));
+    });
+    // Extract "Ya" button from confirmation alert, set getStatus='offline', press Ya
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+    // Set offline BEFORE pressing Ya so offline guard fires inside onPress
+    mockGetStatusFn.mockReturnValue('offline');
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+    expect(Alert.alert).toHaveBeenLastCalledWith(
+      'Butuh Koneksi',
+      'Status hanya bisa diubah saat ada koneksi internet.',
+    );
+  });
+
+  test('sukses: updateOrderStatus dipanggil dengan server_version baris', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 3 });
+    mockUpdateOrderStatus.mockResolvedValue({
+      id: 'order-123',
+      status: 'OUT_FOR_DELIVERY',
+      version: 4,
+      updatedAt: '2026-09-25T12:00:00.000Z',
+    });
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Mulai antar'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    expect(mockUpdateOrderStatus).toHaveBeenCalledWith('order-123', 'OUT_FOR_DELIVERY', 3);
+  });
+
+  test('sukses: prepareUpdate dipanggil, baris ditandai synced dan _changed kosong', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
+    mockUpdateOrderStatus.mockResolvedValue({
+      id: 'order-123',
+      status: 'OUT_FOR_DELIVERY',
+      version: 2,
+      updatedAt: '2026-09-25T12:00:00.000Z',
+    });
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Mulai antar'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    await waitFor(() => {
+      expect(mockOrderPrepareUpdate).toHaveBeenCalled();
+    });
+
+    // database.batch dipanggil dengan hasil prepareUpdate
+    await waitFor(() => {
+      expect(mockDatabaseBatch).toHaveBeenCalled();
+    });
+    expect(mockDatabaseBatch.mock.calls[0][0]).toBeDefined();
+    expect(typeof mockDatabaseBatch.mock.calls[0][0]).toBe('object');
+
+    // Verifikasi prepareUpdate cb mem-set _raw dengan benar
+    const updateCb = mockOrderPrepareUpdate.mock.calls[0][0];
+    const recordMock = { _setRaw: jest.fn(), _raw: { _status: '', _changed: '' } };
+    updateCb(recordMock);
+    expect(recordMock._setRaw).toHaveBeenCalledWith('status', 'OUT_FOR_DELIVERY');
+    expect(recordMock._setRaw).toHaveBeenCalledWith('server_version', 2);
+    expect(recordMock._raw._status).toBe('synced');
+    expect(recordMock._raw._changed).toBe('');
+    expect(recordMock._setRaw).toHaveBeenCalledWith('updated_at', Date.parse('2026-09-25T12:00:00.000Z'));
+    expect(recordMock._setRaw).toHaveBeenCalledWith('last_conflict_reason', '');
+    expect(recordMock._setRaw).toHaveBeenCalledWith('last_conflict_at', null);
+  });
+
+  test('409 VERSION_CONFLICT: pesan K8 muncul dan GET dipanggil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
+
+    mockUpdateOrderStatus.mockImplementationOnce(() =>
+      Promise.reject(new ApiError('conflict', 409, 'VERSION_CONFLICT', { code: 'VERSION_CONFLICT' })),
+    );
+    mockGetOrderById.mockResolvedValue({
+      id: 'order-123',
+      status: 'OUT_FOR_DELIVERY',
+      version: 2,
+      updatedAt: '2026-09-25T12:00:00.000Z',
+    });
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Mulai antar'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    await waitFor(() => {
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Order sudah berubah, data diperbarui.',
+        undefined,
+        [{ text: 'OK' }],
+      );
+    });
+    expect(mockGetOrderById).toHaveBeenCalledWith('order-123');
+    // database.batch dipanggil dengan hasil prepareUpdate dari refreshed GET
+    await waitFor(() => {
+      expect(mockDatabaseBatch).toHaveBeenCalled();
+    });
+    // verify updated_at dan last_conflict_at dari refreshed GET
+    expect(mockOrder._setRaw).toHaveBeenCalledWith('updated_at', Date.parse('2026-09-25T12:00:00.000Z'));
+    expect(mockOrder._setRaw).toHaveBeenCalledWith('last_conflict_reason', '');
+    expect(mockOrder._setRaw).toHaveBeenCalledWith('last_conflict_at', null);
+  });
+
+  test('409 INVALID_TRANSITION: pesan K8 muncul dan GET dipanggil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
+
+    mockUpdateOrderStatus.mockImplementationOnce(() =>
+      Promise.reject(new ApiError('conflict', 409, 'INVALID_TRANSITION', { code: 'INVALID_TRANSITION' })),
+    );
+    mockGetOrderById.mockResolvedValue({
+      id: 'order-123',
+      status: 'OUT_FOR_DELIVERY',
+      version: 2,
+      updatedAt: '2026-09-25T12:00:00.000Z',
+    });
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Mulai antar'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    await waitFor(() => {
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Order sudah berubah, data diperbarui.',
+        undefined,
+        [{ text: 'OK' }],
+      );
+    });
+    expect(mockGetOrderById).toHaveBeenCalledWith('order-123');
+    // database.batch dipanggil dengan hasil prepareUpdate dari refreshed GET
+    await waitFor(() => {
+      expect(mockDatabaseBatch).toHaveBeenCalled();
+    });
+    // verify updated_at dan last_conflict_at dari refreshed GET
+    expect(mockOrder._setRaw).toHaveBeenCalledWith('updated_at', Date.parse('2026-09-25T12:00:00.000Z'));
+    expect(mockOrder._setRaw).toHaveBeenCalledWith('last_conflict_reason', '');
+    expect(mockOrder._setRaw).toHaveBeenCalledWith('last_conflict_at', null);
+  });
+
+  test('403: pesan muncul, baris tidak ditulis, GET tidak dipanggil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
+    mockUpdateOrderStatus.mockImplementationOnce(() =>
+      Promise.reject(new ApiError('Forbidden', 403, undefined, undefined)),
+    );
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Mulai antar'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    await waitFor(() => {
+      expect(Alert.alert).toHaveBeenCalledWith(
+        'Order ini sudah tidak ditugaskan ke Anda.',
+        undefined,
+        [{ text: 'OK' }],
+      );
+    });
+    expect(mockGetOrderById).not.toHaveBeenCalled();
+    expect(mockOrderPrepareUpdate).not.toHaveBeenCalled();
+  });
+
+  test('500: pesan gagal umum, baris tidak ditulis', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
+    mockUpdateOrderStatus.mockImplementationOnce(() =>
+      Promise.reject(new ApiError('Internal Server Error', 500)),
+    );
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Mulai antar'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    await waitFor(() => {
+      expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Status gagal diubah. Coba lagi.');
+    });
+    expect(mockOrderPrepareUpdate).not.toHaveBeenCalled();
+  });
+
+  test('error jaringan: pesan gagal umum, baris tidak ditulis', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
+    mockUpdateOrderStatus.mockRejectedValue(new Error('Network request failed'));
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Mulai antar'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    await waitFor(() => {
+      expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Status gagal diubah. Coba lagi.');
+    });
+    expect(mockOrderPrepareUpdate).not.toHaveBeenCalled();
   });
 });

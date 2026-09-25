@@ -22,6 +22,8 @@ import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
 import { enqueueCancel, enqueueCollectCod, hasPendingAction, drainPendingActions, isPendingActionStale, getPendingActionsForOrder } from '../sync/outbox';
+import { updateOrderStatus, getOrderById, ApiError } from '../sync/client';
+import { networkMonitor } from '../map/networkMonitor';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -222,9 +224,18 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [isPendingStale, setIsPendingStale] = useState(false);
   // Use ref for synchronous inflight guard (state updates are async, refs are sync)
   const inflightCollectRef = useRef(false);
+  const inflightStatusRef = useRef(false);
+  const [isOnline, setIsOnline] = useState(networkMonitor.getStatus() === 'online');
 
   useEffect(() => {
     getCurrentUserId().then(setCurrentUserId);
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = networkMonitor.subscribe((status) => {
+      setIsOnline(status === 'online');
+    });
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -373,6 +384,137 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     if (!currentUserId || order.driverId !== currentUserId) return false;
     if (hasCodPayment) return false;
     return true;
+  };
+
+  /**
+   * Check if driver status button should be shown.
+   * Shows for PREPARING → OUT_FOR_DELIVERY or OUT_FOR_DELIVERY → DELIVERED
+   * transitions, assigned to current driver, with no pending action.
+   */
+  const canUpdateStatus = (order: OrderModel): boolean => {
+    if (
+      order.status !== OrderStatus.PREPARING &&
+      order.status !== OrderStatus.OUT_FOR_DELIVERY
+    ) return false;
+    if (!currentUserId || order.driverId !== currentUserId) return false;
+    return true;
+  };
+
+  /**
+   * Handle driver status update (PREPARING→OUT_FOR_DELIVERY, OUT_FOR_DELIVERY→DELIVERED).
+   * Online-only, direct API call with OCC.
+   */
+  const handleUpdateStatus = async (orderToUpdate: OrderModel) => {
+    const nextStatus =
+      orderToUpdate.status === OrderStatus.PREPARING
+        ? OrderStatus.OUT_FOR_DELIVERY
+        : OrderStatus.DELIVERED;
+    const alertTitle =
+      orderToUpdate.status === OrderStatus.PREPARING
+        ? 'Mulai Antar'
+        : 'Selesai diantar';
+    const alertBody =
+      orderToUpdate.status === OrderStatus.PREPARING
+        ? 'Tandai order ini sedang dalam perjalanan?'
+        : 'Tandai order ini sudah selesai diantar?';
+
+    Alert.alert(alertTitle, alertBody, [
+      { text: 'Batal', style: 'cancel' },
+      {
+        text: 'Ya',
+        onPress: async () => {
+          if (inflightStatusRef.current) return;
+          if (networkMonitor.getStatus() !== 'online') {
+            Alert.alert(
+              'Butuh Koneksi',
+              'Status hanya bisa diubah saat ada koneksi internet.',
+            );
+            return;
+          }
+          inflightStatusRef.current = true;
+          try {
+            const result = await updateOrderStatus(
+              orderToUpdate.id,
+              nextStatus,
+              orderToUpdate.serverVersion,
+            );
+            // Tulis row dari respons server
+            await database.write(async () => {
+              const collection = database.get<OrderModel>('orders');
+              const row = await collection.find(orderToUpdate.id);
+              await database.batch(
+                row.prepareUpdate((r) => {
+                  r._setRaw('status', result.status);
+                  r._setRaw('server_version', result.version);
+                  r._setRaw('updated_at', Date.parse(result.updatedAt));
+                  if (result.driverId !== undefined) {
+                    r._setRaw('driver_id', result.driverId ?? '');
+                  }
+                  if (result.cancelledBy !== undefined) {
+                    r._setRaw('cancelled_by', result.cancelledBy ?? '');
+                  }
+                  if (result.cancelReason !== undefined) {
+                    r._setRaw('cancel_reason', result.cancelReason ?? '');
+                  }
+                  r._setRaw('last_conflict_reason', '');
+                  r._setRaw('last_conflict_at', null);
+                  r._raw._status = 'synced';
+                  r._raw._changed = '';
+                }),
+              );
+            });
+          } catch (err) {
+            if (err instanceof ApiError && err.status === 409) {
+              Alert.alert(
+                'Order sudah berubah, data diperbarui.',
+                undefined,
+                [{ text: 'OK' }],
+              );
+              // GET /orders/:id lalu tulis row dari respons
+              try {
+                const refreshed = await getOrderById(orderToUpdate.id);
+                await database.write(async () => {
+                  const collection = database.get<OrderModel>('orders');
+                  const row = await collection.find(orderToUpdate.id);
+                  await database.batch(
+                    row.prepareUpdate((r) => {
+                      r._setRaw('status', refreshed.status);
+                      r._setRaw('server_version', refreshed.version);
+                      r._setRaw('updated_at', Date.parse(refreshed.updatedAt));
+                      if (refreshed.driverId !== undefined) {
+                        r._setRaw('driver_id', refreshed.driverId ?? '');
+                      }
+                      if (refreshed.cancelledBy !== undefined) {
+                        r._setRaw('cancelled_by', refreshed.cancelledBy ?? '');
+                      }
+                      if (refreshed.cancelReason !== undefined) {
+                        r._setRaw('cancel_reason', refreshed.cancelReason ?? '');
+                      }
+                      r._setRaw('last_conflict_reason', '');
+                      r._setRaw('last_conflict_at', null);
+                      r._raw._status = 'synced';
+                      r._raw._changed = '';
+                    }),
+                  );
+                });
+              } catch {
+                // GET gagal — row tidak diubah
+              }
+            } else if (err instanceof ApiError && err.status === 403) {
+              Alert.alert(
+                'Order ini sudah tidak ditugaskan ke Anda.',
+                undefined,
+                [{ text: 'OK' }],
+              );
+            } else {
+              Alert.alert('Gagal', 'Status gagal diubah. Coba lagi.');
+            }
+          } finally {
+            inflightStatusRef.current = false;
+          }
+        },
+      },
+    ]);
   };
 
   /**
@@ -628,6 +770,29 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         </TouchableOpacity>
       )}
 
+      {/* Driver Status Button — PREPARING→OUT_FOR_DELIVERY or OUT_FOR_DELIVERY→DELIVERED.
+          Visible only for assigned driver with no pending action.
+          Disabled when offline or request in flight. */}
+      {order && currentUserId && canUpdateStatus(order) && !hasPending && (
+        <TouchableOpacity
+          style={[
+            styles.statusButton,
+            (!isOnline || inflightStatusRef.current) && styles.statusButtonDisabled,
+          ]}
+          onPress={() => handleUpdateStatus(order)}
+          disabled={!isOnline || inflightStatusRef.current}
+        >
+          <Text
+            style={[
+              styles.statusButtonText,
+              (!isOnline || inflightStatusRef.current) && styles.statusButtonTextDisabled,
+            ]}
+          >
+            {order.status === OrderStatus.PREPARING ? 'Mulai antar' : 'Selesai diantar'}
+          </Text>
+        </TouchableOpacity>
+      )}
+
       <View style={styles.bottomSpacer} />
     </ScrollView>
   );
@@ -781,6 +946,25 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  statusButton: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    backgroundColor: '#2563eb',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  statusButtonDisabled: {
+    backgroundColor: '#a1a1aa',
+  },
+  statusButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  statusButtonTextDisabled: {
+    color: '#d4d4d8',
   },
   bottomSpacer: {
     height: 24,
