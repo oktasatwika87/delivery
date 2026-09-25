@@ -16,12 +16,13 @@ import type { Database } from '@nozbe/watermelondb';
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
 import { PaymentModel } from '../db/models/PaymentModel';
+import { PendingActionModel } from '../db/models/PendingActionModel';
 import { formatCurrency } from '../formatCurrency';
 import { getCurrentUserId } from '../sync/session';
 import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
-import { enqueueCancel, enqueueCollectCod, hasPendingAction, drainPendingActions, isPendingActionStale, getPendingActionsForOrder } from '../sync/outbox';
+import { enqueueCancel, enqueueCollectCod, drainPendingActions, isPendingActionStale } from '../sync/outbox';
 import { updateOrderStatus, getOrderById, ApiError } from '../sync/client';
 import { networkMonitor } from '../map/networkMonitor';
 
@@ -220,8 +221,11 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [conflictEvent, setConflictEvent] = useState<OrderConflictEvent | null>(null);
   // Skenario A: dismiss state untuk LastConflictBanner (persisted signal)
   const [lastConflictDismissed, setLastConflictDismissed] = useState(false);
+  // Observe pending_actions untuk banner reaktif — berubah/hilang sendiri
+  const [pendingActions, setPendingActions] = useState<PendingActionModel[]>([]);
+  // hasPending: sumber utama dari observe. observe bikin tombol reaktif —
+  // nonaktif saat ada pending, aktif lagi saat pending dihapus dari outbox.
   const [hasPending, setHasPending] = useState(false);
-  const [isPendingStale, setIsPendingStale] = useState(false);
   // Use ref for synchronous inflight guard (state updates are async, refs are sync)
   const inflightCollectRef = useRef(false);
   const inflightStatusRef = useRef(false);
@@ -331,31 +335,39 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     };
   }, [orderId, order?.status]);
 
-  // Check for pending actions on mount and when orderId changes
+  // Observe pending_actions untuk banner reaktif — berubah/hilang sendiri
   useEffect(() => {
     if (!orderId) return;
-    let cancelled = false;
-    const checkPending = async () => {
-      try {
-        const pending = await hasPendingAction(orderId);
-        if (cancelled) return;
-        setHasPending(pending);
+    let subscription: { unsubscribe: () => void } | null = null;
 
-        // Also check if pending action is stale
-        if (pending) {
-          const actions = await getPendingActionsForOrder(orderId);
-          const stale = actions.some(isPendingActionStale);
-          if (!cancelled) setIsPendingStale(stale);
-        } else {
-          if (!cancelled) setIsPendingStale(false);
-        }
+    const subscribe = async () => {
+      try {
+        subscription = database
+          .get<PendingActionModel>('pending_actions')
+          .query(Q.where('target_order_id', orderId))
+          .observe()
+          .subscribe({
+            next: (actions) => {
+              setPendingActions(actions);
+              setHasPending(actions.length > 0);
+            },
+            error: (err) => {
+              console.warn('[OrderDetail] pending_actions observe error:', err);
+            },
+          });
       } catch (err) {
-        console.warn('[OrderDetail] failed to check pending action:', err);
+        console.warn('[OrderDetail] failed to observe pending_actions:', err);
       }
     };
-    checkPending();
-    return () => { cancelled = true; };
-  }, [orderId]);
+
+    subscribe();
+    return () => {
+      subscription?.unsubscribe();
+    };
+  }, [database, orderId]);
+
+  // isPendingStale: turunan pendingActions — banner stale reaktif dari observe.
+  const isPendingStale = pendingActions.some((a) => isPendingActionStale(a));
 
   /**
    * Check if the current driver can cancel this order.
@@ -543,7 +555,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
               }
               // Optimistic UI: show as collected immediately
               setHasCodPayment(true);
-              setHasPending(true);
+              // hasPending datang dari observe pending_actions — jangan set manual di sini.
+              // Pencegah double-tap pakai inflightCollectRef.
               // Try to drain immediately in case we're already online — the
               // coordinator's own drain only fires on an offline->online
               // transition, so an action enqueued while already online would
@@ -594,8 +607,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
                 Alert.alert('Gagal', result.error ?? 'Tidak bisa membatalkan order. Coba lagi.');
                 return;
               }
-              // Optimistic UI: order stays visible, pending indicator shows sync status
-              setHasPending(true);
+              // hasPending datang dari observe pending_actions — jangan set manual di sini.
+              // Pencegah double-tap pakai inflightCollectRef (shared dengan COD).
               // Try to drain immediately in case we're already online — the
               // coordinator's own drain only fires on an offline->online
               // transition, so an action enqueued while already online would
@@ -732,21 +745,25 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         </Text>
       </View>
 
-      {/* Chat Button */}
-      <TouchableOpacity
-        style={styles.chatButton}
-        onPress={() => navigation.navigate('Chat', { roomId: order.id })}
-      >
-        <Text style={styles.chatButtonText}>Chat dengan Kurir / Customer</Text>
-      </TouchableOpacity>
+      {/* Chat Button — hanya untuk driver yang ditugaskan ke order ini */}
+      {order && currentUserId && order.driverId === currentUserId && (
+        <TouchableOpacity
+          style={styles.chatButton}
+          onPress={() => navigation.navigate('Chat', { roomId: order.id })}
+        >
+          <Text style={styles.chatButtonText}>Chat dengan Kurir / Customer</Text>
+        </TouchableOpacity>
+      )}
 
-      {/* Map Button */}
-      <TouchableOpacity
-        style={styles.mapButton}
-        onPress={() => navigation.navigate('Map', { orderId: order.id })}
-      >
-        <Text style={styles.mapButtonText}>Lihat Rute Pengiriman</Text>
-      </TouchableOpacity>
+      {/* Map Button — hanya untuk driver yang ditugaskan ke order ini */}
+      {order && currentUserId && order.driverId === currentUserId && (
+        <TouchableOpacity
+          style={styles.mapButton}
+          onPress={() => navigation.navigate('Map', { orderId: order.id })}
+        >
+          <Text style={styles.mapButtonText}>Lihat Rute Pengiriman</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Cancel Button — only visible if driver can cancel this order and there's
           no cancel already queued (prevents re-tapping and enqueueing duplicate

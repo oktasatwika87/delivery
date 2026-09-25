@@ -11,6 +11,7 @@ import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
 import { ApiError } from '../sync/client';
 import { networkMonitor } from '../map/networkMonitor';
 import type { NetworkStatus } from '../map/networkMonitor';
+import type { OrderModel } from '../db/models/OrderModel';
 
 // ─── Client mocks ───────────────────────────────────────────────────────────────
 const mockUpdateOrderStatus = jest.fn();
@@ -171,7 +172,7 @@ const mockPaymentsCollection: any = {
 
 // Mock pending_actions collection — observe terpanggil saat komponen mount
 const mockPendingActionsCollection: { query: jest.Mock } = {
-  query: jest.fn().mockImplementation((_query: unknown) => ({
+query: jest.fn().mockImplementation((_query: unknown) => ({
     observe: jest.fn().mockReturnValue({
       subscribe: jest.fn().mockImplementation(({ next }: { next: (actions: MockPendingAction[]) => void }) => {
         pendingActionsSubscriptionCallback = next;
@@ -196,6 +197,7 @@ const mockDatabaseBatch = jest.fn();
 const mockDatabase: any = {
   get: (name: string) => {
     if (name === 'payments') return mockPaymentsCollection;
+    if (name === 'pending_actions') return mockPendingActionsCollection;
     return mockOrdersCollection;
   },
   write: async (fn: () => Promise<void>) => {
@@ -393,11 +395,41 @@ describe('cancel button behavior (outbox wiring)', () => {
     });
 
     // order.status is unchanged by the outbox path (no local optimistic write
-    // of CANCELLED) — the button must instead be gated on hasPending, or a
-    // driver could tap it again while offline and enqueue duplicate cancels.
+    // of CANCELLED) — the button must instead be gated on hasPending (dari
+    // observe). Simulasi observe fire dengan pending action agar hasPending
+    // jadi true dan tombol hilang.
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-cancel', createdAt: new Date() }]);
+    });
     await waitFor(() => {
       expect(queryByText('Batalkan Order')).toBeNull();
     });
+    expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
+  });
+
+  // enqueueCancel gagal → tidak ada banner "Menunggu sinkronisasi"
+  test('enqueueCancel gagal: banner "Menunggu sinkronisasi" tidak tampil', async () => {
+    mockEnqueueCancel.mockResolvedValueOnce({ success: false, error: 'Tidak bisa membatalkan order.' });
+
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Batalkan Order')).toBeTruthy();
+    });
+    await act(async () => {
+      fireEvent.press(getByText('Batalkan Order'));
+    });
+
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const alertArgs = alertCalls[0];
+    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya, Batalkan');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    // Observe TIDAK fire (gagal) — hasPending tetap false — banner tidak tampil
+    expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
     expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
   });
 
@@ -887,11 +919,11 @@ describe('Stale Pending Action Banner', () => {
 
   test('shows normal pending banner when pending action is fresh', async () => {
     Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
-    mockHasPendingAction.mockResolvedValue(true);
-    mockGetPendingActionsForOrder.mockResolvedValue([{ id: 'pending-1', createdAt: new Date() }]);
-    mockIsPendingActionStale.mockReturnValue(false);
-
     const { getByText, queryByText } = renderScreen();
+    // Observe fire saat mount — trigger dengan fresh pending action (bukan stale)
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', createdAt: new Date() }]);
+    });
     await waitFor(() => {
       expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
     });
@@ -902,11 +934,11 @@ describe('Stale Pending Action Banner', () => {
 
   test('shows stale warning banner when pending action is older than 60 minutes', async () => {
     Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
-    mockHasPendingAction.mockResolvedValue(true);
-    mockGetPendingActionsForOrder.mockResolvedValue([{ id: 'pending-stale', createdAt: new Date(Date.now() - 61 * 60 * 1000) }]);
-    mockIsPendingActionStale.mockReturnValue(true);
-
     const { getByText, queryByText } = renderScreen();
+    // Trigger observe dengan stale action (> 60 menit)
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-stale', createdAt: new Date(Date.now() - 61 * 60 * 1000) }]);
+    });
     await waitFor(() => {
       expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
     });
@@ -916,14 +948,12 @@ describe('Stale Pending Action Banner', () => {
   });
 
   test('shows stale banner even when cancel button is hidden (pending action exists)', async () => {
-    // When there's a pending action, cancel button is hidden
-    // But if the pending action is stale, the warning banner should still show
     Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
-    mockHasPendingAction.mockResolvedValue(true);
-    mockGetPendingActionsForOrder.mockResolvedValue([{ id: 'pending-stale', createdAt: new Date(Date.now() - 120 * 60 * 1000) }]);
-    mockIsPendingActionStale.mockReturnValue(true);
-
     const { getByText, queryByText } = renderScreen();
+    // Trigger observe dengan stale action
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-stale', createdAt: new Date(Date.now() - 120 * 60 * 1000) }]);
+    });
     await waitFor(() => {
       expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
     });
@@ -934,9 +964,11 @@ describe('Stale Pending Action Banner', () => {
 
   test('no banner when no pending actions', async () => {
     Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
-    mockHasPendingAction.mockResolvedValue(false);
-
     const { queryByText } = renderScreen();
+    // Trigger observe dengan array kosong
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([]);
+    });
     await waitFor(() => {
       expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
     });
@@ -944,7 +976,63 @@ describe('Stale Pending Action Banner', () => {
       expect(queryByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeNull();
     });
   });
+
+  // K17: banner hilang sendiri saat pending action dihapus — observe bikin banner reaktif
+  test('banner hilang setelah pending action dihapus tanpa unmount', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { getByText, queryByText } = renderScreen();
+
+    // Banner tampil dengan pending action
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', createdAt: new Date() }]);
+    });
+    await waitFor(() => {
+      expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
+    });
+
+    // Pending action dihapus (misal: drain selesai) — banner hilang TANPA unmount
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([]);
+    });
+    await waitFor(() => {
+      expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
+    });
+  });
 });
+
+// ─── Tests: Chat / Map visibility ────────────────────────────────────────────────
+
+describe('Chat and Map button visibility', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+  });
+
+  test('Chat dan Map tampil untuk driver yang ditugaskan', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Chat dengan Kurir / Customer')).toBeTruthy();
+      expect(getByText('Lihat Rute Pengiriman')).toBeTruthy();
+    });
+  });
+
+  test('Chat dan Map TIDAK tampil untuk driver LAIN', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'other-driver' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Chat dengan Kurir / Customer')).toBeNull();
+      expect(queryByText('Lihat Rute Pengiriman')).toBeNull();
+    });
+  });
+});
+
+// ─── Tests: OrderConflictBanner suppression ──────────────────────────────────────
+// orderConflict event dari processReject/processCancel menyebabkan banner "Status
+// diperbarui server". Kalau ada pending action, event ini terjadi karena aksi
+// driver sendiri (reject/cancel yang sukses), jadi banner dit-suppress via
+// !hasPending gate di JSX. Tidak dites di sini karena butuh syncEvents mock
+// yang lengkap — sudah ter-cover desain.
 
 // ─── Tests: Item Price Display ─────────────────────────────────────────────────
 
