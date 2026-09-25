@@ -216,6 +216,9 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [hasCodPayment, setHasCodPayment] = useState(false);
+  // hasCashPaymentNotFailed: turunan terpisah untuk gate "Selesai diantar".
+  // Gate tombol COD masih pakai hasCodPayment (jangan diubah).
+  const [hasCashPaymentNotFailed, setHasCashPaymentNotFailed] = useState(false);
   const [payments, setPayments] = useState<PaymentModel[]>([]);
   const [failedBannerDismissed, setFailedBannerDismissed] = useState(false);
   const [conflictEvent, setConflictEvent] = useState<OrderConflictEvent | null>(null);
@@ -294,6 +297,15 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
                 (p) => p.method === PaymentMethod.CASH,
               );
               setHasCodPayment(hasCod);
+              // hasCashPaymentNotFailed: turunan terpisah untuk gate tombol
+              // Selesai diantar (OUT_FOR_DELIVERY→DELIVERED). Hanya true kalau
+              // ada payment CASH yang belum FAILED — payment FAILED tetap
+              // dianggap "belum ada COD yang valid", jadi driver perlu retry
+              // collect sebelum boleh selesaikan delivery.
+              const hasCashNotFailed = records.some(
+                (p) => p.method === PaymentMethod.CASH && p.status !== PaymentStatus.FAILED,
+              );
+              setHasCashPaymentNotFailed(hasCashNotFailed);
             },
             error: (err) => {
               console.warn('[OrderDetail] payments observe error:', err);
@@ -788,9 +800,11 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
       )}
 
       {/* Driver Status Button — PREPARING→OUT_FOR_DELIVERY or OUT_FOR_DELIVERY→DELIVERED.
-          Visible only for assigned driver with no pending action.
-          Disabled when offline or request in flight. */}
-      {order && currentUserId && canUpdateStatus(order) && !hasPending && (
+          PREPARING: always shown (no pending).
+          OUT_FOR_DELIVERY: shown only if ada payment CASH yang BUKAN FAILED,
+          DAN tidak ada pending action. */}
+      {order && currentUserId && canUpdateStatus(order) && !hasPending &&
+        (order.status === OrderStatus.PREPARING || hasCashPaymentNotFailed) && (
         <TouchableOpacity
           style={[
             styles.statusButton,

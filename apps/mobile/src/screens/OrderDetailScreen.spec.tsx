@@ -172,7 +172,7 @@ const mockPaymentsCollection: any = {
 
 // Mock pending_actions collection — observe terpanggil saat komponen mount
 const mockPendingActionsCollection: { query: jest.Mock } = {
-query: jest.fn().mockImplementation((_query: unknown) => ({
+  query: jest.fn().mockImplementation((_query: unknown) => ({
     observe: jest.fn().mockReturnValue({
       subscribe: jest.fn().mockImplementation(({ next }: { next: (actions: MockPendingAction[]) => void }) => {
         pendingActionsSubscriptionCallback = next;
@@ -1098,8 +1098,8 @@ describe('driver status button visibility', () => {
       fn(this);
       return this;
     });
-    mockHasPendingAction.mockResolvedValue(false);
     mockPayments.length = 0;
+    mockPendingActions.length = 0;
   });
 
   test('appears for PREPARING status with matching driver and no pending', async () => {
@@ -1110,9 +1110,68 @@ describe('driver status button visibility', () => {
     });
   });
 
-  test('appears for OUT_FOR_DELIVERY status with matching driver and no pending', async () => {
+  // BAGIAN 3: OUT_FOR_DELIVERY→DELIVERED hanya kalau ada COD payment dan tidak ada pending
+  test('appears for OUT_FOR_DELIVERY with COD payment and no pending', async () => {
     Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({ id: 'cod-1', orderId: 'order-123', method: PaymentMethod.CASH });
     const { getByText } = renderScreen();
+    await act(async () => {
+      paymentsSubscriptionCallback?.([...mockPayments]);
+    });
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+  });
+
+  test('NOT shown for OUT_FOR_DELIVERY without COD payment', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Selesai diantar')).toBeNull();
+    });
+  });
+
+  test('NOT shown for OUT_FOR_DELIVERY with COD but has pending action', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({ id: 'cod-1', orderId: 'order-123', method: PaymentMethod.CASH });
+    await act(async () => {
+      paymentsSubscriptionCallback?.([...mockPayments]);
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', createdAt: new Date() }]);
+    });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText('Selesai diantar')).toBeNull();
+    });
+  });
+
+  // CASH FAILED harus dianggap "belum ada COD valid" — tombol Selesai diantar
+  // tidak tampil sampai ada payment CASH yang bukan FAILED (misal CAPTURED/PENDING).
+  test('NOT shown for OUT_FOR_DELIVERY with only CASH FAILED payment', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({
+      id: 'cod-failed-1',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.FAILED,
+    });
+    const { queryByText } = renderScreen();
+    await act(async () => {
+      paymentsSubscriptionCallback?.([...mockPayments]);
+    });
+    await waitFor(() => {
+      expect(queryByText('Selesai diantar')).toBeNull();
+    });
+  });
+
+  // Kalau ada CASH FAILED dan CASH CAPTURED, yang dihitung cuma CAPTURED — tombol tampil.
+  test('appears for OUT_FOR_DELIVERY with CASH FAILED + CASH CAPTURED (CAPTURED yang menentukan)', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({ id: 'cod-failed-1', orderId: 'order-123', method: PaymentMethod.CASH, status: PaymentStatus.FAILED });
+    mockPayments.push({ id: 'cod-ok-1', orderId: 'order-123', method: PaymentMethod.CASH, status: PaymentStatus.CAPTURED });
+    const { getByText } = renderScreen();
+    await act(async () => {
+      paymentsSubscriptionCallback?.([...mockPayments]);
+    });
     await waitFor(() => {
       expect(getByText('Selesai diantar')).toBeTruthy();
     });
@@ -1146,8 +1205,11 @@ describe('driver status button visibility', () => {
 
   test('NOT shown when hasPending', async () => {
     Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
-    mockHasPendingAction.mockResolvedValue(true);
     const { queryByText } = renderScreen();
+    // Trigger observe dengan pending action
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', createdAt: new Date() }]);
+    });
     await waitFor(() => {
       expect(queryByText('Mulai antar')).toBeNull();
     });
@@ -1170,9 +1232,10 @@ describe('driver status button behavior', () => {
       fn(this);
       return this;
     });
-    mockHasPendingAction.mockResolvedValue(false);
     mockDatabaseBatch.mockReset();
     mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    pendingActionsSubscriptionCallback = null;
   });
 
   afterEach(() => {
