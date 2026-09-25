@@ -6,7 +6,7 @@
 import Config from 'react-native-config';
 import type { SyncPushPayload, SyncPushResponse, SyncPullResponse } from '@delivery/shared';
 import { getCurrentToken } from './session';
-import type { CreateOrderInput, Order } from '@delivery/shared';
+import type { CreateOrderInput, Order, OrderStatus } from '@delivery/shared';
 
 /** Base URL API dari .env (react-native-config) */
 const API_BASE = Config.API_BASE_URL;
@@ -584,5 +584,43 @@ export async function flagOrphanedCod(
       console.warn('[flagOrphanedCod] Network error — non-fatal, local orphan status preserved:', err.message);
     }
     // Fire-and-forget: throw is intentionally suppressed
+  }
+}
+
+/**
+ * Driver updates order status.
+ * Transitions: PREPARING → OUT_FOR_DELIVERY, OUT_FOR_DELIVERY → DELIVERED.
+ */
+export async function updateOrderStatus(
+  orderId: string,
+  status: OrderStatus,
+  version: number,
+): Promise<Order> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await fetchWithAuth(`${API_BASE}/orders/${orderId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, version }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.status === 401) {
+      throw new UnauthorizedError();
+    }
+
+    if (!res.ok) {
+      throw await buildApiError('updateOrderStatus', res);
+    }
+
+    return res.json() as Promise<Order>;
+  } catch (err: unknown) {
+    clearTimeout(timeoutId);
+    if (err instanceof Error && err.name === 'AbortError') {
+      console.warn('[updateOrderStatus] Request aborted due to 8s timeout');
+    }
+    throw err;
   }
 }

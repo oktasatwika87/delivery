@@ -21,6 +21,8 @@
 import React from 'react';
 import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 
+import type { OrderStatusUpdatedPayload } from '@delivery/shared';
+
 import { OrderTrackingScreen } from './OrderTrackingScreen';
 import { UnauthorizedError } from '../sync/client';
 
@@ -31,6 +33,7 @@ var mockAcceptedSubscribers: Array<(p: any) => void> = [];
 var mockRejectedSubscribers: Array<(p: any) => void> = [];
 var mockCancelledSubscribers: Array<(p: any) => void> = [];
 var mockCodCollectedSubscribers: Array<(p: any) => void> = [];
+var mockStatusUpdatedSubscribers: Array<(p: OrderStatusUpdatedPayload) => void> = [];
 
 jest.mock('../sync/ordersSocket', () => ({
   ordersSocket: {
@@ -57,6 +60,12 @@ jest.mock('../sync/ordersSocket', () => ({
       mockCodCollectedSubscribers.push(cb);
       return () => {
         mockCodCollectedSubscribers = mockCodCollectedSubscribers.filter((s) => s !== cb);
+      };
+    },
+    onOrderStatusUpdated: (cb: (p: OrderStatusUpdatedPayload) => void): (() => void) => {
+      mockStatusUpdatedSubscribers.push(cb);
+      return () => {
+        mockStatusUpdatedSubscribers = mockStatusUpdatedSubscribers.filter((s) => s !== cb);
       };
     },
     on: (event: string, cb: () => void): (() => void) => {
@@ -99,6 +108,7 @@ function resetSubscribers(): void {
   mockRejectedSubscribers = [];
   mockCancelledSubscribers = [];
   mockCodCollectedSubscribers = [];
+  mockStatusUpdatedSubscribers = [];
 }
 
 function triggerConnect(): void {
@@ -118,6 +128,9 @@ function triggerCancelled(payload: any): void {
 }
 function triggerCodCollected(payload: any): void {
   mockCodCollectedSubscribers.forEach((cb) => cb(payload));
+}
+function triggerStatusUpdated(payload: OrderStatusUpdatedPayload): void {
+  mockStatusUpdatedSubscribers.forEach((cb) => cb(payload));
 }
 
 const MOCK_ORDER = {
@@ -476,6 +489,7 @@ describe('OrderTrackingScreen', () => {
     const rejectedBefore = mockRejectedSubscribers.length;
     const cancelledBefore = mockCancelledSubscribers.length;
     const codCollectedBefore = mockCodCollectedSubscribers.length;
+    const statusUpdatedBefore = mockStatusUpdatedSubscribers.length;
     const connectBefore = mockConnectSubscribers.length;
     const disconnectBefore = mockDisconnectSubscribers.length;
 
@@ -485,8 +499,62 @@ describe('OrderTrackingScreen', () => {
     expect(mockRejectedSubscribers.length).toBe(rejectedBefore - 1);
     expect(mockCancelledSubscribers.length).toBe(cancelledBefore - 1);
     expect(mockCodCollectedSubscribers.length).toBe(codCollectedBefore - 1);
+    expect(mockStatusUpdatedSubscribers.length).toBe(statusUpdatedBefore - 1);
     expect(mockConnectSubscribers.length).toBe(connectBefore - 1);
     expect(mockDisconnectSubscribers.length).toBe(disconnectBefore - 1);
+  });
+
+  it('order:status_updated untuk order ini → update label status', async () => {
+    // Payload OUT_FOR_DELIVERY: PREPARING → OUT_FOR_DELIVERY
+    const preparingOrder = { ...MOCK_ORDER, status: 'PREPARING' as const };
+    mockGetOrderById.mockResolvedValueOnce(preparingOrder);
+
+    const { getByText } = render(
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Driver sedang menyiapkan')).toBeTruthy();
+    });
+
+    act(() => {
+      triggerStatusUpdated({
+        orderId: 'order-abc-123',
+        status: 'OUT_FOR_DELIVERY',
+        version: 2,
+        updatedAt: '2026-09-25T12:00:00.000Z',
+      });
+    });
+
+    await waitFor(() => {
+      expect(getByText('Dalam perjalanan')).toBeTruthy();
+    });
+    // Status PREPARING sudah tidak tampil
+    expect(() => getByText('Driver sedang menyiapkan')).toThrow();
+  });
+
+  it('order:status_updated untuk orderId LAIN diabaikan', async () => {
+    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+
+    const { getByText } = render(
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
+    });
+
+    act(() => {
+      triggerStatusUpdated({
+        orderId: 'order-LAIN-999',
+        status: 'OUT_FOR_DELIVERY',
+        version: 2,
+        updatedAt: '2026-09-25T12:00:00.000Z',
+      });
+    });
+
+    // Status tidak berubah
+    expect(getByText('Menunggu konfirmasi')).toBeTruthy();
   });
 
   it('tampilan harga: totalCents 23000 dan item unitPriceCents 23000 tampil Rp 23.000, bukan 230', async () => {

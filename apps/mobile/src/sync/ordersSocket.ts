@@ -37,6 +37,7 @@ import type {
   OrderRejectedPayload,
   OrderCancelledPayload,
   OrderCodCollectedPayload,
+  OrderStatusUpdatedPayload,
 } from '@delivery/shared';
 
 import { getCurrentToken } from './session';
@@ -64,6 +65,7 @@ export type {
   OrderRejectedPayload,
   OrderCancelledPayload,
   OrderCodCollectedPayload,
+  OrderStatusUpdatedPayload,
 };
 
 /** Event yang bisa di-listen */
@@ -74,6 +76,7 @@ export type OrdersSocketEvent =
   | 'orderRejected'
   | 'orderCancelled'
   | 'orderCodCollected'
+  | 'orderStatusUpdated'
   | 'connect'
   | 'disconnect'
   | 'connect_error';
@@ -298,6 +301,12 @@ class OrdersSocketManager {
       this.socket.on('order:cod_collected', (payload: OrderCodCollectedPayload) => {
         this.emit('orderCodCollected', payload);
       });
+
+      // order:status_updated — customer-targeted live status update from
+      // PATCH /orders/:id/status (PREPARING→OUT_FOR_DELIVERY, OUT_FOR_DELIVERY→DELIVERED).
+      this.socket.on('order:status_updated', (payload: OrderStatusUpdatedPayload) => {
+        this.emit('orderStatusUpdated', payload);
+      });
     } catch (err) {
       // Stale check: jangan reject promise yang udah bukan punya kita.
       if (gen !== this.generation) return;
@@ -407,6 +416,15 @@ class OrdersSocketManager {
    */
   onOrderCodCollected(callback: (payload: OrderCodCollectedPayload) => void): () => void {
     return this.on<OrderCodCollectedPayload>('orderCodCollected', callback);
+  }
+
+  /**
+   * Subscribe ke order:status_updated event (customer-side).
+   * Fire ketika driver update status order — PREPARING→OUT_FOR_DELIVERY
+   * atau OUT_FOR_DELIVERY→DELIVERED.
+   */
+  onOrderStatusUpdated(callback: (payload: OrderStatusUpdatedPayload) => void): () => void {
+    return this.on<OrderStatusUpdatedPayload>('orderStatusUpdated', callback);
   }
 
   /**

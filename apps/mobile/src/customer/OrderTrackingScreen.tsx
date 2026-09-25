@@ -210,6 +210,22 @@ export function OrderTrackingScreen({
       });
     });
 
+    // order:status_updated — live status update dari driver yang pegang order.
+    // Payload dari OrderStatusUpdatedPayload (packages/shared).
+    const unsubStatusUpdated = ordersSocket.onOrderStatusUpdated((payload) => {
+      if (!matchesOrder(payload)) return;
+      setOrder(
+        (prev) =>
+          (prev && {
+            ...prev,
+            status: payload.status as OrderStatus,
+            version: payload.version,
+            updatedAt: payload.updatedAt,
+          }) ||
+          prev,
+      );
+    });
+
     const unsubConnect = ordersSocket.on('connect', () => setConnected(true));
     const unsubDisconnect = ordersSocket.on('disconnect', () =>
       setConnected(false),
@@ -220,6 +236,7 @@ export function OrderTrackingScreen({
       unsubRejected,
       unsubCancelled,
       unsubCodCollected,
+      unsubStatusUpdated,
       unsubConnect,
       unsubDisconnect,
     ];
