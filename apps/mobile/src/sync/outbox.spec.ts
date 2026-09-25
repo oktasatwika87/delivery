@@ -207,6 +207,9 @@ jest.mock('../db', () => ({
               idempotency_key: dirtyRaw.idempotency_key,
               payload_json: dirtyRaw.payload_json,
               status: dirtyRaw.status,
+              // disalin supaya tes bisa memeriksa created_at dan updated_at dari enqueue*.
+              created_at: dirtyRaw.created_at,
+              updated_at: dirtyRaw.updated_at,
             },
             status: dirtyRaw.status,
           };
@@ -304,6 +307,22 @@ describe('outbox', () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain('Not authenticated');
     });
+
+    test('sets created_at and updated_at to the same current timestamp', async () => {
+      const before = Date.now();
+      await enqueueReject('order-ts-reject', 1);
+      const after = Date.now();
+
+      const actions = [...mockState.records.values()];
+      expect(actions).toHaveLength(1);
+      const raw = actions[0]._raw;
+      expect(raw.created_at).toBeGreaterThanOrEqual(before);
+      expect(raw.created_at).toBeLessThanOrEqual(after);
+      expect(raw.updated_at).toBeGreaterThanOrEqual(before);
+      expect(raw.updated_at).toBeLessThanOrEqual(after);
+      // Satu nilai Date.now() berlaku untuk dua kolom ini.
+      expect(raw.created_at).toBe(raw.updated_at);
+    });
   });
 
   describe('enqueueCancel()', () => {
@@ -322,6 +341,21 @@ describe('outbox', () => {
       // payload_json: '{}' saat tanpa reason.
       expect([...mockState.records.values()][0]._raw.payload_json).toBe('{}');
     });
+
+    test('sets created_at and updated_at to the same current timestamp', async () => {
+      const before = Date.now();
+      await enqueueCancel('order-ts-cancel', 1);
+      const after = Date.now();
+
+      const actions = [...mockState.records.values()];
+      expect(actions).toHaveLength(1);
+      const raw = actions[0]._raw;
+      expect(raw.created_at).toBeGreaterThanOrEqual(before);
+      expect(raw.created_at).toBeLessThanOrEqual(after);
+      expect(raw.updated_at).toBeGreaterThanOrEqual(before);
+      expect(raw.updated_at).toBeLessThanOrEqual(after);
+      expect(raw.created_at).toBe(raw.updated_at);
+    });
   });
 
   describe('enqueueCollectCod()', () => {
@@ -333,6 +367,21 @@ describe('outbox', () => {
       expect(actions[0]._raw.action_type).toBe('collect_cod');
       expect(actions[0]._raw.payload_json).toBe('{"amountCents":50000}');
       expect(actions[0]._raw.idempotency_key).toBe('cod:test-uuid-123');
+    });
+
+    test('sets created_at and updated_at to the same current timestamp', async () => {
+      const before = Date.now();
+      await enqueueCollectCod('order-ts-cod', 50000);
+      const after = Date.now();
+
+      const actions = [...mockState.records.values()];
+      expect(actions).toHaveLength(1);
+      const raw = actions[0]._raw;
+      expect(raw.created_at).toBeGreaterThanOrEqual(before);
+      expect(raw.created_at).toBeLessThanOrEqual(after);
+      expect(raw.updated_at).toBeGreaterThanOrEqual(before);
+      expect(raw.updated_at).toBeLessThanOrEqual(after);
+      expect(raw.created_at).toBe(raw.updated_at);
     });
   });
 

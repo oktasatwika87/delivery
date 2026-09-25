@@ -190,4 +190,62 @@ describe('outbox enqueue - regression prepareCreateFromDirtyRaw with real LokiJS
     expect(matched).toHaveLength(1);
     expect(matched[0]._getRaw('action_type')).toBe('cancel');
   });
+
+  describe('created_at dan updated_at terisi saat enqueue', () => {
+    it('enqueueReject menulis created_at dan updated_at ke _raw (kolom number, bukan undefined)', async () => {
+      const { enqueueReject: enqueue } = require('./outbox');
+
+      const before = Date.now();
+      await enqueue('order-ts-reject-regress', 5);
+      const after = Date.now();
+
+      const all = await db.get<PendingActionModel>('pending_actions').query().fetch();
+      const action = all.find((a) => a._getRaw('target_order_id') === 'order-ts-reject-regress');
+      expect(action).toBeDefined();
+
+      const createdAt = action!._getRaw('created_at');
+      const updatedAt = action!._getRaw('updated_at');
+      expect(typeof createdAt).toBe('number');
+      expect(typeof updatedAt).toBe('number');
+      expect(createdAt).toBeGreaterThanOrEqual(before);
+      expect(createdAt).toBeLessThanOrEqual(after);
+      expect(updatedAt).toBeGreaterThanOrEqual(before);
+      expect(updatedAt).toBeLessThanOrEqual(after);
+      // Satu nilai Date.now() untuk dua kolom.
+      expect(createdAt).toBe(updatedAt);
+    });
+
+    it('enqueueCancel menulis created_at + updated_at', async () => {
+      const { enqueueCancel: enqueue } = require('./outbox');
+
+      const before = Date.now();
+      await enqueue('order-ts-cancel-regress', 1, 'regress');
+      const after = Date.now();
+
+      const all = await db.get<PendingActionModel>('pending_actions').query().fetch();
+      const action = all.find((a) => a._getRaw('target_order_id') === 'order-ts-cancel-regress');
+      expect(action).toBeDefined();
+      expect(action!._getRaw('created_at')).toBeGreaterThanOrEqual(before);
+      expect(action!._getRaw('created_at')).toBeLessThanOrEqual(after);
+      expect(action!._getRaw('updated_at')).toBe(action!._getRaw('created_at'));
+    });
+
+    it('enqueueCollectCod menulis created_at + updated_at', async () => {
+      const { enqueueCollectCod: enqueue } = require('./outbox');
+
+      const before = Date.now();
+      await enqueue('order-ts-cod-regress', 75000);
+      const after = Date.now();
+
+      const all = await db.get<PendingActionModel>('pending_actions').query().fetch();
+      const action = all.find((a) => a._getRaw('target_order_id') === 'order-ts-cod-regress');
+      expect(action).toBeDefined();
+      expect(action!._getRaw('created_at')).toBeGreaterThanOrEqual(before);
+      expect(action!._getRaw('created_at')).toBeLessThanOrEqual(after);
+      expect(action!._getRaw('updated_at')).toBe(action!._getRaw('created_at'));
+    });
+
+    // isPendingActionStale tidak diuji di sini: decorator @date tidak aktif
+    // di Jest, jadi umur aksi selalu terbaca 0.
+  });
 });

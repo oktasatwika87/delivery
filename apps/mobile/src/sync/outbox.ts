@@ -72,6 +72,10 @@ export async function enqueueReject(orderId: string, expectedVersion: number): P
       // di RawRecord/index.js cuma iterasi tableSchema.columnArray -
       // kunci tak dikenal di-drop, kolom snake_case jatuh ke default
       // ('' / 0). Lihat outbox.regression.spec.ts untuk bukti.
+      //
+      // created_at dan updated_at harus diisi di sini. Kalau tidak, nilainya 0:
+      // aksi baru langsung dianggap basi dan urutan kirim outbox tidak terjamin.
+      const now = Date.now();
       const preparedRecord = database.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
         id: pendingActionId,
         _status: 'synced',
@@ -83,6 +87,8 @@ export async function enqueueReject(orderId: string, expectedVersion: number): P
         // payload_json optional, default null.
         payload_json: null,
         status: 'pending',
+        created_at: now,
+        updated_at: now,
       });
       await database.batch(preparedRecord);
 
@@ -128,6 +134,8 @@ export async function enqueueCancel(
       // adalah kolom string berisi JSON - prepareCreateFromDirtyRaw
       // bypass decorator @json PendingActionModel, jadi nilai raw
       // harus JSON.stringify (atau null untuk optional).
+      // created_at dan updated_at: lihat catatan di enqueueReject.
+      const now = Date.now();
       const preparedRecord = database.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
         id: pendingActionId,
         _status: 'synced',
@@ -138,6 +146,8 @@ export async function enqueueCancel(
         idempotency_key: `cancel:${orderId}:${userId}:${Date.now()}`,
         payload_json: JSON.stringify(payload),
         status: 'pending',
+        created_at: now,
+        updated_at: now,
       });
       await database.batch(preparedRecord);
     });
@@ -177,6 +187,8 @@ export async function enqueueCollectCod(
     await database.write(async () => {
       // Kunci snake_case (lihat catatan di enqueueReject). payload_json
       // string berisi JSON - bypass decorator @json.
+      // created_at dan updated_at: lihat catatan di enqueueReject.
+      const now = Date.now();
       const preparedRecord = database.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
         id: pendingActionId,
         _status: 'synced',
@@ -187,6 +199,8 @@ export async function enqueueCollectCod(
         idempotency_key: idempotencyKey,
         payload_json: JSON.stringify(payload),
         status: 'pending',
+        created_at: now,
+        updated_at: now,
       });
       await database.batch(preparedRecord);
     });
