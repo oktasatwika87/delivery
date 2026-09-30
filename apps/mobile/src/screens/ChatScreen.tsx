@@ -98,12 +98,21 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
     let unsubDisconnect: (() => void) | null = null;
     let unsubConnectError: (() => void) | null = null;
     let joined = false;
+    // Penjaga unmount: kalau layar ditutup sebelum connect/join_room,
+    // semua langkah setelah titik itu dilewati supaya tidak emit join_room
+    // atau subscribe ke socket yang tidak lagi relevan.
+    let cancelled = false;
 
     const setupSocket = async () => {
       // Subscribe to connection status changes
       unsubConnect = chatSocket.on('connect', () => {
         console.info('[Chat] socket connected');
         setIsSocketConnected(true);
+        // Kalau sudah join sebelumnya dan socket nyambung lagi (reconnect),
+        // kirim ulang join_room supaya server tahu kita masih di room ini.
+        if (joined) {
+          chatSocket.emitToServer('join_room', { roomId });
+        }
       });
 
       unsubDisconnect = chatSocket.on('disconnect', (reason) => {
@@ -125,6 +134,10 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
           return;
         }
       }
+
+      // Layar sudah ditutup selagi menunggu connect, jadi emit dan subscribe
+      // setelah titik ini tidak dijalankan.
+      if (cancelled) return;
 
       // Join room
       try {
@@ -198,6 +211,7 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
 
     // Cleanup: leave room & unsubscribe all listeners
     return () => {
+      cancelled = true;
       unsubNewMessage?.();
       unsubConnect?.();
       unsubDisconnect?.();

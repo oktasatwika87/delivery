@@ -130,6 +130,7 @@ const Button = (props: any) => {
 };
 Button.displayName = 'Button';
 const KeyboardAvoidingView = makeComponent('KeyboardAvoidingView');
+const FlatList = makeComponent('FlatList');
 
 class ActivityIndicator extends React.Component {
   render() {
@@ -178,6 +179,7 @@ module.exports = {
   ActivityIndicator,
   AppRegistry,
   Button,
+  FlatList,
   Image,
   KeyboardAvoidingView,
   Linking,
