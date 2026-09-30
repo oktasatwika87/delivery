@@ -64,11 +64,23 @@ jest.mock('../sync/client', () => {
 });
 
 // ─── Mock ordersSocket ────────────────────────────────────────────────────────
+// Simpan semua callback yang didaftarkan lewat ordersSocket.on(...) per event,
+// supaya tes bisa memanggilnya sendiri untuk meniru event 'connect' dari socket.
+// Namanya diawali mock karena jest.mock factory hanya boleh memakai variabel
+// luar yang namanya diawali mock.
+const mockOrdersSocketConnectListeners: Array<() => void> = [];
+const mockOrdersSocketUnsubscribes: jest.Mock<unknown[], []> = jest.fn();
+
 jest.mock('../sync/ordersSocket', () => ({
   ordersSocket: {
     onOrderAvailable: jest.fn().mockReturnValue(jest.fn()),
     onOrderUnavailable: jest.fn().mockReturnValue(jest.fn()),
-    on: jest.fn().mockReturnValue(jest.fn()),
+    on: jest.fn((event: string, cb: () => void) => {
+      if (event === 'connect') {
+        mockOrdersSocketConnectListeners.push(cb);
+      }
+      return mockOrdersSocketUnsubscribes;
+    }),
   },
 }));
 
@@ -623,5 +635,59 @@ describe('Accept order online gating', () => {
     await waitFor(() => {
       expect(mockDatabase.write).toHaveBeenCalled();
     });
+  });
+});
+
+// --- Ambil ulang pool saat socket tersambung lagi ---
+// Server tidak mengirim ulang event yang terlewat selama socket putus, jadi
+// order baru yang dibuat saat offline tidak muncul sendiri. OrdersScreen
+// mendengar event 'connect' dari ordersSocket dan memanggil fetchPool() lagi
+// supaya tab Tersedia berisi order terbaru setelah sambungan pulih.
+describe('ambil ulang pool saat ordersSocket connect', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Kosongkan daftar listener supaya tidak bocor antar tes
+    while (mockOrdersSocketConnectListeners.length > 0) {
+      mockOrdersSocketConnectListeners.pop();
+    }
+    mockOrdersSocketUnsubscribes.mockClear();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+  });
+
+  test('event connect memanggil fetchPool (terlihat dari pemanggilan fetchAvailableOrders)', async () => {
+    render(<OrdersScreenBase database={mockDatabase as never} myOrders={[]} />);
+
+    // Tunggu sampai OrdersScreen mendaftarkan callback 'connect'
+    await waitFor(() => {
+      expect(mockOrdersSocketConnectListeners.length).toBeGreaterThan(0);
+    });
+
+    // Saat mount fetchAvailableOrders sudah dipanggil sekali. Kosongkan dulu
+    // hitungannya supaya tes ini hanya mengukur efek event 'connect'.
+    (fetchAvailableOrders as jest.Mock).mockClear();
+
+    // Panggil callback yang didaftarkan lewat ordersSocket.on('connect', ...)
+    mockOrdersSocketConnectListeners[0]();
+
+    await waitFor(() => {
+      expect(fetchAvailableOrders).toHaveBeenCalled();
+    });
+  });
+
+  test('unmount memanggil unsubscribe untuk listener connect', async () => {
+    const { unmount } = render(<OrdersScreenBase database={mockDatabase as never} myOrders={[]} />);
+
+    // Tunggu sampai listener terdaftar dan unsubscribeRef terisi
+    await waitFor(() => {
+      expect(mockOrdersSocketConnectListeners.length).toBeGreaterThan(0);
+    });
+
+    // Sebelum unmount: unsubscribe belum dipanggil
+    expect(mockOrdersSocketUnsubscribes).not.toHaveBeenCalled();
+
+    unmount();
+
+    // Setelah unmount: unsubscribe untuk listener connect terpanggil
+    expect(mockOrdersSocketUnsubscribes).toHaveBeenCalled();
   });
 });

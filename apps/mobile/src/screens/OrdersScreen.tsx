@@ -278,14 +278,25 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
       console.log('[OrdersScreen] order:unavailable — refetching pool');
       fetchPool();
     };
+    // Server tidak kirim ulang event yang terlewat selama socket putus,
+    // supaya tab Tersedia dapat daftar order terbaru setelah sambungan
+    // pulih, panggil fetchPool() sekali lagi saat socket tersambung.
+    // Aman dipanggil berulang-ulang saat connect pertama karena fetchPool
+    // idempotent.
+    const onConnect = () => {
+      console.log('[OrdersScreen] connect: refetching pool');
+      fetchPool();
+    };
 
-    // onOrderAvailable/onOrderUnavailable return unsubscribe functions
+    // onOrderAvailable/onOrderUnavailable/on('connect') mengembalikan fungsi unsubscribe
     const unsubAvailable = ordersSocket.onOrderAvailable(onAvailable);
     const unsubUnavailable = ordersSocket.onOrderUnavailable(onUnavailable);
+    const unsubConnect = ordersSocket.on('connect', onConnect);
 
     unsubscribeRef.current = [
       unsubAvailable,
       unsubUnavailable,
+      unsubConnect,
     ];
 
     return () => {
