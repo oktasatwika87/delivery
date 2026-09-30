@@ -121,6 +121,14 @@ class ChatSocketManager {
         throw new Error('No auth token available');
       }
 
+      // Lepas socket lama kalau ada: lepas semua penangkap supaya event
+      // dari socket lama tidak sampai ke pendengar manajer, lalu disconnect
+      // supaya socket lama berhenti mencoba sendiri.
+      if (this.socket) {
+        this.socket.off();
+        this.socket.disconnect();
+      }
+
       // Selalu pakai konfigurasi reconnect tanpa batas sejak koneksi pertama.
       // socket.io mencoba ulang sendiri dan percobaannya tidak pernah habis,
       // jadi pemanggil cukup menunggu 'connect' berikutnya.

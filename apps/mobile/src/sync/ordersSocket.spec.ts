@@ -748,6 +748,48 @@ describe('OrdersSocketManager', () => {
       expect(cb).not.toHaveBeenCalled();
     });
   });
+
+  // Socket lama harus dilepas (off + disconnect) sebelum manajer membuat
+  // socket baru, supaya event dari socket lama tidak sampai ke pendengar
+  // baru dan tidak ada dua socket yang sama-sama mencoba nyambung.
+  describe('ganti socket saat connect() dipanggil lagi', () => {
+    test('setelah disconnect, off() dan disconnect() socket lama terpanggil sebelum io() yang kedua', async () => {
+      var ioMock = require('socket.io-client').io;
+
+      // Sambungan pertama: connect lalu resolve, mockSocket jadi socket manajer.
+      var p1 = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await p1;
+      expect(ioMock).toHaveBeenCalledTimes(1);
+
+      // Sambungan putus sesaat.
+      trigger('disconnect', 'transport close');
+
+      // Sambungan kedua: connect() lagi. off() dan disconnect() socket lama
+      // harus terpanggil sebelum io() yang kedua.
+      var p2 = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await p2;
+
+      expect(ioMock).toHaveBeenCalledTimes(2);
+
+      // Pemanggilan off() dan disconnect() pada socket lama HARUS terjadi
+      // sebelum io() yang kedua dipanggil. invocationCallOrder adalah
+      // nomor urut global di seluruh mock, jadi lebih kecil = lebih dulu.
+      var ioSecondCallOrder = ioMock.mock.invocationCallOrder[1];
+      var offCallOrder = mockSocket.off.mock.invocationCallOrder[0];
+      var disconnectCallOrder = mockSocket.disconnect.mock.invocationCallOrder[0];
+
+      expect(offCallOrder).toBeDefined();
+      expect(disconnectCallOrder).toBeDefined();
+      expect(offCallOrder).toBeLessThan(ioSecondCallOrder);
+      expect(disconnectCallOrder).toBeLessThan(ioSecondCallOrder);
+    });
+  });
 });
 
 // File ini script (no top-level imports/exports) secara default → TS2393

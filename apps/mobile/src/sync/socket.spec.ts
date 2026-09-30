@@ -76,6 +76,11 @@ function trigger(event: string, ...args: any[]) {
   // Simulate socket state changes for 'connect' event
   if (event === 'connect') {
     isConnected = true;
+  } else if (event === 'disconnect') {
+    // Seperti socket.io asli: connected jadi false setelah event disconnect.
+    // Tanpa ini mockSocket.connected tetap true, jadi connect() berikutnya
+    // langsung selesai dan io() tidak dipanggil lagi.
+    isConnected = false;
   }
 }
 
@@ -434,6 +439,48 @@ describe('ChatSocketManager', function() {
         function(call: any[]) { return call[0] === 'reconnect_failed'; }
       );
       expect(reconnectFailedCallsAfter.length).toBe(0);
+    });
+  });
+
+  // Socket lama harus dilepas (off + disconnect) sebelum manajer membuat
+  // socket baru, supaya event dari socket lama tidak sampai ke pendengar
+  // baru dan tidak ada dua socket yang sama-sama mencoba nyambung.
+  describe('ganti socket saat connect() dipanggil lagi', () => {
+    test('setelah disconnect, off() dan disconnect() socket lama terpanggil sebelum io() yang kedua', async () => {
+      var ioMock = require('socket.io-client').io;
+
+      // Sambungan pertama: connect lalu resolve, mockSocket jadi socket manajer.
+      var p1 = chatSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await p1;
+      expect(ioMock).toHaveBeenCalledTimes(1);
+
+      // Sambungan putus sesaat.
+      trigger('disconnect', 'transport close');
+
+      // Sambungan kedua: connect() lagi. off() dan disconnect() socket lama
+      // harus terpanggil sebelum io() yang kedua.
+      var p2 = chatSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await p2;
+
+      expect(ioMock).toHaveBeenCalledTimes(2);
+
+      // Pemanggilan off() dan disconnect() pada socket lama HARUS terjadi
+      // sebelum io() yang kedua dipanggil. invocationCallOrder adalah
+      // nomor urut global di seluruh mock, jadi lebih kecil = lebih dulu.
+      var ioSecondCallOrder = ioMock.mock.invocationCallOrder[1];
+      var offCallOrder = mockSocket.off.mock.invocationCallOrder[0];
+      var disconnectCallOrder = mockSocket.disconnect.mock.invocationCallOrder[0];
+
+      expect(offCallOrder).toBeDefined();
+      expect(disconnectCallOrder).toBeDefined();
+      expect(offCallOrder).toBeLessThan(ioSecondCallOrder);
+      expect(disconnectCallOrder).toBeLessThan(ioSecondCallOrder);
     });
   });
 });
