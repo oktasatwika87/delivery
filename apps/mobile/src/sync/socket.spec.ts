@@ -194,16 +194,22 @@ describe('ChatSocketManager', function() {
       var promise2 = chatSocket.connect();
       await expect(promise2).resolves.toBeUndefined();
 
-      // io() tetap cuma sekali — tidak ada socket baru
+      // io() tetap cuma sekali, tidak ada socket baru
       expect(ioMock).toHaveBeenCalledTimes(1);
     });
 
-    test('REJECT kalau initial connect gagal setelah 3x retry', async function() {
+    // Dulu handler reconnect_failed dipasang dan membuat promise reject.
+    // Sekarang handler itu tidak ada, jadi event reconnect_failed tidak
+    // mengubah apa pun dan pemanggil tetap menunggu 'connect' berikutnya.
+    test('event reconnect_failed tidak bikin connect() reject', async function() {
       var promise = chatSocket.connect();
       await Promise.resolve();
       await Promise.resolve();
       trigger('reconnect_failed');
-      await expect(promise).rejects.toThrow('Failed to connect after retries');
+
+      // Setelah reconnect_failed, sambungan tetap bisa sukses dan promise resolve.
+      trigger('connect');
+      await expect(promise).resolves.toBeUndefined();
     });
 
     test('REJECT kalau disconnect() dipanggil sebelum connect berhasil', async function() {
@@ -212,6 +218,25 @@ describe('ChatSocketManager', function() {
       await Promise.resolve();
       chatSocket.disconnect();
       await expect(promise).rejects.toThrow('Disconnected before connection established');
+    });
+
+    // Sejak koneksi pertama socket.io mencoba ulang tanpa batas. Kalau
+    // jaringan gagal, promise tidak reject dan pemanggil cukup menunggu
+    // 'connect' berikutnya.
+    test('connect() tidak reject setelah beberapa connect_error, lalu resolve saat connect', async function() {
+      var promise = chatSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Picu beberapa connect_error (jaringan putus sesaat). Promise harus
+      // tetap pending, tidak reject.
+      trigger('connect_error', { message: 'network error' });
+      trigger('connect_error', { message: 'network error' });
+      trigger('connect_error', { message: 'network error' });
+
+      // Setelah beberapa kali gagal, sambungan sukses dan promise resolve.
+      trigger('connect');
+      await expect(promise).resolves.toBeUndefined();
     });
 
     test('REJECT kalau getCurrentToken return null/undefined (no token)', async function() {
@@ -297,29 +322,28 @@ describe('ChatSocketManager', function() {
   });
 
   describe('adaptive reconnection config', function() {
-    // Mechanism confirmed in Part A:
-    // - io() is called ONCE per connect() call
-    // - Config is determined by hasEverConnected flag at time of io() call
-    // - hasEverConnected becomes true when 'connect' event fires
-    // - Subsequent connect() calls (after disconnect) create NEW socket with Infinity attempts
+    // Konfigurasi reconnect socket.io:
+    // - Selalu reconnectionAttempts = Infinity dan reconnectionDelayMax = 10000 sejak koneksi pertama
+    // - hasEverConnected tidak lagi menentukan konfigurasi awal
+    //
+    // Latar belakang: socket.io v4.8.3 hanya memancarkan event 'reconnect_failed'
+    // dari manager, bukan dari socket. Handler lama tidak pernah jalan dan
+    // socket pertama mati setelah 3 kali gagal.
 
-    test('initial connect uses fail-fast: reconnectionAttempts = 3', async function() {
+    test('koneksi pertama pakai reconnectionAttempts Infinity dan reconnectionDelayMax 10000', async function() {
       var promise = chatSocket.connect();
       await Promise.resolve();
       await Promise.resolve();
 
-      // io() was called once with initial config
       var ioMock = require('socket.io-client').io;
       expect(ioMock).toHaveBeenCalledTimes(1);
 
-      // Assert the first io() call used 3 attempts (fail-fast)
       var firstCallArgs = ioCallHistory[0];
-      expect(firstCallArgs.options.reconnectionAttempts).toBe(3);
-      expect(firstCallArgs.options.reconnectionDelay).toBe(100);
-      expect(firstCallArgs.options.reconnectionDelayMax).toBe(1000);
       expect(firstCallArgs.options.reconnection).toBe(true);
+      expect(firstCallArgs.options.reconnectionAttempts).toBe(Infinity);
+      expect(firstCallArgs.options.reconnectionDelay).toBe(100);
+      expect(firstCallArgs.options.reconnectionDelayMax).toBe(10000);
 
-      // Complete the connection
       trigger('connect');
       await promise;
     });
@@ -349,11 +373,13 @@ describe('ChatSocketManager', function() {
       var ioMock = require('socket.io-client').io;
       expect(ioMock).toHaveBeenCalledTimes(2);
 
-      // Assert the SECOND io() call used Infinity attempts (unlimited reconnect)
+      // Panggilan io() kedua juga harus Infinity dengan delayMax 10000.
+      // Dulu tes ini mengharapkan 30000 untuk sambung ulang, sekarang
+      // koneksi pertama dan sambung ulang pakai konfigurasi yang sama.
       var secondCallArgs = ioCallHistory[1];
       expect(secondCallArgs.options.reconnectionAttempts).toBe(Infinity);
       expect(secondCallArgs.options.reconnectionDelay).toBe(100);
-      expect(secondCallArgs.options.reconnectionDelayMax).toBe(30000);
+      expect(secondCallArgs.options.reconnectionDelayMax).toBe(10000);
       expect(secondCallArgs.options.reconnection).toBe(true);
     });
 
@@ -378,9 +404,10 @@ describe('ChatSocketManager', function() {
       expect(ioCallHistory[1].options.auth.token).toBe('test-token');
     });
 
-    test('reconnect_failed handler only registered on initial connect', async function() {
-      // mockSocket is module-level, so we can access its once() mock directly
-      // Clear any previous calls
+    // Dulu socket.once('reconnect_failed', ...) dipasang saat koneksi
+    // pertama. Sekarang tidak dipasang sama sekali. Tes ini memastikan
+    // handler reconnect_failed tidak pernah didaftarkan.
+    test('io() tidak pernah mendaftarkan handler reconnect_failed (selalu pakai Infinity)', async function() {
       mockSocket.once.mockClear();
 
       // Initial connect
@@ -390,14 +417,10 @@ describe('ChatSocketManager', function() {
       trigger('connect');
       await promise1;
 
-      // Verify once('reconnect_failed') was called during initial connect
       var reconnectFailedCallsInitial = mockSocket.once.mock.calls.filter(
         function(call: any[]) { return call[0] === 'reconnect_failed'; }
       );
-      expect(reconnectFailedCallsInitial.length).toBe(1);
-
-      // Count of once('reconnect_failed') calls so far
-      var onceCallCountAfterInitial = reconnectFailedCallsInitial.length;
+      expect(reconnectFailedCallsInitial.length).toBe(0);
 
       // Disconnect and reconnect
       chatSocket.disconnect();
@@ -407,14 +430,10 @@ describe('ChatSocketManager', function() {
       trigger('connect');
       await promise2;
 
-      // Count of once('reconnect_failed') calls after reconnect
       var reconnectFailedCallsAfter = mockSocket.once.mock.calls.filter(
         function(call: any[]) { return call[0] === 'reconnect_failed'; }
       );
-      var onceCallCountAfterReconnect = reconnectFailedCallsAfter.length;
-
-      // Should be same count - no new reconnect_failed handler registered
-      expect(onceCallCountAfterReconnect).toBe(onceCallCountAfterInitial);
+      expect(reconnectFailedCallsAfter.length).toBe(0);
     });
   });
 });

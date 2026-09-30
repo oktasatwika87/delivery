@@ -6,8 +6,11 @@
  * - Event listener untuk 'orderAvailable', 'orderUnavailable', 'connect', 'disconnect', 'connect_error'
  *
  * Reconnection strategy (offline-first):
- * - Initial connect: fail-fast dengan retry terbatas (3x, delay 100ms-1s)
- * - Setelah pernah connect: reconnect unlimited dengan exponential backoff
+ * - Selalu reconnectionAttempts = Infinity dengan jeda 100 ms sampai 10 s sejak koneksi pertama.
+ * - socket.io mencoba ulang sendiri tanpa batas, pemanggil cukup menunggu
+ *   'connect' berikutnya.
+ * - connect() hanya reject kalau token tidak ada, atau disconnect() dipanggil
+ *   sebelum tersambung. Gagal jaringan tidak membuat connect() reject.
  *
  * KNOWN LIMITATION: token difetch sekali saat initial connect() dan
  * dipass ke socket.io. Auto-reconnect oleh socket.io client TIDAK
@@ -93,7 +96,8 @@ class OrdersSocketManager {
 
   /**
    * Track apakah socket pernah berhasil connect sebelumnya.
-   * Dipakai untuk bedakan initial connect vs reconnect.
+   * Hanya dipakai untuk log, tidak lagi menentukan konfigurasi reconnect
+   * (lihat komentar di awal file).
    */
   private hasEverConnected = false;
 
@@ -112,7 +116,9 @@ class OrdersSocketManager {
    *
    * Returns:
    * - Resolves when connected successfully (initial or reconnect)
-   * - Rejects if initial connection fails (after limited retries)
+   * - Reject hanya kalau token tidak ada, atau disconnect() dipanggil sebelum tersambung.
+   * - Gagal jaringan tidak membuat reject. socket.io mencoba ulang sendiri tanpa
+   *   batas, pemanggil cukup menunggu 'connect' berikutnya.
    *
    * Idempotent: calling connect() while already connecting/connected resolves immediately.
    *
@@ -177,30 +183,16 @@ class OrdersSocketManager {
         throw new Error('No auth token available');
       }
 
-      // Determine reconnection strategy based on connection history
-      const isInitialConnect = !this.hasEverConnected;
-
-      // Configure reconnection based on whether this is initial or reconnect
-      // - Initial connect: limited retries (3x) with short delay (100ms-1s) — fail fast
-      // - Reconnect: unlimited retries with exponential backoff (100ms-30s) — robust recovery
-      const reconnectionConfig = isInitialConnect
-        ? {
-            reconnection: true,
-            reconnectionAttempts: 3,
-            reconnectionDelay: 100,
-            reconnectionDelayMax: 1000,
-          }
-        : {
-            reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 100,
-            reconnectionDelayMax: 30000,
-          };
-
+      // Selalu pakai konfigurasi reconnect tanpa batas sejak koneksi pertama.
+      // socket.io mencoba ulang sendiri dan percobaannya tidak pernah habis,
+      // jadi pemanggil cukup menunggu 'connect' berikutnya.
       this.socket = io(`${WS_BASE}${ORDERS_NAMESPACE}`, {
         auth: { token },
         transports: ['websocket'],
-        ...reconnectionConfig,
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 100,
+        reconnectionDelayMax: 10000,
       });
 
       // Register event handlers BEFORE any events can fire
@@ -232,46 +224,6 @@ class OrdersSocketManager {
           syncEvents.emit('auth-expired', { source: 'orders-socket' });
         }
       });
-
-      // Register reconnect_failed handler SELAMA initial connect only
-      // (gak di-register di non-initial reconnect — kalau register setiap
-      // io() call, ada risk double-fire karena handler accumulate).
-      //
-      // Branch terjadi di FIRE time berdasarkan hasEverConnected:
-      // - hasEverConnected=false (initial connect gagal total) → reject promise
-      // - hasEverConnected=true (network drop setelah initial success) →
-      //   recreate socket dengan Infinity config, karena socket awal
-      //   pake 3-attempt config (transisi fail-fast → unlimited backoff).
-      //
-      // Kenapa harus di-register di initial: reconnect_failed fire di socket
-      // PERTAMA (yang dibuat saat initial connect). Kalau handler di-register
-      // di else branch (non-initial), dia gak akan pernah ada di socket
-      // pertama, jadi reconnect_failed fire tanpa handler.
-      if (isInitialConnect) {
-        this.socket.once('reconnect_failed', () => {
-          if (!this.hasEverConnected) {
-            console.error('[OrdersSocket] reconnect_failed: initial connection failed after retries');
-            if (this.connectReject) {
-              this.connectReject(new Error('Failed to connect after retries'));
-            }
-            this.connectPromise = null;
-            this.connectResolve = null;
-            this.connectReject = null;
-          } else {
-            console.warn(
-              '[OrdersSocket] reconnect_failed after success: recreating socket with Infinity config',
-            );
-            this.socket?.disconnect();
-            this.socket = null;
-            void this.connect().catch((err: Error) => {
-              console.warn(
-                '[OrdersSocket] reconnect attempt after reconnect_failed failed:',
-                err.message,
-              );
-            });
-          }
-        });
-      }
 
       this.socket.on('order:available', (payload: OrderAvailablePayload) => {
         this.emit('orderAvailable', payload);

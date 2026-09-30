@@ -136,12 +136,18 @@ describe('OrdersSocketManager', () => {
       await expect(ordersSocket.connect()).rejects.toThrow('Token fetch failed');
     });
 
-    test('reject kalau reconnect_failed (initial connect failed after retries)', async () => {
+    // Dulu handler reconnect_failed dipasang dan membuat promise reject.
+    // Sekarang handler itu tidak ada, jadi event reconnect_failed tidak
+    // mengubah apa pun dan pemanggil tetap menunggu 'connect' berikutnya.
+    test('event reconnect_failed tidak bikin connect() reject', async () => {
       var promise = ordersSocket.connect();
       await Promise.resolve();
       await Promise.resolve();
       trigger('reconnect_failed');
-      await expect(promise).rejects.toThrow('Failed to connect after retries');
+
+      // Setelah reconnect_failed, sambungan tetap bisa sukses dan promise resolve.
+      trigger('connect');
+      await expect(promise).resolves.toBeUndefined();
     });
 
     test('reject kalau disconnect() dipanggil sebelum connect', async () => {
@@ -150,6 +156,25 @@ describe('OrdersSocketManager', () => {
       await Promise.resolve();
       ordersSocket.disconnect();
       await expect(promise).rejects.toThrow('Disconnected before connection established');
+    });
+
+    // Sejak koneksi pertama socket.io mencoba ulang tanpa batas. Kalau
+    // jaringan gagal, promise tidak reject dan pemanggil cukup menunggu
+    // 'connect' berikutnya.
+    test('connect() tidak reject setelah beberapa connect_error, lalu resolve saat connect', async () => {
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Picu beberapa connect_error (jaringan putus sesaat). Promise harus
+      // tetap pending, tidak reject.
+      trigger('connect_error', { message: 'network error' });
+      trigger('connect_error', { message: 'network error' });
+      trigger('connect_error', { message: 'network error' });
+
+      // Setelah beberapa kali gagal, sambungan sukses dan promise resolve.
+      trigger('connect');
+      await expect(promise).resolves.toBeUndefined();
     });
   });
 
@@ -165,7 +190,11 @@ describe('OrdersSocketManager', () => {
       expect(ioCallHistory[0].url).toContain('/orders');
     });
 
-    test('socket connects dengan reconnection config (initial)', async () => {
+    // Koneksi pertama harus sudah Infinity dan delayMax 10000. Dulu koneksi
+    // pertama dibatasi 3 kali percobaan dengan delayMax 1 s, dan socket
+    // pertama mati setelah 3 kali gagal karena socket.io v4.8.3 tidak
+    // memancarkan reconnect_failed dari socket.
+    test('koneksi pertama pakai reconnectionAttempts Infinity dan reconnectionDelayMax 10000', async () => {
       var promise = ordersSocket.connect();
       await Promise.resolve();
       await Promise.resolve();
@@ -173,58 +202,54 @@ describe('OrdersSocketManager', () => {
       await promise;
 
       expect(ioCallHistory[0].options.reconnection).toBe(true);
-      expect(ioCallHistory[0].options.reconnectionAttempts).toBe(3);
+      expect(ioCallHistory[0].options.reconnectionAttempts).toBe(Infinity);
+      expect(ioCallHistory[0].options.reconnectionDelay).toBe(100);
+      expect(ioCallHistory[0].options.reconnectionDelayMax).toBe(10000);
     });
   });
 
   describe('adaptive reconnection config', () => {
     /**
-     * Coverage untuk transisi initial fail-fast → reconnect unlimited.
+     * Konfigurasi reconnect tanpa batas sama di setiap panggilan io():
+     * - Koneksi pertama: reconnectionAttempts = Infinity, delayMax = 10000
+     * - Sambung ulang setelah pernah tersambung: sama persis
      *
-     * Mirroring design contract dari ChatSocketManager:
-     * - Initial connect (hasEverConnected=false): reconnectionAttempts = 3
-     * - Reconnect setelah pernah connect: reconnectionAttempts = Infinity
-     *
-     * Catatan desain (sama seperti ChatSocketManager):
-     * socket.io pakai config yang sama sepanjang lifetime socket,
-     * jadi transisi 3 → Infinity cuma terjadi kalau ada code yang
-     * panggil connect() lagi setelah disconnect — yang akan bikin
-     * io() baru dengan config berdasarkan hasEverConnected yang true.
-     * Auto-reconnect internal socket.io dari network drop pake config
-     * awal (3 attempts), bukan Infinity.
+     * Dulu koneksi pertama dibatasi 3 kali percobaan (delayMax 1 s), lalu
+     * pindah ke Infinity setelah pernah tersambung. Karena handler
+     * reconnect_failed tidak pernah terpanggil dari socket, socket pertama
+     * mati setelah 3 kali gagal. Sekarang selalu Infinity.
      */
-    test('reconnect setelah non-intentional disconnect pakai Infinity (bukan 3)', async () => {
-      // 1. Initial connect sukses — hasEverConnected jadi true, config fail-fast
+    test('setelah disconnect lalu connect lagi, konfigurasi tetap Infinity', async () => {
+      // 1. Koneksi pertama sukses
       var promise1 = ordersSocket.connect();
       await Promise.resolve();
       await Promise.resolve();
       trigger('connect');
       await promise1;
 
-      // Precondition: initial config adalah 3 (fail-fast)
+      // Syarat awal: konfigurasi pertama sudah Infinity
       expect(ordersSocket.wasEverConnected).toBe(true);
-      expect(ioCallHistory[0].options.reconnectionAttempts).toBe(3);
+      expect(ioCallHistory[0].options.reconnectionAttempts).toBe(Infinity);
+      expect(ioCallHistory[0].options.reconnectionDelayMax).toBe(10000);
 
       // 2. Simulasi non-intentional disconnect dari server/network
-      //    (BUKAN manager.disconnect() — itu bakal null this.socket
+      //    (bukan manager.disconnect(), karena itu membuat this.socket null
       //    dan skip jalur reconnect yang sebenarnya)
       trigger('disconnect', 'server namespace disconnect');
 
-      // 3. Precondition: hasEverConnected HARUS tetap true setelah
-      //    disconnect. Kalau flag ini ke-reset ke false, config
-      //    berikutnya bakal balik ke 3 (fail-fast) lagi.
+      // 3. hasEverConnected harus tetap true setelah disconnect
       expect(ordersSocket.wasEverConnected).toBe(true);
 
-      // 4. External code / retry mechanism panggil connect() lagi
-      //    setelah disconnect. Karena hasEverConnected=true, io()
-      //    berikutnya harus pake unlimited reconnect config.
+      // 4. Kode lain memanggil connect() lagi setelah disconnect. io()
+      //    berikutnya harus pakai konfigurasi yang sama dengan koneksi
+      //    pertama, bukan delayMax 30000 seperti dulu.
       var promise2 = ordersSocket.connect();
       await Promise.resolve();
       await Promise.resolve();
       trigger('connect');
       await promise2;
 
-      // 5. io() dipanggil 2x total — call ke-2 harus pake Infinity
+      // 5. io() dipanggil 2 kali, panggilan kedua juga pakai Infinity
       var ioMock = require('socket.io-client').io;
       expect(ioMock).toHaveBeenCalledTimes(2);
 
@@ -232,11 +257,15 @@ describe('OrdersSocketManager', () => {
       expect(secondCallArgs.options.reconnection).toBe(true);
       expect(secondCallArgs.options.reconnectionAttempts).toBe(Infinity);
       expect(secondCallArgs.options.reconnectionDelay).toBe(100);
-      expect(secondCallArgs.options.reconnectionDelayMax).toBe(30000);
+      expect(secondCallArgs.options.reconnectionDelayMax).toBe(10000);
     });
 
-    test('manager auto-recreate socket Infinity saat reconnect_failed setelah initial success', async () => {
-      // 1. Initial connect sukses — hasEverConnected=true, io() config 3
+    // Dulu handler reconnect_failed membuat socket baru dengan konfigurasi
+    // Infinity. Sekarang handler itu tidak ada, jadi event reconnect_failed
+    // tidak membuat socket baru. socket.io sudah mencoba ulang sendiri tanpa
+    // batas, pemanggil cukup menunggu 'connect' berikutnya di socket yang sama.
+    test('reconnect_failed setelah pernah tersambung tidak membuat socket baru', async () => {
+      // 1. Koneksi pertama sukses, hasEverConnected=true
       var promise1 = ordersSocket.connect();
       await Promise.resolve();
       await Promise.resolve();
@@ -245,50 +274,45 @@ describe('OrdersSocketManager', () => {
 
       expect(ordersSocket.wasEverConnected).toBe(true);
       expect(ioCallHistory.length).toBe(1);
-      expect(ioCallHistory[0].options.reconnectionAttempts).toBe(3);
+      expect(ioCallHistory[0].options.reconnectionAttempts).toBe(Infinity);
 
-      // 2. Network drop → socket.io auto-retry 3x (pake config awal 3 attempts).
-      //    Semua retry gagal → 'reconnect_failed' emit. Ini menandakan
-      //    initial socket-nya sudah DEAD — gak ada auto-reconnect lagi
-      //    dari socket.io.
+      // 2. Jaringan putus. Dengan Infinity, reconnect_failed tidak pernah
+      //    muncul dari socket. Tes ini memastikan kalaupun mock memancarkan
+      //    event itu, manajer tidak membuat socket baru.
       trigger('disconnect', 'transport close');
       trigger('reconnect_failed');
 
-      // 3. Manager harus respond ke reconnect_failed dengan recreate
-      //    socket baru via io() — config baru Infinity karena
-      //    hasEverConnected=true. Flush microtasks karena handler
-      //    panggil void this.connect() yang async.
+      // Tunggu microtask. Kalau handler reconnect_failed masih ada, di sini
+      // dia akan memanggil this.connect().
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
 
-      // 4. io() dipanggil 2x — call ke-2 dengan Infinity config
-      expect(ioCallHistory.length).toBe(2);
-      var secondCallArgs = ioCallHistory[1];
-      expect(secondCallArgs.options.reconnection).toBe(true);
-      expect(secondCallArgs.options.reconnectionAttempts).toBe(Infinity);
-      expect(secondCallArgs.options.reconnectionDelay).toBe(100);
-      expect(secondCallArgs.options.reconnectionDelayMax).toBe(30000);
+      // io() tetap cuma sekali, tidak ada socket baru.
+      expect(ioCallHistory.length).toBe(1);
     });
 
-    test('reconnect_failed saat initial connect (hasEverConnected=false) tetap reject promise, gak recreate', async () => {
-      // Initial connect — hasEverConnected masih false
+    test('reconnect_failed sebelum pernah tersambung tidak membuat promise reject', async () => {
+      // Koneksi pertama, hasEverConnected masih false
       var promise = ordersSocket.connect();
       await Promise.resolve();
       await Promise.resolve();
 
       expect(ordersSocket.wasEverConnected).toBe(false);
       expect(ioCallHistory.length).toBe(1);
-      expect(ioCallHistory[0].options.reconnectionAttempts).toBe(3);
+      expect(ioCallHistory[0].options.reconnectionAttempts).toBe(Infinity);
 
-      // Simulasi socket.io retry 3x gagal di initial
+      // Dulu reconnect_failed di koneksi pertama membuat promise reject.
+      // Sekarang handler itu tidak ada, jadi pemanggil tetap menunggu
+      // 'connect' berikutnya.
       trigger('reconnect_failed');
 
-      // Handler harus reject promise (existing behavior) — JANGAN
-      // recreate socket karena hasEverConnected=false
-      await expect(promise).rejects.toThrow('Failed to connect after retries');
+      // Promise masih pending: setelah 'connect' promise resolve. Kalau tadi
+      // sudah reject, 'connect' tidak mengubah hasilnya.
+      trigger('connect');
+      await expect(promise).resolves.toBeUndefined();
 
-      // io() tetap cuma 1x — gak ada socket baru
+      // io() tetap cuma sekali, tidak ada socket baru
       expect(ioCallHistory.length).toBe(1);
     });
   });
