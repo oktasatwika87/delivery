@@ -1,11 +1,19 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ForbiddenException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
 import { SyncService } from './sync.service';
+import { ChatService } from '../chat/chat.service';
+import { ChatGateway } from '../chat/chat.gateway';
 
 describe('SyncService.applyOne', () => {
   let service: SyncService;
   let prisma: PrismaClient;
+  let chatService: ChatService;
+  let chatGateway: ChatGateway;
+
+  // User IDs
+  const userId = 'customer-uuid';
 
   // Helper buat bikin record push
   const makeRecord = (overrides: Partial<Parameters<typeof SyncService.prototype.applyOne>[1]> = {}) => ({
@@ -32,45 +40,56 @@ describe('SyncService.applyOne', () => {
   });
 
   beforeEach(async () => {
+    const mockPrisma = {
+      order: {
+        findUnique: jest.fn(),
+        upsert: jest.fn(),
+        update: jest.fn(),
+      },
+      payment: {
+        findUnique: jest.fn(),
+        findFirst: jest.fn(),
+        upsert: jest.fn(),
+        update: jest.fn(),
+      },
+      chatMessage: {
+        findUnique: jest.fn(),
+        upsert: jest.fn(),
+        update: jest.fn(),
+      },
+      user: {
+        updateMany: jest.fn(),
+      },
+    };
+
+    const mockChatService = {
+      send: jest.fn(),
+    };
+
+    const mockChatGateway = {
+      emitNewMessage: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SyncService,
-        {
-          provide: PrismaClient,
-          useValue: {
-            order: {
-              findUnique: jest.fn(),
-              upsert: jest.fn(),
-              update: jest.fn(),
-            },
-            payment: {
-              findUnique: jest.fn(),
-              findFirst: jest.fn(),
-              upsert: jest.fn(),
-              update: jest.fn(),
-            },
-            chatMessage: {
-              findUnique: jest.fn(),
-              upsert: jest.fn(),
-              update: jest.fn(),
-            },
-            user: {
-              updateMany: jest.fn(),
-            },
-          },
-        },
+        { provide: PrismaClient, useValue: mockPrisma },
+        { provide: ChatService, useValue: mockChatService },
+        { provide: ChatGateway, useValue: mockChatGateway },
       ],
     }).compile();
 
     service = module.get<SyncService>(SyncService);
     prisma = module.get(PrismaClient);
+    chatService = module.get(ChatService);
+    chatGateway = module.get(ChatGateway);
   });
 
   afterEach(() => {
     jest.clearAllMocks();
   });
 
-  // ============ Hari 4 commit 2: order/payment sync push ditolak ============
+  // Order sync: semua push ditolak
 
   it('should reject order create via sync', async () => {
     const record = makeRecord();
@@ -83,20 +102,19 @@ describe('SyncService.applyOne', () => {
       updatedAt: new Date(),
     });
 
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
     expect(ack.status).toBe('rejected');
     expect(ack.reason).toBe('Order hanya bisa diubah lewat endpoint order');
-    // upsert TIDAK boleh dipanggil untuk entity yang ditolak
     expect(prisma.order.upsert).not.toHaveBeenCalled();
   });
 
-  // ============ Scenario 2: Update dengan baseVersion yang cocok ============
+  // Update dengan baseVersion cocok: tetap ditolak
 
   it('should reject order update via sync when baseVersion matches', async () => {
     const record = makeRecord({
       op: 'update',
-      baseVersion: 3, // client punya versi 3
+      baseVersion: 3,
       data: {
         ...makeRecord().data,
         status: 'ASSIGNED',
@@ -124,21 +142,14 @@ describe('SyncService.applyOne', () => {
       updatedAt: new Date(),
     });
 
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
-    // Hari 4 commit 2: order update via sync ditolak walaupun versi cocok.
+    // Order update via sync ditolak walaupun versi cocok.
     expect(ack.status).toBe('rejected');
     expect(ack.reason).toBe('Order hanya bisa diubah lewat endpoint order');
-    expect(ack.serverVersion).toBe(3); // kembalikan versi server supaya client bisa sync
+    expect(ack.serverVersion).toBe(3);
     expect(prisma.order.upsert).not.toHaveBeenCalled();
   });
-
-  // ============ Scenario 3: Update dengan baseVersion tidak cocok (CONFLICT) ============
-  //
-  // Hari 4 commit 2: OCC conflict HARUS didahulukan dari penolakan entity.
-  // Walau order update via sync selalu ditolak, client yang mengirim
-  // baseVersion basi tetap perlu tahu versi server terbaru — kalau tidak,
-  // client tidak bisa reconciliation.
 
   it('should return conflict when baseVersion does not match', async () => {
     const record = makeRecord({
@@ -162,24 +173,21 @@ describe('SyncService.applyOne', () => {
       updatedAt: new Date(),
     });
 
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
-    // Hari 4 commit 2: order OCC conflict masih 'conflict' + serverData,
-    // bukan 'rejected' — supaya mobile bisa pulih dengan data server.
     expect(ack.status).toBe('conflict');
-    expect(ack.serverVersion).toBe(4); // return versi server
-    expect(ack.serverData).toBeDefined(); // wajib ada data server terbaru
+    expect(ack.serverVersion).toBe(4);
+    expect(ack.serverData).toBeDefined();
     expect(ack.reason).toContain('Version mismatch');
-    // upsert TIDAK boleh dipanggil
     expect(prisma.order.upsert).not.toHaveBeenCalled();
   });
 
-  // ============ Scenario: Conflict ack membawa cancelledBy/cancelReason (Temuan 14) ============
+  // Conflict ack membawa cancelledBy/cancelReason
 
   it('should include cancelledBy and cancelReason in ack.serverData on conflict', async () => {
-    // Server punya order dengan data batal dari cron — saat conflict, data ini
-    // harus ikut di serverData supaya client yang menarik row ini (mis. setelah
-    // accept dari pool) bisa melihat alasan pembatalan lama kalau ada.
+    // Server punya order dengan data batal dari cron - saat conflict, data ini
+    // harus ikut di serverData supaya client yang menarik row ini bisa melihat
+    // alasan pembatalan lama.
     const record = makeRecord({
       op: 'update',
       baseVersion: 2,
@@ -202,7 +210,7 @@ describe('SyncService.applyOne', () => {
       updatedAt: new Date(),
     });
 
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
     expect(ack.status).toBe('conflict');
     expect(ack.serverData).toBeDefined();
@@ -210,13 +218,11 @@ describe('SyncService.applyOne', () => {
     expect(ack.serverData?.cancelReason).toBe('system_timeout');
   });
 
-  // ============ Scenario 4: Update setelah record di-delete (version sudah naik) ============
-
   it('should return conflict when updating a soft-deleted record with stale baseVersion', async () => {
     // Client mencoba update record yang sudah di-delete oleh proses lain
     const record = makeRecord({
       op: 'update',
-      baseVersion: 2, // client thinks versi 2, tapi...
+      baseVersion: 2,
     });
 
     // Row di DB sudah di-delete (version naik ke 3)
@@ -230,26 +236,22 @@ describe('SyncService.applyOne', () => {
       totalCents: 50000,
       currency: 'IDR',
       notes: null,
-      deletedAt: new Date(), // record sudah di-delete
-      version: 3, // VERSION SUDAH NAIK karena soft delete increment
+      deletedAt: new Date(),
+      version: 3,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
 
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
     expect(ack.status).toBe('conflict');
     expect(ack.serverVersion).toBe(3);
     expect(ack.serverData).toBeDefined();
     expect(ack.reason).toContain('Version mismatch');
-    // upsert TIDAK boleh dipanggil
     expect(prisma.order.upsert).not.toHaveBeenCalled();
   });
 
-  // ============ Payment OCC: Update dengan baseVersion cocok ============
-  //
-  // Hari 4 commit 2: payment update via sync SELALU ditolak walaupun
-  // versi cocok (entitas harus lewat endpoint payments, bukan sync push).
+  // Payment OCC: Update dengan baseVersion cocok
 
   it('should reject payment update via sync when baseVersion matches', async () => {
     const paymentRecord = {
@@ -294,18 +296,13 @@ describe('SyncService.applyOne', () => {
       updatedAt: new Date(),
     });
 
-    const ack = await service.applyOne('payment', paymentRecord);
+    const ack = await service.applyOne('payment', paymentRecord, userId);
 
     expect(ack.status).toBe('rejected');
     expect(ack.reason).toBe('Pembayaran hanya bisa diubah lewat endpoint pembayaran');
     expect(ack.serverVersion).toBe(2);
     expect(prisma.payment.upsert).not.toHaveBeenCalled();
   });
-
-  // ============ Payment OCC: Update dengan baseVersion stale (CONFLICT) ============
-  //
-  // Hari 4 commit 2: payment OCC conflict masih 'conflict' + serverData,
-  // bukan 'rejected' — supaya mobile bisa pulih dengan data server terbaru.
 
   it('should return conflict when updating payment with stale baseVersion', async () => {
     const paymentRecord = {
@@ -346,20 +343,16 @@ describe('SyncService.applyOne', () => {
       updatedAt: new Date(),
     });
 
-    const ack = await service.applyOne('payment', paymentRecord);
+    const ack = await service.applyOne('payment', paymentRecord, userId);
 
     expect(ack.status).toBe('conflict');
     expect(ack.serverVersion).toBe(5);
     expect(ack.serverData).toBeDefined();
     expect(ack.reason).toContain('Version mismatch');
-    // upsert TIDAK boleh dipanggil
     expect(prisma.payment.upsert).not.toHaveBeenCalled();
   });
 
-  // ============ Hari 4 commit 2: payment create ditolak langsung ============
-  //
-  // Tidak ada lagi idempotency check — semua payment create lewat sync
-  // ditolak tanpa menyentuh DB.
+  // Payment create ditolak langsung tanpa menyentuh DB
 
   it('should reject payment create via sync', async () => {
     const paymentRecord = {
@@ -384,16 +377,15 @@ describe('SyncService.applyOne', () => {
       baseVersion: null,
     };
 
-    const ack = await service.applyOne('payment', paymentRecord);
+    const ack = await service.applyOne('payment', paymentRecord, userId);
 
     expect(ack.status).toBe('rejected');
     expect(ack.reason).toBe('Pembayaran hanya bisa diubah lewat endpoint pembayaran');
-    // Tidak ada idempotency check — payment.create TIDAK dipanggil
     expect(prisma.payment.findUnique).not.toHaveBeenCalled();
     expect(prisma.payment.upsert).not.toHaveBeenCalled();
   });
 
-  // ============ Hari 4 commit 2: payment delete ditolak ============
+  // Payment delete tetap ditolak
 
   it('should reject payment delete with matching baseVersion', async () => {
     const paymentRecord = {
@@ -433,7 +425,7 @@ describe('SyncService.applyOne', () => {
       updatedAt: new Date(),
     });
 
-    const ack = await service.applyOne('payment', paymentRecord);
+    const ack = await service.applyOne('payment', paymentRecord, userId);
 
     expect(ack.status).toBe('rejected');
     expect(ack.reason).toBe('Pembayaran hanya bisa diubah lewat endpoint pembayaran');
@@ -453,154 +445,573 @@ describe('SyncService.applyOne', () => {
       baseVersion: null,
     };
 
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
     expect(ack.status).toBe('rejected');
     expect(ack.reason).toBe('Tipe data tidak dikenal');
   });
+});
 
-  // ============ Hari 4 commit 2: chat_message sync TIDAK berubah ============
-  //
-  // Regression guard: penolakan order/payment TIDAK boleh bocor ke
-  // chat_message. Mobile chat offline-first masih pakai sync push.
+// chat_message sync push dengan validasi akses
 
-  it('should accept chat_message create via sync (tidak berubah)', async () => {
-    const chatRecord = {
-      entityType: 'chat_message' as const,
-      id: 'chat-uuid',
-      data: {
+describe('SyncService.applyOne — chat_message', () => {
+  let service: SyncService;
+  let prisma: PrismaClient;
+  let chatService: ChatService;
+  let chatGateway: ChatGateway;
+
+  const userId = 'customer-uuid';
+  const orderId = 'order-uuid-123';
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        SyncService,
+        {
+          provide: PrismaClient,
+          useValue: {
+            order: { findUnique: jest.fn() },
+            payment: { findUnique: jest.fn(), upsert: jest.fn(), update: jest.fn() },
+            chatMessage: { findUnique: jest.fn(), upsert: jest.fn(), update: jest.fn() },
+            user: { updateMany: jest.fn() },
+          },
+        },
+        { provide: ChatService, useValue: { send: jest.fn() } },
+        { provide: ChatGateway, useValue: { emitNewMessage: jest.fn() } },
+      ],
+    }).compile();
+
+    service = module.get<SyncService>(SyncService);
+    prisma = module.get(PrismaClient);
+    chatService = module.get(ChatService);
+    chatGateway = module.get(ChatGateway);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('create', () => {
+    test('push create oleh bukan peserta room: rejected', async () => {
+      const chatRecord = {
+        entityType: 'chat_message' as const,
+        id: 'new-chat-uuid',
+        data: {
+          id: 'new-chat-uuid',
+          roomId: orderId,
+          senderId: 'other-person',
+          body: 'Halo',
+          attachment: undefined,
+          status: 'SENT' as const,
+          clientCreatedAt: new Date().toISOString(),
+          serverCreatedAt: undefined,
+          version: 1,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        op: 'create' as const,
+        clientChangedAt: new Date().toISOString(),
+        baseVersion: null,
+      };
+
+      chatService.send.mockImplementation(() =>
+        Promise.reject(new ForbiddenException('Order not found')),
+      );
+
+      const ack = await service.applyOne('chat_message', chatRecord, userId);
+
+      expect(ack.status).toBe('rejected');
+      expect(ack.reason).toBe('Pesan ditolak: bukan peserta chat order ini atau id pesan sudah dipakai');
+      expect(chatGateway.emitNewMessage).not.toHaveBeenCalled();
+    });
+
+    test('push create dengan data.senderId orang lain: tersimpan dengan senderId = userId login', async () => {
+      const chatRecord = {
+        entityType: 'chat_message' as const,
         id: 'chat-uuid',
-        roomId: 'order-uuid',
-        senderId: 'customer-uuid',
+        data: {
+          id: 'chat-uuid',
+          roomId: orderId,
+          senderId: 'attacker-id',
+          body: 'Halo',
+          attachment: undefined,
+          status: 'PENDING_SEND' as const,
+          clientCreatedAt: new Date().toISOString(),
+          serverCreatedAt: undefined,
+          version: 1,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        op: 'create' as const,
+        clientChangedAt: new Date().toISOString(),
+        baseVersion: null,
+      };
+
+      const serverMessage = {
+        id: 'chat-uuid',
+        roomId: orderId,
+        senderId: userId,
         body: 'Halo',
         attachment: undefined,
-        status: 'SENT' as const,
+        status: 'SENT',
         clientCreatedAt: new Date().toISOString(),
-        serverCreatedAt: undefined,
+        serverCreatedAt: new Date().toISOString(),
         version: 1,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-      },
-      op: 'create' as const,
-      clientChangedAt: new Date().toISOString(),
-      baseVersion: null,
-    };
+      };
 
-    (prisma.chatMessage.findUnique as jest.Mock).mockResolvedValue(null);
-    (prisma.chatMessage.upsert as jest.Mock).mockResolvedValue({
-      id: 'chat-uuid',
-      version: 1,
-      updatedAt: new Date(),
+      chatService.send.mockResolvedValue({ message: serverMessage, created: true });
+
+      const ack = await service.applyOne('chat_message', chatRecord, userId);
+
+      expect(ack.status).toBe('accepted');
+      expect(chatService.send).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'chat-uuid', roomId: orderId, body: 'Halo' }),
+        userId,
+      );
+      expect(chatGateway.emitNewMessage).toHaveBeenCalledTimes(1);
     });
 
-    const ack = await service.applyOne('chat_message', chatRecord);
-
-    expect(ack.status).toBe('accepted');
-    expect(ack.serverVersion).toBe(1);
-    expect(prisma.chatMessage.upsert).toHaveBeenCalled();
-  });
-
-  it('should accept chat_message update with matching baseVersion (tidak berubah)', async () => {
-    const chatRecord = {
-      entityType: 'chat_message' as const,
-      id: 'chat-uuid',
-      data: {
+    test('push create dengan status PENDING_SEND dan serverCreatedAt null: tersimpan SENT dan serverCreatedAt terisi', async () => {
+      const chatRecord = {
+        entityType: 'chat_message' as const,
         id: 'chat-uuid',
-        roomId: 'order-uuid',
-        senderId: 'customer-uuid',
-        body: 'Halo (edited)',
+        data: {
+          id: 'chat-uuid',
+          roomId: orderId,
+          senderId: userId,
+          body: 'Pesan offline',
+          attachment: undefined,
+          status: 'PENDING_SEND' as const, // dari klien
+          clientCreatedAt: new Date().toISOString(),
+          serverCreatedAt: undefined, // null di klien
+          version: 1,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        op: 'create' as const,
+        clientChangedAt: new Date().toISOString(),
+        baseVersion: null,
+      };
+
+      const serverMessage = {
+        id: 'chat-uuid',
+        roomId: orderId,
+        senderId: userId,
+        body: 'Pesan offline',
         attachment: undefined,
-        status: 'SENT' as const,
+        status: 'SENT', // server ubah jadi SENT
         clientCreatedAt: new Date().toISOString(),
-        serverCreatedAt: new Date().toISOString(),
-        version: 2,
+        serverCreatedAt: new Date().toISOString(), // server isi
+        version: 1,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-      },
-      op: 'update' as const,
-      clientChangedAt: new Date().toISOString(),
-      baseVersion: 1,
-    };
+      };
 
-    (prisma.chatMessage.findUnique as jest.Mock).mockResolvedValue({
-      id: 'chat-uuid',
-      roomId: 'order-uuid',
-      senderId: 'customer-uuid',
-      body: 'Halo',
-      attachmentJson: null,
-      status: 'SENT',
-      clientCreatedAt: new Date(),
-      serverCreatedAt: new Date(),
-      version: 1,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-    (prisma.chatMessage.upsert as jest.Mock).mockResolvedValue({
-      id: 'chat-uuid',
-      version: 2,
-      updatedAt: new Date(),
+      chatService.send.mockResolvedValue({ message: serverMessage, created: true });
+
+      const ack = await service.applyOne('chat_message', chatRecord, userId);
+
+      expect(ack.status).toBe('accepted');
+      expect(chatService.send).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'chat-uuid' }),
+        userId,
+      );
     });
 
-    const ack = await service.applyOne('chat_message', chatRecord);
+    test('push create id sudah ada milik orang lain: rejected, baris tidak berubah', async () => {
+      const chatRecord = {
+        entityType: 'chat_message' as const,
+        id: 'existing-id',
+        data: {
+          id: 'existing-id',
+          roomId: orderId,
+          senderId: 'attacker',
+          body: 'Ganti ini',
+          attachment: undefined,
+          status: 'SENT' as const,
+          clientCreatedAt: new Date().toISOString(),
+          serverCreatedAt: undefined,
+          version: 1,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        op: 'create' as const,
+        clientChangedAt: new Date().toISOString(),
+        baseVersion: null,
+      };
 
-    expect(ack.status).toBe('accepted');
-    expect(ack.serverVersion).toBe(2);
-    expect(prisma.chatMessage.upsert).toHaveBeenCalled();
-  });
+      chatService.send.mockImplementation(() =>
+        Promise.reject(new ForbiddenException('Pesan ditolak: bukan peserta chat order ini atau id pesan sudah dipakai')),
+      );
 
-  it('should return conflict for chat_message update with stale baseVersion (tidak berubah)', async () => {
-    const chatRecord = {
-      entityType: 'chat_message' as const,
-      id: 'chat-uuid',
-      data: {
-        id: 'chat-uuid',
-        roomId: 'order-uuid',
-        senderId: 'customer-uuid',
-        body: 'Halo (edited)',
+      const ack = await service.applyOne('chat_message', chatRecord, userId);
+
+      expect(ack.status).toBe('rejected');
+      expect(ack.reason).toBe('Pesan ditolak: bukan peserta chat order ini atau id pesan sudah dipakai');
+      expect(chatGateway.emitNewMessage).not.toHaveBeenCalled();
+    });
+
+    test('push create ulang id sendiri: accepted, emit tidak dipanggil lagi', async () => {
+      const chatRecord = {
+        entityType: 'chat_message' as const,
+        id: 'my-idempotent-id',
+        data: {
+          id: 'my-idempotent-id',
+          roomId: orderId,
+          senderId: userId,
+          body: 'Pesan saya',
+          attachment: undefined,
+          status: 'SENT' as const,
+          clientCreatedAt: new Date().toISOString(),
+          serverCreatedAt: new Date().toISOString(),
+          version: 1,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        op: 'create' as const,
+        clientChangedAt: new Date().toISOString(),
+        baseVersion: null,
+      };
+
+      const existingMessage = {
+        id: 'my-idempotent-id',
+        roomId: orderId,
+        senderId: userId,
+        body: 'Pesan pertama',
         attachment: undefined,
-        status: 'SENT' as const,
+        status: 'SENT',
         clientCreatedAt: new Date().toISOString(),
         serverCreatedAt: new Date().toISOString(),
-        version: 2,
+        version: 1,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-      },
-      op: 'update' as const,
-      clientChangedAt: new Date().toISOString(),
-      baseVersion: 1,
-    };
+      };
 
-    (prisma.chatMessage.findUnique as jest.Mock).mockResolvedValue({
-      id: 'chat-uuid',
-      roomId: 'order-uuid',
-      senderId: 'customer-uuid',
-      body: 'Halo (someone else edited)',
-      attachmentJson: null,
-      status: 'SENT',
-      clientCreatedAt: new Date(),
-      serverCreatedAt: new Date(),
-      version: 3,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      chatService.send.mockResolvedValue({ message: existingMessage, created: false });
+
+      const ack = await service.applyOne('chat_message', chatRecord, userId);
+
+      expect(ack.status).toBe('accepted');
+      expect(chatGateway.emitNewMessage).not.toHaveBeenCalled();
     });
 
-    const ack = await service.applyOne('chat_message', chatRecord);
+    test('push create pesan baru: emitNewMessage dipanggil tepat sekali', async () => {
+      const chatRecord = {
+        entityType: 'chat_message' as const,
+        id: 'brand-new-uuid',
+        data: {
+          id: 'brand-new-uuid',
+          roomId: orderId,
+          senderId: userId,
+          body: 'Pesan baru',
+          attachment: undefined,
+          status: 'SENT' as const,
+          clientCreatedAt: new Date().toISOString(),
+          serverCreatedAt: undefined,
+          version: 1,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        op: 'create' as const,
+        clientChangedAt: new Date().toISOString(),
+        baseVersion: null,
+      };
 
-    expect(ack.status).toBe('conflict');
-    expect(ack.serverVersion).toBe(3);
-    expect(ack.serverData).toBeDefined();
-    expect(ack.reason).toContain('Version mismatch');
-    expect(prisma.chatMessage.upsert).not.toHaveBeenCalled();
+      const newMessage = {
+        id: 'brand-new-uuid',
+        roomId: orderId,
+        senderId: userId,
+        body: 'Pesan baru',
+        attachment: undefined,
+        status: 'SENT',
+        clientCreatedAt: new Date().toISOString(),
+        serverCreatedAt: new Date().toISOString(),
+        version: 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      chatService.send.mockResolvedValue({ message: newMessage, created: true });
+
+      const ack = await service.applyOne('chat_message', chatRecord, userId);
+
+      expect(ack.status).toBe('accepted');
+      expect(chatGateway.emitNewMessage).toHaveBeenCalledTimes(1);
+      expect(chatGateway.emitNewMessage).toHaveBeenCalledWith(newMessage);
+    });
+  });
+
+  describe('update', () => {
+    test('update pesan orang lain dengan versi cocok: rejected, baris tidak berubah', async () => {
+      const chatRecord = {
+        entityType: 'chat_message' as const,
+        id: 'chat-uuid',
+        data: {
+          id: 'chat-uuid',
+          roomId: orderId,
+          senderId: userId,
+          body: 'Edit dia',
+          attachment: undefined,
+          status: 'SENT' as const,
+          clientCreatedAt: new Date().toISOString(),
+          serverCreatedAt: new Date().toISOString(),
+          version: 2,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        op: 'update' as const,
+        clientChangedAt: new Date().toISOString(),
+        baseVersion: 1,
+      };
+
+      // Row di DB punya senderId berbeda
+      (prisma.chatMessage.findUnique as jest.Mock).mockResolvedValue({
+        id: 'chat-uuid',
+        roomId: orderId,
+        senderId: 'other-user', // BUKAN userId
+        body: 'Pesan dia',
+        attachmentJson: null,
+        status: 'SENT',
+        clientCreatedAt: new Date(),
+        serverCreatedAt: new Date(),
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const ack = await service.applyOne('chat_message', chatRecord, userId);
+
+      expect(ack.status).toBe('rejected');
+      expect(ack.reason).toBe('Pesan ini bukan milik Anda');
+      expect(prisma.chatMessage.update).not.toHaveBeenCalled();
+    });
+
+    test('update versi basi: tetap conflict + serverData', async () => {
+      const chatRecord = {
+        entityType: 'chat_message' as const,
+        id: 'chat-uuid',
+        data: {
+          id: 'chat-uuid',
+          roomId: orderId,
+          senderId: userId,
+          body: 'Edit',
+          attachment: undefined,
+          status: 'SENT' as const,
+          clientCreatedAt: new Date().toISOString(),
+          serverCreatedAt: new Date().toISOString(),
+          version: 2,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        op: 'update' as const,
+        clientChangedAt: new Date().toISOString(),
+        baseVersion: 1, // basi
+      };
+
+      (prisma.chatMessage.findUnique as jest.Mock).mockResolvedValue({
+        id: 'chat-uuid',
+        roomId: orderId,
+        senderId: userId,
+        body: 'Pesan dia',
+        attachmentJson: null,
+        status: 'SENT',
+        clientCreatedAt: new Date(),
+        serverCreatedAt: new Date(),
+        version: 3, // server lebih baru
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const ack = await service.applyOne('chat_message', chatRecord, userId);
+
+      expect(ack.status).toBe('conflict');
+      expect(ack.serverVersion).toBe(3);
+      expect(ack.serverData).toBeDefined();
+      expect(prisma.chatMessage.update).not.toHaveBeenCalled();
+    });
+
+    test('update pesan sendiri versi cocok: accepted, status dari klien diabaikan', async () => {
+      const chatRecord = {
+        entityType: 'chat_message' as const,
+        id: 'chat-uuid',
+        data: {
+          id: 'chat-uuid',
+          roomId: orderId,
+          senderId: userId,
+          body: 'Body baru',
+          attachment: { kind: 'image' as const, url: 'http://img.new' },
+          status: 'DELIVERED' as const, // klien kirim ini, tapi harus diabaikan
+          clientCreatedAt: new Date().toISOString(),
+          serverCreatedAt: new Date().toISOString(),
+          version: 2,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        op: 'update' as const,
+        clientChangedAt: new Date().toISOString(),
+        baseVersion: 1,
+      };
+
+      (prisma.chatMessage.findUnique as jest.Mock).mockResolvedValue({
+        id: 'chat-uuid',
+        roomId: orderId,
+        senderId: userId,
+        body: 'Body lama',
+        attachmentJson: null,
+        status: 'SENT',
+        clientCreatedAt: new Date(),
+        serverCreatedAt: new Date(),
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      (prisma.chatMessage.update as jest.Mock).mockResolvedValue({
+        id: 'chat-uuid',
+        roomId: orderId,
+        senderId: userId,
+        body: 'Body baru',
+        attachmentJson: { kind: 'image', url: 'http://img.new' },
+        status: 'SENT', // server KEEP old status, tidak pakai DELIVERED
+        clientCreatedAt: new Date(),
+        serverCreatedAt: new Date(),
+        version: 2,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const ack = await service.applyOne('chat_message', chatRecord, userId);
+
+      expect(ack.status).toBe('accepted');
+      expect(ack.serverVersion).toBe(2);
+      // status dari klien (DELIVERED) tidak dipakai; hanya body & attachment
+      expect(prisma.chatMessage.update).toHaveBeenCalledWith({
+        where: { id: 'chat-uuid' },
+        data: expect.objectContaining({
+          body: 'Body baru',
+          attachmentJson: { kind: 'image', url: 'http://img.new' },
+        }),
+      });
+    });
+  });
+
+  describe('delete', () => {
+    test('delete pesan orang lain dengan versi cocok: rejected, baris tidak berubah', async () => {
+      const chatRecord = {
+        entityType: 'chat_message' as const,
+        id: 'chat-uuid',
+        data: {
+          id: 'chat-uuid',
+          roomId: orderId,
+          senderId: userId,
+          body: '',
+          attachment: undefined,
+          status: 'SENT' as const,
+          clientCreatedAt: new Date().toISOString(),
+          serverCreatedAt: new Date().toISOString(),
+          version: 2,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        op: 'delete' as const,
+        clientChangedAt: new Date().toISOString(),
+        baseVersion: 1,
+      };
+
+      (prisma.chatMessage.findUnique as jest.Mock).mockResolvedValue({
+        id: 'chat-uuid',
+        roomId: orderId,
+        senderId: 'other-user',
+        body: 'Pesan dia',
+        attachmentJson: null,
+        status: 'SENT',
+        clientCreatedAt: new Date(),
+        serverCreatedAt: new Date(),
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const ack = await service.applyOne('chat_message', chatRecord, userId);
+
+      expect(ack.status).toBe('rejected');
+      expect(ack.reason).toBe('Pesan ini bukan milik Anda');
+      expect(prisma.chatMessage.update).not.toHaveBeenCalled();
+    });
+
+    test('delete pesan sendiri versi cocok: accepted, deletedAt terisi', async () => {
+      const chatRecord = {
+        entityType: 'chat_message' as const,
+        id: 'my-chat-uuid',
+        data: {
+          id: 'my-chat-uuid',
+          roomId: orderId,
+          senderId: userId,
+          body: '',
+          attachment: undefined,
+          status: 'SENT' as const,
+          clientCreatedAt: new Date().toISOString(),
+          serverCreatedAt: new Date().toISOString(),
+          version: 2,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        op: 'delete' as const,
+        clientChangedAt: new Date().toISOString(),
+        baseVersion: 1,
+      };
+
+      (prisma.chatMessage.findUnique as jest.Mock).mockResolvedValue({
+        id: 'my-chat-uuid',
+        roomId: orderId,
+        senderId: userId,
+        body: 'Pesan saya',
+        attachmentJson: null,
+        status: 'SENT',
+        clientCreatedAt: new Date(),
+        serverCreatedAt: new Date(),
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      (prisma.chatMessage.update as jest.Mock).mockResolvedValue({
+        id: 'my-chat-uuid',
+        roomId: orderId,
+        senderId: userId,
+        body: 'Pesan saya',
+        attachmentJson: null,
+        status: 'SENT',
+        clientCreatedAt: new Date(),
+        serverCreatedAt: new Date(),
+        version: 2,
+        deletedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const ack = await service.applyOne('chat_message', chatRecord, userId);
+
+      expect(ack.status).toBe('accepted');
+      expect(ack.serverVersion).toBe(2);
+      expect(prisma.chatMessage.update).toHaveBeenCalledWith({
+        where: { id: 'my-chat-uuid' },
+        data: expect.objectContaining({ deletedAt: expect.any(Date) }),
+      });
+    });
   });
 });
 
-// Hari 4 commit 2: order push via sync SELALU ditolak (entity apapun,
-// op apapun). Untuk update/delete, OCC conflict masih didahulukan dari
-// penolakan entity supaya mobile yang mengirim baseVersion basi tetap
-// bisa pulih dengan data server.
+// Order push via sync SELALU ditolak. Untuk update/delete, OCC conflict
+// masih didahulukan dari penolakan entity supaya mobile yang mengirim
+// baseVersion basi tetap bisa pulih dengan data server.
 describe('applyOne — order sync records (rejected)', () => {
   let service: SyncService;
   let prisma: PrismaClient;
+
+  const userId = 'customer-uuid';
 
   // Helper untuk bikin order record dengan status tertentu
   const makeOrderRecord = (overrides: Partial<Parameters<typeof SyncService.prototype.applyOne>[1]> = {}) => ({
@@ -654,6 +1065,8 @@ describe('applyOne — order sync records (rejected)', () => {
             },
           },
         },
+        { provide: ChatService, useValue: { send: jest.fn() } },
+        { provide: ChatGateway, useValue: { emitNewMessage: jest.fn() } },
       ],
     }).compile();
 
@@ -665,8 +1078,8 @@ describe('applyOne — order sync records (rejected)', () => {
     jest.clearAllMocks();
   });
 
-  // Hari 4 commit 2: order update lewat sync SELALU ditolak, tanpa
-  // melihat status transisi, ownership, atau Rule 1/2/3B apapun.
+  // Order update lewat sync SELALU ditolak, tanpa melihat status
+  // transisi, ownership, atau Rule 1/2/3B apapun.
 
   it('rejects order update with matching baseVersion (regardless of transition)', async () => {
     (prisma.order.findUnique as jest.Mock).mockResolvedValue({
@@ -685,7 +1098,7 @@ describe('applyOne — order sync records (rejected)', () => {
     });
 
     const record = makeOrderRecord({ baseVersion: 5, data: { ...makeOrderRecord().data, status: 'OUT_FOR_DELIVERY' } });
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
     expect(ack.status).toBe('rejected');
     expect(ack.reason).toBe('Order hanya bisa diubah lewat endpoint order');
@@ -716,7 +1129,7 @@ describe('applyOne — order sync records (rejected)', () => {
 
     // baseVersion stale: client kirim 5, server sudah 7
     const record = makeOrderRecord({ baseVersion: 5 });
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
     expect(ack.status).toBe('conflict');
     expect(ack.serverVersion).toBe(7);
@@ -729,7 +1142,7 @@ describe('applyOne — order sync records (rejected)', () => {
     (prisma.order.findUnique as jest.Mock).mockResolvedValue(null);
 
     const record = makeOrderRecord({ baseVersion: 1 });
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
     expect(ack.status).toBe('rejected');
     expect(ack.reason).toContain('not found');
@@ -745,7 +1158,7 @@ describe('applyOne — order sync records (rejected)', () => {
     });
 
     const record = makeOrderRecord({ op: 'create', baseVersion: null });
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
     expect(ack.status).toBe('rejected');
     expect(ack.reason).toBe('Order hanya bisa diubah lewat endpoint order');
@@ -769,7 +1182,7 @@ describe('applyOne — order sync records (rejected)', () => {
     });
 
     const record = makeOrderRecord({ op: 'delete', baseVersion: 5 });
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
     expect(ack.status).toBe('rejected');
     expect(ack.reason).toBe('Order hanya bisa diubah lewat endpoint order');
@@ -794,7 +1207,7 @@ describe('applyOne — order sync records (rejected)', () => {
     });
 
     const record = makeOrderRecord({ op: 'delete', baseVersion: 5 });
-    const ack = await service.applyOne(record.entityType, record);
+    const ack = await service.applyOne(record.entityType, record, userId);
 
     expect(ack.status).toBe('conflict');
     expect(ack.serverVersion).toBe(9);
@@ -877,6 +1290,8 @@ describe('SyncService.pullSince', () => {
             },
           },
         },
+        { provide: ChatService, useValue: { send: jest.fn() } },
+        { provide: ChatGateway, useValue: { emitNewMessage: jest.fn() } },
       ],
     }).compile();
 

@@ -22,7 +22,7 @@ export class SyncController {
     if (payload.userId !== userId) {
       throw new ForbiddenException('userId mismatch');
     }
-    return this.service.applyPush(payload);
+    return this.service.applyPush(payload, userId);
   }
 
   @Get('pull')

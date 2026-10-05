@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
 import type {
@@ -12,14 +12,21 @@ import type {
   SyncRecordPull,
 } from '@delivery/shared';
 
+import { ChatGateway } from '../chat/chat.gateway';
+import { ChatService } from '../chat/chat.service';
+
 @Injectable()
 export class SyncService {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly chatService: ChatService,
+    private readonly chatGateway: ChatGateway,
+  ) {}
 
-  async applyPush(payload: SyncPushPayload): Promise<SyncPushResponse> {
+  async applyPush(payload: SyncPushPayload, userId: string): Promise<SyncPushResponse> {
     const acks: SyncRecordAck[] = [];
     for (const record of payload.records) {
-      const ack = await this.applyOne(record.entityType, record);
+      const ack = await this.applyOne(record.entityType, record, userId);
       acks.push(ack);
     }
     return { acks };
@@ -125,11 +132,12 @@ export class SyncService {
   public async applyOne(
     entityType: string,
     record: SyncPushPayload['records'][number],
+    userId: string,
   ): Promise<SyncRecordAck> {
     const { id, data, baseVersion, op } = record;
     const now = new Date().toISOString();
 
-    // entityType tak dikenal — tolak segera
+    // entityType tak dikenal - tolak segera
     if (entityType !== 'order' && entityType !== 'payment' && entityType !== 'chat_message') {
       return this.nack(id, entityType, 'rejected', 'Tipe data tidak dikenal', now);
     }
@@ -190,63 +198,89 @@ export class SyncService {
         'Pembayaran hanya bisa diubah lewat endpoint pembayaran', now, row.version);
     }
 
-    // Chat message: tidak berubah — masih dipakai untuk offline-first chat
-    if (op === 'update' || op === 'delete') {
-      const row = await this.prisma.chatMessage.findUnique({ where: { id } });
-      if (!row) {
-        return this.nack(id, entityType, 'rejected', `Entity ${id} not found`, now);
-      }
-      if (row.version !== baseVersion) {
+    // Chat message
+    if (op === 'create') {
+      const c = data as ChatMessage;
+      try {
+        const { message, created } = await this.chatService.send(
+          {
+            id,
+            roomId: c.roomId,
+            body: c.body,
+            attachment: c.attachment,
+            clientCreatedAt: c.clientCreatedAt,
+          },
+          userId,
+        );
+        if (created) {
+          this.chatGateway.emitNewMessage(message);
+        }
         return {
-          id: row.id,
-          entityType: 'chat_message',
-          status: 'conflict',
-          reason: `Version mismatch: base=${baseVersion}, server=${row.version}`,
-          serverVersion: row.version,
-          serverChangedAt: row.updatedAt.toISOString(),
-          serverData: this.chatToDomain(row),
+          id: message.id,
+          entityType: 'chat_message' as const,
+          status: 'accepted',
+          serverVersion: message.version,
+          serverChangedAt: new Date().toISOString(),
         };
+      } catch (err: unknown) {
+        if (err instanceof ForbiddenException) {
+          return this.nack(id, 'chat_message', 'rejected',
+            'Pesan ditolak: bukan peserta chat order ini atau id pesan sudah dipakai', new Date().toISOString());
+        }
+        throw err;
       }
     }
 
-    // Apply: create/update/delete untuk chat_message
-    let serverVersion: number;
+    // Update/delete: OCC check dulu, lalu cek senderId
+    const row = await this.prisma.chatMessage.findUnique({ where: { id } });
+    if (!row) {
+      return this.nack(id, 'chat_message', 'rejected', `Entity ${id} not found`, now);
+    }
+    if (row.version !== baseVersion) {
+      return {
+        id: row.id,
+        entityType: 'chat_message',
+        status: 'conflict',
+        reason: `Version mismatch: base=${baseVersion}, server=${row.version}`,
+        serverVersion: row.version,
+        serverChangedAt: row.updatedAt.toISOString(),
+        serverData: this.chatToDomain(row),
+      };
+    }
+    // Setelah OCC pass, cek sender
+    if (row.senderId !== userId) {
+      return this.nack(id, 'chat_message', 'rejected', 'Pesan ini bukan milik Anda', now, row.version);
+    }
+
     if (op === 'delete') {
       const deleted = await this.prisma.chatMessage.update({
         where: { id },
         data: { deletedAt: new Date(), version: { increment: 1 } },
       });
-      serverVersion = deleted.version;
-    } else {
-      const c = data as ChatMessage;
-      const result = await this.prisma.chatMessage.upsert({
-        where: { id },
-        create: {
-          id,
-          roomId: c.roomId,
-          senderId: c.senderId,
-          body: c.body,
-          attachmentJson: c.attachment,
-          status: c.status,
-          clientCreatedAt: new Date(c.clientCreatedAt),
-          serverCreatedAt: c.serverCreatedAt ? new Date(c.serverCreatedAt) : null,
-          version: 1,
-        },
-        update: {
-          body: c.body,
-          attachmentJson: c.attachment,
-          status: c.status,
-          version: { increment: 1 },
-        },
-      });
-      serverVersion = result.version;
+      return {
+        id,
+        entityType: 'chat_message' as const,
+        status: 'accepted',
+        serverVersion: deleted.version,
+        serverChangedAt: now,
+      };
     }
 
+    // op === 'update': hanya body & attachment; status dari klien diabaikan
+    const c = data as ChatMessage;
+    const updated = await this.prisma.chatMessage.update({
+      where: { id },
+      data: {
+        body: c.body,
+        attachmentJson: c.attachment ?? undefined,
+        version: { increment: 1 },
+      },
+    });
     return {
       id,
       entityType: 'chat_message' as const,
       status: 'accepted',
-      serverVersion,
+      serverVersion: updated.version,
       serverChangedAt: now,
     };
   }
