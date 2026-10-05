@@ -454,7 +454,7 @@ describe('SyncService.applyOne', () => {
 
 // chat_message sync push dengan validasi akses
 
-describe('SyncService.applyOne — chat_message', () => {
+describe('SyncService.applyOne chat_message', () => {
   let service: SyncService;
   let prisma: PrismaClient;
   let chatService: ChatService;
