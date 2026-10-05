@@ -56,6 +56,7 @@ import { syncEvents } from '../sync/syncEvents';
 interface OrderTrackingScreenProps {
   orderId: string;
   onBack: () => void;
+  onOpenChat: (roomId: string) => void;
 }
 
 const STATUS_COLORS: Record<OrderStatus, { bg: string; text: string }> = {
@@ -103,6 +104,7 @@ interface CodReceipt {
 export function OrderTrackingScreen({
   orderId,
   onBack,
+  onOpenChat,
 }: OrderTrackingScreenProps): React.JSX.Element {
   const [order, setOrder] = useState<Order | null>(null);
   const [connected, setConnected] = useState(ordersSocket.isConnected);
@@ -320,6 +322,16 @@ export function OrderTrackingScreen({
         <StatusBadge status={order.status} />
       </View>
 
+      {order.driverId && order.status !== 'CANCELLED' && (
+        <View style={styles.chatButtonContainer}>
+          <Button
+            title="Chat dengan Kurir"
+            onPress={() => onOpenChat(order.id)}
+            testID="chat-button"
+          />
+        </View>
+      )}
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Detail Pengiriman</Text>
         <Text style={styles.value}>{order.deliveryAddress.recipientName}</Text>
@@ -511,5 +523,8 @@ const styles = StyleSheet.create({
   },
   backButtonContainer: {
     marginTop: 8,
+  },
+  chatButtonContainer: {
+    marginBottom: 16,
   },
 });

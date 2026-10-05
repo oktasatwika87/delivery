@@ -15,11 +15,13 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { CustomerHomeScreen } from './CustomerHomeScreen';
 import { OrderCreateScreen } from './OrderCreateScreen';
 import { OrderTrackingScreen } from './OrderTrackingScreen';
+import { ChatScreen } from '../screens/ChatScreen';
 
 export type CustomerStackParamList = {
   CustomerHome: undefined;
   OrderCreate: undefined;
   OrderTracking: { orderId: string };
+  Chat: { roomId: string };
 };
 
 const Stack = createNativeStackNavigator<CustomerStackParamList>();
@@ -51,9 +53,11 @@ export function CustomerStack({ onLogout }: CustomerStackProps): React.JSX.Eleme
           <OrderTrackingScreen
             orderId={route.params.orderId}
             onBack={() => navigation.goBack()}
+            onOpenChat={(roomId) => navigation.navigate('Chat', { roomId })}
           />
         )}
       </Stack.Screen>
+      <Stack.Screen name="Chat" component={ChatScreen} />
     </Stack.Navigator>
   );
 }

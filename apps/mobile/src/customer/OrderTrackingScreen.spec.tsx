@@ -172,7 +172,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValue(MOCK_ORDER);
 
     const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     expect(getByText('Memuat order...')).toBeTruthy();
@@ -182,7 +182,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText, queryByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -208,7 +208,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockRejectedValueOnce(new Error('Network error'));
 
     const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -230,7 +230,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockRejectedValueOnce(new UnauthorizedError());
 
     render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -253,7 +253,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(orderWithStaleCancel);
 
     const { getByText, queryByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -285,7 +285,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -310,7 +310,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -336,7 +336,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText, queryByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -362,7 +362,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText, queryByTestId, getByTestId } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -393,7 +393,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText, queryByTestId } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -416,7 +416,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText, queryByTestId, getByTestId } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -445,7 +445,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { queryByText, getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -473,7 +473,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { unmount } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -510,7 +510,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(preparingOrder);
 
     const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -537,7 +537,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -578,7 +578,7 @@ describe('OrderTrackingScreen', () => {
     mockGetOrderById.mockResolvedValueOnce(orderRp23k);
 
     const { getAllByText, getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} />,
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -590,5 +590,108 @@ describe('OrderTrackingScreen', () => {
     expect(priceTexts).toHaveLength(2); // item + total
     // Item harga, Rp 23.000 (bukan Rp 230 dari bug /100)
     expect(getByText('1x Mie Goreng')).toBeTruthy();
+  });
+
+  it('PREPARING dengan driverId: tombol Chat dengan Kurir tampil, ketuk memanggil onOpenChat', async () => {
+    const preparingWithDriver = {
+      ...MOCK_ORDER,
+      status: 'PREPARING' as const,
+      driverId: 'driver-456',
+    };
+    mockGetOrderById.mockResolvedValueOnce(preparingWithDriver);
+
+    const onOpenChat = jest.fn();
+    const { getByTestId } = render(
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={onOpenChat} />,
+    );
+
+    await waitFor(() => {
+      expect(getByTestId('chat-button')).toBeTruthy();
+    });
+
+    fireEvent.press(getByTestId('chat-button'));
+
+    expect(onOpenChat).toHaveBeenCalledTimes(1);
+    expect(onOpenChat).toHaveBeenCalledWith('12345678-0000-0000-0000-000000000000');
+  });
+
+  it('ASSIGNED tanpa driverId: tombol Chat dengan Kurir tidak tampil', async () => {
+    const assignedNoDriver = {
+      ...MOCK_ORDER,
+      status: 'ASSIGNED' as const,
+      driverId: undefined,
+    };
+    mockGetOrderById.mockResolvedValueOnce(assignedNoDriver);
+
+    const { queryByTestId } = render(
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(queryByTestId('chat-button')).toBeNull();
+    });
+  });
+
+  it('CANCELLED: tombol Chat dengan Kurir tidak tampil', async () => {
+    const cancelledOrder = {
+      ...MOCK_ORDER,
+      status: 'CANCELLED' as const,
+      driverId: 'driver-456',
+    };
+    mockGetOrderById.mockResolvedValueOnce(cancelledOrder);
+
+    const { queryByTestId } = render(
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(queryByTestId('chat-button')).toBeNull();
+    });
+  });
+
+  it('setelah order:accepted tombol muncul, setelah order:cancelled tombol hilang', async () => {
+    // Start dengan ASSIGNED (pool state, no driver)
+    const assignedNoDriver = {
+      ...MOCK_ORDER,
+      status: 'ASSIGNED' as const,
+      driverId: undefined,
+    };
+    mockGetOrderById.mockResolvedValueOnce(assignedNoDriver);
+
+    const { queryByTestId } = render(
+      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(queryByTestId('chat-button')).toBeNull();
+    });
+
+    // order:accepted -> driverId terisi -> tombol muncul
+    act(() => {
+      triggerAccepted({
+        orderId: 'order-abc-123',
+        driverId: 'driver-789',
+        status: 'PREPARING',
+        version: 2,
+      });
+    });
+
+    await waitFor(() => {
+      expect(queryByTestId('chat-button')).toBeTruthy();
+    });
+
+    // setelah order:cancelled, driverId kosong dan tombol hilang
+    act(() => {
+      triggerCancelled({
+        orderId: 'order-abc-123',
+        status: 'ASSIGNED',
+        version: 3,
+        reason: 'Kendaraan mogok',
+      });
+    });
+
+    await waitFor(() => {
+      expect(queryByTestId('chat-button')).toBeNull();
+    });
   });
 });
