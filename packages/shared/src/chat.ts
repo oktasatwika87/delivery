@@ -53,4 +53,6 @@ export interface SendChatMessageInput {
   roomId: string;
   body: string;
   attachment?: ChatAttachment;
+  /** Timestamp buatan client. Server memakainya kalau nilainya valid dan tidak di masa depan. */
+  clientCreatedAt?: string;
 }

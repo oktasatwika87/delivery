@@ -7,8 +7,8 @@ import {
   ConnectedSocket,
   MessageBody,
 } from '@nestjs/websockets';
-import { Socket, Server } from 'socket.io';
-import type { ChatAttachment } from '@delivery/shared';
+import { Server, Socket } from 'socket.io';
+import type { ChatAttachment, ChatMessage } from '@delivery/shared';
 import { JwtService } from '@nestjs/jwt';
 
 import { ChatService } from './chat.service';
@@ -115,6 +115,14 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   /**
+   * Pancarkan new_message ke semua client di room.
+   * Harusnya dipanggil oleh pemanggil (gateway, controller, sync) setelah pesan dibuat.
+   */
+  emitNewMessage(message: ChatMessage): void {
+    this.server.to(message.roomId).emit('new_message', message);
+  }
+
+  /**
    * Kirim chat message.
    *
    * Payload: SendChatMessageInput
@@ -126,22 +134,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleSendMessage(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: { id?: string; roomId: string; body: string; attachment?: unknown },
-  ): Promise<{ success: boolean; error?: string; message?: unknown }> {
+  ): Promise<{ success: boolean; error?: string; message?: ChatMessage }> {
     const userId = client.data['userId'] as string | undefined;
     if (!userId) {
       return { success: false, error: 'Not authenticated' };
     }
 
     try {
-      // ChatService.send() melakukan ownership validation + create
-      // Pass client-generated id if provided for consistent ID across devices
-      const message = await this.chatService.send(
+      const { message, created } = await this.chatService.send(
         { id: payload.id, roomId: payload.roomId, body: payload.body, attachment: payload.attachment as ChatAttachment | undefined },
         userId,
       );
 
-      // Broadcast ke semua client di room (termasuk sender)
-      this.server.to(payload.roomId).emit('new_message', message);
+      if (created) {
+        this.emitNewMessage(message);
+      }
 
       return { success: true, message };
     } catch (err) {

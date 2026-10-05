@@ -1,5 +1,5 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 import type { ChatMessage, SendChatMessageInput } from '@delivery/shared';
 
@@ -13,7 +13,7 @@ import type { ChatMessage, SendChatMessageInput } from '@delivery/shared';
  *   - roomId = orderId (exact match, bukan prefix atau format lain)
  *
  * Validasi di method send() adalah penegakan kontrak ini secara eksplisit:
- * backend tidak percaya client soal roomId — harus diverifikasi bahwa:
+ * backend tidak percaya client soal roomId - harus diverifikasi bahwa:
  *   1. order dengan roomId tersebut ada
  *   2. pengirim adalah customer ATAU driver dari order tersebut
  *
@@ -27,8 +27,8 @@ export class ChatService {
    * Validasi apakah user memiliki akses ke room (orderId).
    *
    * Dipakai oleh:
-   * - ChatService.send() — REST endpoint
-   * - ChatGateway join_room event — WebSocket
+   * - ChatService.send() - REST endpoint
+   * - ChatGateway join_room event - WebSocket
    *
    * throws ForbiddenException jika order tidak ada atau user bukan customer/driver.
    */
@@ -61,25 +61,73 @@ export class ChatService {
    * Kontrak roomId = orderId ditegakkan di sini:
    * - Cek order dengan roomId ada
    * - Cek sender adalah customer atau driver dari order tersebut
+   *
+   * Mengembalikan { message, created }:
+   * - created=true: baris baru dibuat
+   * - created=false: id sudah ada, baris yang ada dikembalikan tanpa diubah
    */
-  async send(input: SendChatMessageInput, senderId: string): Promise<ChatMessage> {
+  async send(
+    input: SendChatMessageInput,
+    senderId: string,
+  ): Promise<{ message: ChatMessage; created: boolean }> {
     await this.validateRoomAccess(input.roomId, senderId);
 
     const now = new Date();
-    const row = await this.prisma.chatMessage.create({
-      data: {
-        // Use client-generated ID if provided (consistent ID across devices)
-        id: input.id ?? undefined,
-        roomId: input.roomId,
-        senderId,
-        body: input.body,
-        attachmentJson: input.attachment ?? undefined,
-        status: 'SENT',
-        clientCreatedAt: now,
-        serverCreatedAt: now,
-      },
-    });
-    return this.toDomain(row);
+
+    // Tentukan clientCreatedAt: pakai dari input kalau valid, selain itu sekarang
+    let clientCreatedAt = now;
+    if (input.clientCreatedAt) {
+      const parsed = new Date(input.clientCreatedAt);
+      if (!isNaN(parsed.getTime()) && parsed <= now) {
+        clientCreatedAt = parsed;
+      }
+    }
+
+    // Kalau id sudah ada: cek senderId dan roomId
+    if (input.id) {
+      const existing = await this.prisma.chatMessage.findUnique({
+        where: { id: input.id },
+      });
+      if (existing) {
+        if (existing.senderId !== senderId || existing.roomId !== input.roomId) {
+          throw new ForbiddenException('Pesan ini bukan milik Anda di room ini');
+        }
+        // Idempoten: kembalikan baris yang ada tanpa mengubah apa pun
+        return { message: this.toDomain(existing), created: false };
+      }
+    }
+
+    // Dua perangkat membuat pesan dengan id sama secara bersamaan: lempar P2002
+    try {
+      const row = await this.prisma.chatMessage.create({
+        data: {
+          id: input.id ?? undefined,
+          roomId: input.roomId,
+          senderId,
+          body: input.body,
+          attachmentJson: input.attachment ?? undefined,
+          status: 'SENT',
+          clientCreatedAt,
+          serverCreatedAt: now,
+        },
+      });
+      return { message: this.toDomain(row), created: true };
+    } catch (err: unknown) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const existing = await this.prisma.chatMessage.findUnique({
+          where: { id: input.id },
+        });
+        if (!existing) {
+          // Seharusnya tidak terjadi
+          throw err;
+        }
+        if (existing.senderId !== senderId || existing.roomId !== input.roomId) {
+          throw new ForbiddenException('Pesan ini bukan milik Anda di room ini');
+        }
+        return { message: this.toDomain(existing), created: false };
+      }
+      throw err;
+    }
   }
 
   private toDomain = (row: {
