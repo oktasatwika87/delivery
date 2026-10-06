@@ -1,44 +1,31 @@
-# tileserver-gl — self-hosted OSM tile server for Bali (Nusa Tenggara extract)
+# tileserver-gl — melayani vector tile Bali ke app mobile.
 #
-# Usage:
-#   Development (localhost):
-#     docker compose up
-#     # serves at http://localhost:8080
+# Penggunaan lokal (Docker):
+#   docker compose up
+#   # layani di http://localhost:8080
 #
-#   Production (VPS):
-#     scp -r infra/tileserver/ user@vps:/opt/tileserver/
-#     ssh user@vps
-#     cd /opt/tileserver
-#     # Edit .env with your domain and VPS IP
-#     docker compose up -d
-#     # Then set up Caddy: scp infra/tileserver/Caddyfile user@vps:/etc/caddy/Caddyfile
+# Endpoint:
+#   Style JSON:    http://localhost:8080/styles/bali/style.json
+#   TileJSON:      http://localhost:8080/data/bali.json
+#   Vector tiles:  http://localhost:8080/data/bali/{z}/{x}/{y}.pbf
 #
-# Endpoints:
-#   Style JSON:  http://localhost:8080/styles/bali/style.json
-#   TileJSON:    http://localhost:8080/data/bali.json
-#   Vector tiles: http://localhost:8080/data/bali/{z}/{x}/{y}.pbf
-#   Sprite:      http://localhost:8080/sprites/bali.json
-#
-# Initial data setup (one-time per OSM refresh):
-#   ./refresh-osm.sh
-#   # This downloads Geofabrik extract, runs planetiler, outputs bali.mbtiles
+# Catatan:
+#   - Image tileserver-gl-light:v5.6.0 sudah punya HEALTHCHECK bawaan
+#     (node + endpoint /health). docker ps otomatis menunjukkan 'healthy'.
+#   - Config dan style di-mount read-only dari host. Container tidak
+#     menulis ke folder manapun di host.
 
 services:
   tileserver:
-    image: maptiler/tileserver-gl:v2.3.0
+    image: maptiler/tileserver-gl-light:v5.6.0
     container_name: tileserver-gl
     restart: unless-stopped
+    command: ["-c", "/etc/tileserver/config.json"]
     volumes:
+      - ./config.json:/etc/tileserver/config.json:ro
+      - ./styles:/etc/tileserver/styles:ro
       - ./data:/data:ro
     ports:
       - "8080:8080"
     environment:
-      # tileserver-gl reads .mbtiles from /data/ automatically
-      # No config file needed — drops .mbtiles in /data/ and it's served
       - NODE_ENV=production
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s

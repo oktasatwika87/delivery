@@ -1,0 +1,29 @@
+{
+  "version": 8,
+  "name": "Bali",
+  "sources": {
+    "bali": {
+      "type": "vector",
+      "url": "mbtiles://{bali}"
+    }
+  },
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#e8e0d8"
+      }
+    },
+    {
+      "id": "transportation",
+      "type": "line",
+      "source": "bali",
+      "source-layer": "transportation",
+      "paint": {
+        "line-color": "#ffffff",
+        "line-width": 2
+      }
+    }
+  ]
+}

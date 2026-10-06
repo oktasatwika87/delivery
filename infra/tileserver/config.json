@@ -1,0 +1,19 @@
+{
+  "options": {
+    "paths": {
+      "root": "/data",
+      "styles": "/etc/tileserver/styles",
+      "mbtiles": "/data"
+    }
+  },
+  "styles": {
+    "bali": {
+      "style": "bali/style.json"
+    }
+  },
+  "data": {
+    "bali": {
+      "mbtiles": "bali.mbtiles"
+    }
+  }
+}
