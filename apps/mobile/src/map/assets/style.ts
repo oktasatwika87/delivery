@@ -19,12 +19,17 @@
 import Config from 'react-native-config';
 
 /**
- * TileJSON endpoint from tileserver-gl.
- * Points at /data/bali.json (relative path so OfflineManager resolves it).
- *
- * Zoom range: 0-20 (self-hosted Bali extract, not limited like demotiles z0-6).
+ * Alamat style.json di tileserver-gl. Dipakai offlineStorage sebagai styleURL offline pack;
+ * MapView tidak memakainya langsung.
  */
 export const TILE_STYLE_URL = `${Config.TILE_BASE_URL}/styles/bali/style.json`;
+
+/**
+ * TileJSON endpoint dari tileserver-gl.
+ * style.json di server mereferensikan ini sebagai vector source, jadi style object
+ * yang dipakai MapView harus menunjuk ke sini, bukan ke style.json.
+ */
+export const TILE_TILEJSON_URL = `${Config.TILE_BASE_URL}/data/bali.json`;
 
 /** Map style for MapScreen.mapStyle prop.
  *
@@ -47,7 +52,7 @@ export const TILE_STYLE: string = JSON.stringify({
     },
     tiles: {
       type: 'vector',
-      url: TILE_STYLE_URL,
+      url: TILE_TILEJSON_URL,
     },
   },
   layers: [
