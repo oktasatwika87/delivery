@@ -1,8 +1,5 @@
-# OSM tile data — gitignored, uploaded to VPS via scp
+# Data ubin OSM, tidak di-commit.
 data/
-
-# planetiler JAR (downloaded separately from GitHub releases)
-planetiler.jar
 
 # Logs
 *.log

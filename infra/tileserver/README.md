@@ -1,143 +1,66 @@
-# Self-Hosted OSM Tile Server (tileserver-gl)
+# Server Peta Bali (tileserver-gl)
 
-Self-hosted vector tiles for Bali, served via tileserver-gl in Docker on a VPS with Caddy auto-TLS.
+Layanan vector tile Bali untuk app mobile, dijalankan via tileserver-gl-light di Docker.
 
-**Why self-host?** MapTiler's cheapest plan is $25/mo — over the $10/mo budget. Demotiles only goes to zoom 6, useless for street-level offline packs (zoom 10-16).
-
-## Quick Start (Local Dev)
+## Mulai cepat
 
 ```bash
-# One-time: download OSM data and generate tiles
-chmod +x refresh-osm.sh
+# Hasilkan data/bali.mbtiles dari Geofabrik (satu kali, atau saat data OSM perlu disegarkan)
 ./refresh-osm.sh
 
-# Start tileserver-gl
-docker compose up
-
-# Verify
-curl http://localhost:8080/data/bali.json | jq .name
-# → "bali"
-```
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `docker-compose.yml` | tileserver-gl container (reads .mbtiles from ./data/) |
-| `refresh-osm.sh` | Download Geofabrik extract + run planetiler → bali.mbtiles |
-| `Caddyfile` | HTTPS reverse proxy with auto-TLS (production only) |
-| `data/` | Runtime data — contains bali.mbtiles (gitignored) |
-
-## Production Deploy
-
-### 1. Provision VPS
-
-Recommended: DigitalOcean Basic Droplet ($4–6/mo, Singapore region).
-
-```bash
-# SSH into VPS
-ssh root@1.2.3.4
-
-# Install Docker
-curl -fsSL https://get.docker.com | sh
-apt install -y docker-compose
-
-# Create directory
-mkdir -p /opt/tileserver
-```
-
-### 2. Copy files to VPS
-
-```bash
-# From your local machine:
-scp -r infra/tileserver/ user@vps:/opt/tileserver/
-
-# Set up DNS A record: tiles.example.com -> <vps-ip>
-# (Use your domain registrar's DNS settings)
-```
-
-### 3. Update Caddyfile domain
-
-Edit `/opt/tileserver/Caddyfile` — replace `tiles.example.com` with your actual domain.
-
-### 4. Generate tiles locally and upload
-
-```bash
-# On local machine:
-./refresh-osm.sh
-
-# Upload to VPS:
-scp -r infra/tileserver/data/ user@vps:/opt/tileserver/data/
-```
-
-### 5. Start tileserver-gl
-
-```bash
-ssh user@vps
-cd /opt/tileserver
+# Nyalakan tile server
 docker compose up -d
+
+# Verifikasi style JSON
+curl http://localhost:8080/styles/bali/style.json | python -m json.tool
 ```
 
-### 6. Deploy Caddy
+## Daftar berkas
 
-```bash
-# Install Caddy
-ssh user@vps 'curl -fsSL https://get.docker.com | sh && docker pull caddy:2'
+| Berkas | Tujuan |
+|---|---|
+| `docker-compose.yml` | Container tileserver-gl-light (image v5.6.0) |
+| `config.json` | Konfigurasi tileserver (paths, daftar style, daftar data) |
+| `styles/bali/style.json` | Style MapLibre yang dilayani ke app |
+| `refresh-osm.sh` | Unduh PBF Geofabrik dan hasilkan `bali.mbtiles` via planetiler Docker |
+| `data/` | Data runtime — berisi `bali.mbtiles` (gitignored) |
+| `Caddyfile` | Reverse proxy HTTPS dengan auto-TLS (untuk deploy VPS) |
 
-# Deploy Caddyfile
-scp infra/tileserver/Caddyfile user@vps:/etc/caddy/Caddyfile
-ssh user@vps 'caddy fmt --overwrite /etc/caddy/Caddyfile'
-ssh user@vps 'caddy reload --config /etc/caddy/Caddyfile'
+## Deploy ke VPS (belum dikerjakan)
+
+Bagian ini belum diuji. Untuk produksi, langkah umumnya:
+
+1. Siapkan VPS (mis. DigitalOcean Singapore, 1 GB RAM cukup).
+2. Siapkan DNS A record `tiles.example.com` ke IP VPS.
+3. Salin folder `infra/tileserver/` ke `/opt/tileserver/` di VPS.
+4. Jalankan `./refresh-osm.sh` di VPS untuk hasilkan `bali.mbtiles`.
+5. `docker compose up -d` di VPS.
+6. Deploy `Caddyfile` ke `/etc/caddy/Caddyfile` dan `caddy reload`.
+
+`Caddyfile` sudah ada di folder ini dan tidak diubah.
+
+## Endpoint
+
+| Endpoint | Keterangan |
+|---|---|
+| `/styles/bali/style.json` | Style MapLibre untuk offline pack di app (MapView memakai style bawaan app yang mengambil ubin lewat /data/bali.json) |
+| `/data/bali.json` | TileJSON — daftar tile vector + attribution + bounds |
+| `/data/bali/{z}/{x}/{y}.pbf` | Vector tile per koordinat slippy |
+
+URL tile di TileJSON dibangun tileserver-gl dari `Host` header request, jadi app mobile yang request lewat IP Tailscale akan menerima URL tile yang memakai host itu.
+
+## Batasan
+
+- **Tanpa label jalan (glyphs)**: style `bali` tidak punya `glyphs`, jadi nama jalan tidak ditampilkan. Peta tetap menampilkan garis transportation untuk navigasi. Label nama jalan adalah peningkatan di masa depan.
+- **Tanpa sprite ikon**: style tidak punya `sprite`, jadi tidak ada ikon POI.
+- **Hanya Bali**: `bali.mbtiles` dipotong ke bbox `114.40,-8.90,115.75,-8.00`. Tidak termasuk Lombok atau Jawa.
+
+## Tentang data
+
+`bali.mbtiles` dihasilkan dari `planetiler-openmaptiles` (skema OpenMapTiles 3.16). Image planetiler dipakai lewat Docker dari GHCR:
+
+```
+ghcr.io/onthegomap/planetiler:0.10.2
 ```
 
-### 7. Verify
-
-```bash
-# Check tileserver is running
-curl http://localhost:8080/data/bali.json | jq .name
-
-# Check HTTPS via Caddy
-curl -I https://tiles.example.com/data/bali.json
-```
-
-## OSM Data Refresh
-
-When Bali's OSM data needs updating (new roads, POI changes):
-
-```bash
-# On local machine:
-./refresh-osm.sh
-
-# Upload new tiles to VPS:
-scp -r infra/tileserver/data/ user@vps:/opt/tileserver/data/
-
-# Restart tileserver:
-ssh user@vps 'cd /opt/tileserver && docker compose restart tileserver'
-```
-
-**Cadence**: Monthly is fine for MVP. OSM Indonesia changes frequently in urban areas, but not so fast that weekly updates are needed.
-
-## Cost
-
-| Item | Monthly Cost |
-|------|-------------|
-| VPS (DigitalOcean/Vultr, 1GB RAM) | $4–6 |
-| Domain (optional, tiles.example.com) | ~$1–2 |
-| **Total** | **$4–8/mo** |
-
-Without a domain, use the VPS IP directly: `TILE_BASE_URL=http://1.2.3.4:8080`. Rebuild APK if VPS IP changes.
-
-## Tile Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `/styles/bali/style.json` | Map style (used by mobile app) |
-| `/data/bali.json` | TileJSON metadata |
-| `/data/bali/{z}/{x}/{y}.pbf` | Vector tiles |
-| `/sprites/bali.json` | Sprite sheet |
-
-## Limitations
-
-- **No street labels (glyphs)**: `planetiler --area=monaco` uses OpenMapTiles schema, which includes roads/POIs but not pre-rendered glyphs. The mobile app style strips glyph references to avoid 404s. Labels are a future enhancement.
-- **Bali + Nusa Tenggara**: Geofabrik doesn't offer a Bali-only extract. The Nusa Tenggara region (~164 MB .pbf) covers Bali + West/East Nusa Tenggara — fine for MVP.
-- **No automatic refresh**: Cron job is deferred. Re-run `refresh-osm.sh` manually when needed.
+Tag `0.10.2` adalah rilis stabil; tag `latest` dan `snapshot` menunjuk ke build prarilis.
