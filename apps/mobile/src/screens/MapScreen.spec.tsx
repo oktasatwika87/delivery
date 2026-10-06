@@ -10,9 +10,11 @@
  */
 
 import React from 'react';
-import { render, waitFor } from '@testing-library/react-native';
+import { Linking } from 'react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import { MapScreen } from './MapScreen';
+import MapLibreGL from '@maplibre/maplibre-react-native';
 import { RouteService } from '../map/routeService';
 import { networkMonitor } from '../map/networkMonitor';
 import { locationService } from '../map/location';
@@ -21,6 +23,8 @@ import type { RouteResult } from '../map/routeService';
 import type { RouteRequest } from '../map/routing';
 
 // ─── Mock setup ───────────────────────────────────────────────────────────────
+
+const cameraMock = jest.mocked(MapLibreGL.Camera);
 
 // Mock react-native components
 jest.mock('@react-navigation/native', () => ({
@@ -32,10 +36,10 @@ jest.mock('@react-navigation/native', () => ({
   }),
 }));
 
-// Mock MapLibreGL — top-level export (matching established mock in __mocks__)
+// Mock MapLibreGL. MapView merender children supaya props Camera bisa diperiksa.
 jest.mock('@maplibre/maplibre-react-native', () => ({
-  MapView: () => null,
-  Camera: () => null,
+  MapView: ({ children }: { children: React.ReactNode }) => children,
+  Camera: jest.fn(() => null),
   ShapeSource: ({ children }: { children: React.ReactNode }) => children,
   LineLayer: () => null,
   MarkerView: ({ children }: { children: React.ReactNode }) => children,
@@ -102,6 +106,7 @@ function createMockRouteResult(geometry: Array<[number, number]>, isFromCache = 
 describe('MapScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    cameraMock.mockClear();
 
     // Default: network online, GPS location available
     (networkMonitor.getStatus as jest.Mock).mockReturnValue('online');
@@ -348,6 +353,57 @@ describe('MapScreen', () => {
       await waitFor(() => {
         expect(getByText(/Network error/i)).toBeTruthy();
       });
+    });
+  });
+
+  describe('atribusi dan pusat cadangan', () => {
+    test('tampilkan atribusi OpenStreetMap saat ada offline region', async () => {
+      // default mock: offlineStorage.listPacks return [{ state: 'complete' }]
+      const { getByText } = render(
+        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
+      );
+      await waitFor(() => {
+        expect(getByText('© OpenMapTiles © OpenStreetMap contributors')).toBeTruthy();
+      });
+    });
+
+    test('tidak tampil atribusi saat belum ada offline region', async () => {
+      (offlineStorage.listPacks as jest.Mock).mockResolvedValue([]);
+      const { queryByText } = render(
+        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
+      );
+      await waitFor(() => {
+        expect(queryByText('© OpenMapTiles © OpenStreetMap contributors')).toBeNull();
+      });
+    });
+
+    test('tap atribusi membuka halaman hak cipta OpenStreetMap', async () => {
+      const spy = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+      try {
+        const { getByText } = render(
+          <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
+        );
+        await waitFor(() => {
+          expect(getByText('© OpenMapTiles © OpenStreetMap contributors')).toBeTruthy();
+        });
+        fireEvent.press(getByText('© OpenMapTiles © OpenStreetMap contributors'));
+        expect(spy).toHaveBeenCalledWith('https://www.openstreetmap.org/copyright');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    test('pusat cadangan Denpasar saat currentLocation null dan MapView tampil', async () => {
+      // default mock: locationService.getLastKnown return null → currentLocation null
+      // default mock: offlineStorage.listPacks return [{ state: 'complete' }] → hasOfflineRegion true
+      render(
+        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
+      );
+      await waitFor(() => {
+        expect(cameraMock).toHaveBeenCalled();
+      });
+      const props = cameraMock.mock.calls[0][0] as { centerCoordinate: [number, number] };
+      expect(props.centerCoordinate).toEqual([115.2167, -8.65]);
     });
   });
 });

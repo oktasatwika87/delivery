@@ -254,7 +254,7 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
           <MapLibreGL.Camera
             ref={cameraRef}
             zoomLevel={13}
-            centerCoordinate={currentLocation ? [currentLocation.lng, currentLocation.lat] : [106.827, -6.175]}
+            centerCoordinate={currentLocation ? [currentLocation.lng, currentLocation.lat] : [115.2167, -8.65]}
           />
 
           {/* Route polyline */}
@@ -299,6 +299,17 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
             </MapLibreGL.MarkerView>
           )}
         </MapLibreGL.MapView>
+      )}
+
+      {/* Atribusi OSM — hanya saat MapView tampil (di dalam cabang hasOfflineRegion yang sama). */}
+      {hasOfflineRegion && (
+        <TouchableOpacity
+          style={styles.attribution}
+          accessibilityLabel="Buka halaman hak cipta OpenStreetMap"
+          onPress={() => Linking.openURL('https://www.openstreetmap.org/copyright').catch(() => {})}
+        >
+          <Text style={styles.attributionText}>© OpenMapTiles © OpenStreetMap contributors</Text>
+        </TouchableOpacity>
       )}
 
       {/* Status indikator online/offline */}
@@ -540,4 +551,17 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
   },
   settingsButtonText: { fontSize: 22 },
+  attribution: {
+    position: 'absolute',
+    bottom: 24,
+    left: 16,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: 'rgba(255, 255, 255, 0.7)',
+    borderRadius: 3,
+  },
+  attributionText: {
+    fontSize: 10,
+    color: '#000',
+  },
 });
