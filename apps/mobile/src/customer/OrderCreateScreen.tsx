@@ -13,7 +13,7 @@
  * dari tracking langsung ke home (bukan balik ke form create).
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Alert,
   ActivityIndicator,
@@ -28,6 +28,7 @@ import {
 } from 'react-native';
 
 import { createOrder } from '../sync/client';
+import { locationService, type PermissionStatus } from '../map/location';
 import type { CreateOrderInput } from '@delivery/shared';
 
 interface OrderCreateScreenProps {
@@ -61,7 +62,12 @@ interface FormErrors {
   itemName?: string;
   quantity?: string;
   unitPriceCents?: string;
+  /** Galat titik antar (bukan isian yang diketik). */
+  coordinates?: string;
 }
+
+/** 'pending' sampai requestPermission selesai, setelah itu hasil izinnya. */
+type LocationPhase = 'pending' | PermissionStatus;
 
 export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreenProps): React.JSX.Element {
   const [form, setForm] = useState<FormData>({
@@ -83,6 +89,59 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
   // useState update is async — tidak aman untuk inflight guard.
   // useRef provides synchronous access to current value.
   const isSubmitting = useRef(false);
+
+  // Minta izin lalu ambil posisi GPS. Effect jalan ulang setiap attemptId
+  // naik (tombol Coba lagi). Cleanup menandai alur lama batal dan melepas
+  // listener-nya, termasuk listener yang baru selesai didaftarkan setelah
+  // layar ditutup, jadi tidak ada setState di layar yang sudah ditutup.
+  const [locationPhase, setLocationPhase] = useState<LocationPhase>('pending');
+  const [position, setPosition] = useState<{ lat: number; lng: number } | null>(null);
+  const [attemptId, setAttemptId] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+
+    (async () => {
+      const status = await locationService.requestPermission();
+      if (cancelled) return;
+      setLocationPhase(status);
+
+      if (status !== 'granted') {
+        return;
+      }
+
+      // Posisi terakhir dipakai dulu supaya tidak menunggu kiriman
+      // pertama dari listener. Kalau kosong, listener yang mengisi.
+      const last = await locationService.getLastKnown();
+      if (cancelled) return;
+      if (last) {
+        setPosition({ lat: last.coords.latitude, lng: last.coords.longitude });
+      }
+
+      const unsub = await locationService.subscribe((loc) => {
+        if (cancelled) return;
+        setPosition({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+      });
+      if (cancelled) {
+        // Layar sudah ditutup atau Coba lagi sudah ditekan: lepas lagi.
+        unsub();
+      } else {
+        unsubscribe = unsub;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [attemptId]);
+
+  const handleRetryLocation = useCallback(() => {
+    // Ulangi alur izin dari awal.
+    setPosition(null);
+    setAttemptId((id) => id + 1);
+  }, []);
 
   const updateField = (field: keyof FormData, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -125,6 +184,12 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
       newErrors.unitPriceCents = 'Harga satuan harus lebih dari 0';
     }
 
+    // Titik antar dicek di sini supaya galatnya muncul bersama galat
+    // isian lain.
+    if (!position) {
+      newErrors.coordinates = 'Titik antar belum didapat.';
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -135,7 +200,9 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
       return;
     }
 
-    if (!validate()) {
+    // validate() sudah mengisi galat titik antar; position dicek lagi
+    // supaya tipenya tidak null di payload.
+    if (!validate() || !position) {
       return;
     }
 
@@ -159,6 +226,8 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
           street: form.street.trim(),
           city: form.city.trim(),
           postalCode: form.postalCode.trim(),
+          // Urutan [lng, lat] sesuai DeliveryAddress (GeoJSON), jangan dibalik.
+          coordinates: [position.lng, position.lat],
         },
         notes: form.notes.trim() || undefined,
       };
@@ -255,6 +324,16 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
         />
         {errors.postalCode && <Text style={styles.fieldError}>{errors.postalCode}</Text>}
 
+        {/* Titik antar dari GPS customer. Tombol Coba lagi muncul kalau izin
+            ditolak atau diblokir. */}
+        <Text style={styles.sectionTitle}>Titik antar</Text>
+        {renderTitikAntarContent({
+          phase: locationPhase,
+          position,
+          onRetry: handleRetryLocation,
+        })}
+        {errors.coordinates && !position && <Text style={styles.fieldError}>{errors.coordinates}</Text>}
+
         {/* Detail Barang */}
         <Text style={styles.sectionTitle}>Detail Barang</Text>
 
@@ -313,6 +392,8 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
         <Button
           title={loading ? 'Mengirim...' : 'Buat Order'}
           onPress={handleSubmit}
+          // Tetap aktif walau posisi belum ada, supaya galat titik antar
+          // bisa muncul saat submit.
           disabled={loading}
         />
 
@@ -328,6 +409,52 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
         />
       </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+interface TitikAntarContentProps {
+  phase: LocationPhase;
+  position: { lat: number; lng: number } | null;
+  onRetry: () => void;
+}
+
+function renderTitikAntarContent({ phase, position, onRetry }: TitikAntarContentProps): React.JSX.Element {
+  if (position) {
+    return (
+      <Text style={styles.titikAntarText}>
+        Titik antar: lokasi Anda saat ini ({position.lat.toFixed(5)}, {position.lng.toFixed(5)})
+      </Text>
+    );
+  }
+  if (phase === 'denied') {
+    return (
+      <View>
+        <Text style={styles.titikAntarText}>
+          Izin lokasi ditolak. Titik antar dibutuhkan supaya driver bisa menemukan Anda.
+        </Text>
+        <View style={styles.retryButton}>
+          <Button title="Coba lagi" onPress={onRetry} />
+        </View>
+      </View>
+    );
+  }
+  if (phase === 'blocked') {
+    return (
+      <View>
+        <Text style={styles.titikAntarText}>
+          Izin lokasi diblokir. Aktifkan izin lokasi untuk aplikasi ini di Pengaturan, lalu ketuk Coba lagi.
+        </Text>
+        <View style={styles.retryButton}>
+          <Button title="Coba lagi" onPress={onRetry} />
+        </View>
+      </View>
+    );
+  }
+  // Masih menunggu izin, atau izin ada tapi GPS belum memberi posisi.
+  return (
+    <Text style={styles.titikAntarText}>
+      Mencari lokasi Anda... Pastikan GPS menyala.
+    </Text>
   );
 }
 
@@ -375,6 +502,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginBottom: 8,
     marginLeft: 4,
+  },
+  titikAntarText: {
+    fontSize: 14,
+    color: '#374151',
+    marginBottom: 8,
+    lineHeight: 20,
+  },
+  retryButton: {
+    marginBottom: 8,
+    alignSelf: 'flex-start',
   },
   errorBox: {
     backgroundColor: '#fee2e2',
