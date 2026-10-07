@@ -39,6 +39,7 @@ import { locationService } from '../map/location';
 import { networkMonitor } from '../map/networkMonitor';
 import { RouteService } from '../map/routeService';
 import { GraphHopperRoutingProvider } from '../map/routing';
+import { haversineDistance, MATCH_RADIUS_METERS } from '../map/routeSnapshot';
 import { OrderModel } from '../db/models/OrderModel';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'> & {
@@ -54,6 +55,29 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
 
   // Refs
   const cameraRef = useRef<MapLibreGL.CameraRef | null>(null);
+
+  // Titik asal rute yang dipakai panggilan getRoute terakhir — supaya update
+  // GPS kecil tidak memicu hitung ulang rute. Radius sama dengan
+  // MATCH_RADIUS_METERS (300 m) di routeSnapshot.
+  const lastRouteOriginRef = useRef<LngLat | null>(null);
+
+  // Sudah pernah fitBounds untuk order ini — supaya kamera tidak di-zoom
+  // berulang tiap kali getRoute dipanggil ulang.
+  const hasFitBoundsRef = useRef<boolean>(false);
+
+  // Sudah pernah setCamera ke GPS pertama — supaya GPS berikutnya tidak
+  // menarik kamera lagi. Tidak dibuat kalau rute sudah fitBounds duluan
+  // (lihat efek posisi awal kamera di bawah).
+  const hasCenteredRef = useRef<boolean>(false);
+
+  // Nilai isOnline sebelumnya — untuk deteksi transisi false → true supaya
+  // rute di-refetch sekali setelah koneksi pulih.
+  const prevOnlineRef = useRef<boolean>(false);
+
+  // Titik origin/destination yang dipakai untuk fitBounds, supaya konsisten
+  // dengan rute yang sedang dirender.
+  const [routeOrigin, setRouteOrigin] = useState<LngLat | null>(null);
+  const [routeDestination, setRouteDestination] = useState<LngLat | null>(null);
 
   // Memoize style object agar MapLibre tidak re-init tiap render.
   const mapStyle = useMemo(() => JSON.parse(TILE_STYLE), []);
@@ -183,17 +207,27 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
 
   useEffect(() => {
     if (!currentLocation || !orderDestination) {
-      // Belum punya keduanya — reset state routing
-      setRouteGeometry(null);
-      setRouteError(null);
-      setIsFromCache(false);
+      // Belum punya keduanya — biarkan state rute apa adanya. GPS null sebentar
+      // tidak menghapus rute yang sudah tampil.
       return;
     }
 
-    // Origin = currentLocation (GPS kurir)
-    // Konversi dari { lat, lng } ke { lng, lat } untuk RoutingProvider
-    const origin = { lng: currentLocation.lng, lat: currentLocation.lat };
-    const destination = orderDestination; // Sudah { lng, lat }
+    const origin: LngLat = { lng: currentLocation.lng, lat: currentLocation.lat };
+    const destination: LngLat = orderDestination;
+
+    // Throttle: kalau kurir belum bergeser > 300 m dari titik asal rute
+    // terakhir, tidak perlu hitung ulang. Radius sama dengan MATCH_RADIUS_METERS
+    // di routeSnapshot supaya konsisten dengan logika fallback snapshot.
+    if (lastRouteOriginRef.current) {
+      const distance = haversineDistance(lastRouteOriginRef.current, origin);
+      if (distance <= MATCH_RADIUS_METERS) {
+        return;
+      }
+    }
+
+    // Catat origin sebelum fetch supaya tick GPS berikutnya dalam radius yang
+    // sama tidak menggandakan panggilan walaupun server gagal.
+    lastRouteOriginRef.current = origin;
 
     let cancelled = false;
 
@@ -205,20 +239,11 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
         const result = await routeService.getRoute({ origin, destination });
 
         if (!cancelled) {
-          console.log('[MapScreen] route geometry length:', result.route.geometry?.length, 'isFromCache:', result.isFromCache);
           setRouteGeometry(result.route.geometry);
           setIsFromCache(result.isFromCache);
           setRouteError(null);
-
-          // Zoom to fit route
-          if (result.route.geometry.length > 0 && cameraRef.current) {
-            cameraRef.current.fitBounds(
-              [origin.lng, origin.lat],
-              [destination.lng, destination.lat],
-              50, // padding pixels
-              500, // max zoom
-            );
-          }
+          setRouteOrigin(origin);
+          setRouteDestination(destination);
         }
       } catch (err) {
         if (!cancelled) {
@@ -239,6 +264,68 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     };
   }, [currentLocation, orderDestination, routeService]);
 
+  // ─── Pemulihan online ───────────────────────────────────────────────────────
+  // Saat transisi false → true, kosongkan lastRouteOriginRef supaya rute di-
+  // refetch pada tick GPS pertama berikutnya. Setelah itu throttling 300 m
+  // berlaku lagi sehingga tidak ada loop pemanggilan.
+  useEffect(() => {
+    if (isOnline && !prevOnlineRef.current) {
+      lastRouteOriginRef.current = null;
+    }
+    prevOnlineRef.current = isOnline;
+  }, [isOnline]);
+
+  // ─── fitBounds ke rute yang baru di-render ──────────────────────────────────
+  // Efek ini dipasang SEBELUM efek posisi awal kamera di bawah. Kalau MapView
+  // ter-mount belakangan dan keduanya sudah siap, fitBounds jalan duluan lalu
+  // setEffect posisi awal skip karena hasFitBoundsRef sudah true.
+  useEffect(() => {
+    if (
+      hasFitBoundsRef.current ||
+      !routeGeometry ||
+      routeGeometry.length === 0 ||
+      !routeOrigin ||
+      !routeDestination ||
+      !cameraRef.current
+    ) {
+      return;
+    }
+    cameraRef.current.fitBounds(
+      [routeOrigin.lng, routeOrigin.lat],
+      [routeDestination.lng, routeDestination.lat],
+      50, // padding pixels
+      1000, // durasi animasi (ms), bukan zoom
+    );
+    hasFitBoundsRef.current = true;
+  }, [routeGeometry, routeOrigin, routeDestination, hasOfflineRegion]);
+
+  // ─── Posisi awal kamera: GPS pertama atau fallback Denpasar ────────────────
+  // Hanya dipanggil sekali, dan hanya kalau:
+  //   - belum pernah fitBounds (kalau sudah, rute yang menang)
+  //   - tidak ada tujuan order (kalau ada, fitBounds yang akan menang dan
+  //     setCamera tidak perlu dijalankan)
+  //
+  // Kalau orderDestination null tapi GPS tiba, kamera di-snap ke GPS supaya
+  // kurir tetap melihat posisinya walau order tidak punya koordinat tujuan.
+  useEffect(() => {
+    if (
+      hasCenteredRef.current ||
+      hasFitBoundsRef.current ||
+      orderDestination ||
+      !currentLocation ||
+      !cameraRef.current ||
+      !hasOfflineRegion
+    ) {
+      return;
+    }
+    cameraRef.current.setCamera({
+      centerCoordinate: [currentLocation.lng, currentLocation.lat],
+      zoomLevel: 13,
+      animationMode: 'moveTo',
+    });
+    hasCenteredRef.current = true;
+  }, [currentLocation, hasOfflineRegion, orderDestination]);
+
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -253,8 +340,14 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
         >
           <MapLibreGL.Camera
             ref={cameraRef}
-            zoomLevel={13}
-            centerCoordinate={currentLocation ? [currentLocation.lng, currentLocation.lat] : [115.2167, -8.65]}
+            // defaultSettings diterapkan sekali oleh native camera (lihat
+            // Camera.tsx di maplibre-react-native: useState -> defaultStop).
+            // Tidak pakai centerCoordinate/zoomLevel live supaya update GPS
+            // tidak menarik kamera kembali.
+            defaultSettings={{
+              centerCoordinate: [115.2167, -8.65],
+              zoomLevel: 13,
+            }}
           />
 
           {/* Route polyline */}
