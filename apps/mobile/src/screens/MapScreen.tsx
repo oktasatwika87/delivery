@@ -74,6 +74,20 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
   // rute di-refetch sekali setelah koneksi pulih.
   const prevOnlineRef = useRef<boolean>(false);
 
+  // Nomor permintaan rute terakhir. Naik tiap getRoute benar-benar dipanggil,
+  // jadi hasil permintaan lama yang telat selesai bisa diabaikan.
+  const requestIdRef = useRef<number>(0);
+
+  // Jadi false setelah layar ditutup, supaya hasil getRoute yang telat
+  // tidak dipakai lagi.
+  const mountedRef = useRef<boolean>(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   // Titik origin/destination yang dipakai untuk fitBounds, supaya konsisten
   // dengan rute yang sedang dirender.
   const [routeOrigin, setRouteOrigin] = useState<LngLat | null>(null);
@@ -229,7 +243,9 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     // sama tidak menggandakan panggilan walaupun server gagal.
     lastRouteOriginRef.current = origin;
 
-    let cancelled = false;
+    // Permintaan ini tidak dibatalkan walau posisi GPS terus berubah.
+    // Hasilnya dipakai selama nomornya masih yang terakhir.
+    const requestId = ++requestIdRef.current;
 
     (async () => {
       setIsRoutingLoading(true);
@@ -238,7 +254,8 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
       try {
         const result = await routeService.getRoute({ origin, destination });
 
-        if (!cancelled) {
+        // Abaikan kalau sudah ada permintaan lebih baru atau layar sudah ditutup.
+        if (requestIdRef.current === requestId && mountedRef.current) {
           setRouteGeometry(result.route.geometry);
           setIsFromCache(result.isFromCache);
           setRouteError(null);
@@ -246,22 +263,18 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
           setRouteDestination(destination);
         }
       } catch (err) {
-        if (!cancelled) {
+        if (requestIdRef.current === requestId && mountedRef.current) {
           const message = err instanceof Error ? err.message : 'Gagal memuat rute.';
           setRouteError(message);
           setRouteGeometry(null);
           setIsFromCache(false);
         }
       } finally {
-        if (!cancelled) {
+        if (requestIdRef.current === requestId && mountedRef.current) {
           setIsRoutingLoading(false);
         }
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
   }, [currentLocation, orderDestination, routeService]);
 
   // ─── Pemulihan online ───────────────────────────────────────────────────────

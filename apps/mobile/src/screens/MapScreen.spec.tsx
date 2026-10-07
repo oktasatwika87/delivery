@@ -167,6 +167,17 @@ function metersEast(longitude: number, latitude: number, meters: number): number
 
 const DEFAULT_FALLBACK_CENTER: [number, number] = [115.2167, -8.65];
 
+/** Render MapScreen dengan props tiruan untuk tes permintaan rute di bawah. */
+function renderMapScreen() {
+  return render(
+    <MapScreen
+      database={{ get: mockGet }}
+      navigation={{}}
+      route={{ params: { orderId: 'order-123' } }}
+    />,
+  );
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('MapScreen', () => {
@@ -754,6 +765,143 @@ describe('MapScreen', () => {
       });
       await new Promise((resolve) => globalThis.setTimeout(() => resolve(undefined), 30));
       expect(mockGetRoute).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('permintaan rute saat posisi GPS berubah', () => {
+    test('GPS bergeser sedikit saat getRoute tertahan: rute tetap tampil, tulisan memuat hilang', async () => {
+      mockFind.mockResolvedValue({ addressJson: { coordinates: [106.85, -6.2] } });
+
+      // Promise getRoute ditahan; fungsi resolve-nya disimpan supaya tes
+      // yang menentukan kapan selesai.
+      const deferreds: Array<(value: RouteResult) => void> = [];
+      const mockGetRoute = setupRouteServiceResolve(
+        () =>
+          new Promise<RouteResult>((resolve) => {
+            deferreds.push(resolve);
+          }),
+      );
+      const gps = setupGpsCapture();
+
+      const { queryByText } = renderMapScreen();
+
+      // Posisi A memicu permintaan rute pertama.
+      act(() => {
+        gps.emit(-6.175, 106.8);
+      });
+      await waitFor(() => expect(mockGetRoute).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(queryByText(/memuat rute/i)).toBeTruthy());
+
+      // Posisi B hanya bergeser sekitar 10 m ke utara, masih di bawah 300 m.
+      act(() => {
+        gps.emit(metersNorth(-6.175, 10), 106.8);
+      });
+      await new Promise((resolve) => globalThis.setTimeout(() => resolve(undefined), 30));
+
+      // Permintaan tidak digandakan.
+      expect(mockGetRoute).toHaveBeenCalledTimes(1);
+      expect(deferreds.length).toBe(1);
+
+      // Selesaikan promise-nya. Hasil harus tetap dipakai walau efek sudah
+      // jalan ulang karena GPS bergeser.
+      await act(async () => {
+        deferreds[0](createMockRouteResult([[106.827, -6.175], [106.85, -6.2]]));
+        await Promise.resolve();
+      });
+
+      // Tulisan memuat rute hilang dan tidak ada pesan gagal.
+      await waitFor(() => expect(queryByText(/memuat rute/i)).toBeNull());
+      expect(queryByText(/Network error|Gagal memuat rute/i)).toBeNull();
+    });
+
+    test('GPS bergeser sedikit saat getRoute tertahan lalu gagal: pesan gagal tampil, tulisan memuat hilang', async () => {
+      mockFind.mockResolvedValue({ addressJson: { coordinates: [106.85, -6.2] } });
+
+      const deferreds: Array<{ reject: (err: Error) => void }> = [];
+      const mockGetRoute = setupRouteServiceResolve(
+        () =>
+          new Promise<RouteResult>((_resolve, reject) => {
+            deferreds.push({ reject });
+          }),
+      );
+      const gps = setupGpsCapture();
+
+      const { queryByText, getByText } = renderMapScreen();
+
+      act(() => {
+        gps.emit(-6.175, 106.8);
+      });
+      await waitFor(() => expect(mockGetRoute).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(queryByText(/memuat rute/i)).toBeTruthy());
+
+      act(() => {
+        gps.emit(metersNorth(-6.175, 10), 106.8);
+      });
+      await new Promise((resolve) => globalThis.setTimeout(() => resolve(undefined), 30));
+      expect(mockGetRoute).toHaveBeenCalledTimes(1);
+
+      // Tolak promise-nya. Penanganan gagal harus tetap jalan walau efek
+      // sudah jalan ulang karena GPS bergeser. Pesannya sengaja tanpa kata
+      // "memuat rute" supaya pencarian tulisan memuat tidak ikut cocok
+      // dengan banner gagal.
+      await act(async () => {
+        deferreds[0].reject(new Error('Timeout GraphHopper: 10 detik.'));
+        await new Promise<void>((resolve) => {
+          globalThis.setTimeout(() => resolve(), 30);
+        });
+      });
+
+      await waitFor(() => expect(queryByText(/memuat rute/i)).toBeNull());
+      await waitFor(() => expect(getByText(/Timeout GraphHopper/i)).toBeTruthy());
+    });
+
+    test('penjaga urutan: permintaan kedua selesai duluan, rute pakai hasil kedua', async () => {
+      mockFind.mockResolvedValue({ addressJson: { coordinates: [106.85, -6.2] } });
+
+      // Permintaan 1 mengembalikan isFromCache: true (banner cache tampil
+      // kalau hasil ini yang dipakai), permintaan 2 mengembalikan false.
+      // Setelah keduanya selesai, yang dipakai harus hasil permintaan 2.
+      const deferreds: Array<(value: RouteResult) => void> = [];
+      const mockGetRoute = setupRouteServiceResolve(
+        () =>
+          new Promise<RouteResult>((resolve) => {
+            deferreds.push(resolve);
+          }),
+      );
+      const gps = setupGpsCapture();
+
+      const { queryByText } = renderMapScreen();
+
+      // Posisi A: permintaan 1 dimulai dan ditahan.
+      act(() => {
+        gps.emit(-6.175, 106.8);
+      });
+      await waitFor(() => expect(mockGetRoute).toHaveBeenCalledTimes(1));
+
+      // Posisi B lebih dari 300 m: permintaan 2 dimulai dan ditahan.
+      act(() => {
+        gps.emit(-6.175, metersEast(106.8, -6.175, 400));
+      });
+      await waitFor(() => expect(mockGetRoute).toHaveBeenCalledTimes(2));
+
+      // Permintaan 2 selesai duluan.
+      await act(async () => {
+        deferreds[1](createMockRouteResult([[106.86, -6.18], [106.85, -6.2]], false));
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(queryByText(/memuat rute/i)).toBeNull());
+
+      // Permintaan 1 menyusul dengan isFromCache: true dan harus diabaikan,
+      // bukan menimpa hasil permintaan 2.
+      await act(async () => {
+        deferreds[0](createMockRouteResult([[106.827, -6.175], [106.85, -6.2]], true));
+        await Promise.resolve();
+      });
+      await new Promise((resolve) => globalThis.setTimeout(() => resolve(undefined), 30));
+
+      // Yang berlaku hasil permintaan 2 (isFromCache: false), jadi banner
+      // cache tidak boleh muncul.
+      expect(queryByText(/dari cache/i)).toBeNull();
     });
   });
 });
