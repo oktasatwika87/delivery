@@ -10,10 +10,51 @@ import {
   Min,
   ValidateNested,
   ArrayMinSize,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
+  ValidationArguments,
+  registerDecorator,
+  ValidationOptions,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
 import { OrderStatus } from '@delivery/shared';
+
+/**
+ * Validator coordinates: tepat dua angka [lng, lat], lng -180 sampai 180,
+ * lat -90 sampai 90. Tanpa ini, koordinat yang tertukar atau rusak tetap
+ * tersimpan dan driver diarahkan ke tempat yang salah.
+ */
+@ValidatorConstraint({ name: 'IsLngLatTuple', async: false })
+class IsLngLatTupleConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (value === undefined || value === null) return true;
+    if (!Array.isArray(value)) return false;
+    if (value.length !== 2) return false;
+    const [lng, lat] = value;
+    if (typeof lng !== 'number' || typeof lat !== 'number') return false;
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return false;
+    if (lng < -180 || lng > 180) return false;
+    if (lat < -90 || lat > 90) return false;
+    return true;
+  }
+
+  defaultMessage(_args: ValidationArguments): string {
+    return 'coordinates harus [lng, lat] dengan lng -180 sampai 180 dan lat -90 sampai 90';
+  }
+}
+
+export function IsLngLatTuple(options?: ValidationOptions) {
+  return function (object: object, propertyName: string): void {
+    registerDecorator({
+      target: object.constructor,
+      propertyName,
+      options,
+      constraints: [],
+      validator: IsLngLatTupleConstraint,
+    });
+  };
+}
 
 /** Item dalam order. */
 export class OrderItemDto {
@@ -62,6 +103,7 @@ export class DeliveryAddressDto {
 
   /** [lng, lat] — konsisten dengan GeoJSON convention. */
   @IsOptional()
+  @IsLngLatTuple()
   coordinates?: [number, number];
 
   /** Index signature for Prisma Json compatibility. */

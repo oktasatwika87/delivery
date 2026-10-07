@@ -929,6 +929,139 @@ describe('Orders (e2e) - accept/reject', () => {
         .expect(400);
       expect(resp.body.message.some((m: string) => m.includes('City'))).toBe(true);
     });
+
+    // Validasi coordinates. Order tanpa coordinates sudah dicakup tes
+    // "201: customer bisa create order" di atas.
+    test('201: coordinates [115.2167, -8.65] tersimpan persis', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 25000 },
+          ],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+            coordinates: [115.2167, -8.65],
+          },
+        })
+        .expect(201);
+
+      expect(resp.body.deliveryAddress.coordinates).toEqual([115.2167, -8.65]);
+
+      const orderId = resp.body.id;
+      try {
+        // Ambil ulang lewat GET supaya yang dicek isi database, bukan
+        // sekadar respons POST.
+        const fetched = await request(app.getHttpServer())
+          .get(`/orders/${orderId}`)
+          .set('Authorization', `Bearer ${customerToken}`)
+          .expect(200);
+        expect(fetched.body.deliveryAddress.coordinates).toEqual([115.2167, -8.65]);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('400: coordinates tertukar [-8.65, 115.2167]', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 25000 },
+          ],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+            coordinates: [-8.65, 115.2167],
+          },
+        })
+        .expect(400);
+      const messages = Array.isArray(resp.body.message)
+        ? resp.body.message
+        : [resp.body.message];
+      expect(messages.some((m: string) => m.toLowerCase().includes('coordinates'))).toBe(true);
+    });
+
+    test('400: coordinates satu angka [115.2167]', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 25000 },
+          ],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+            coordinates: [115.2167],
+          },
+        })
+        .expect(400);
+      const messages = Array.isArray(resp.body.message)
+        ? resp.body.message
+        : [resp.body.message];
+      expect(messages.some((m: string) => m.toLowerCase().includes('coordinates'))).toBe(true);
+    });
+
+    test('400: coordinates tiga angka [115.2167, -8.65, 0]', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 25000 },
+          ],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+            coordinates: [115.2167, -8.65, 0],
+          },
+        })
+        .expect(400);
+      const messages = Array.isArray(resp.body.message)
+        ? resp.body.message
+        : [resp.body.message];
+      expect(messages.some((m: string) => m.toLowerCase().includes('coordinates'))).toBe(true);
+    });
+
+    test('400: coordinates berupa string ["115.2167", "-8.65"]', async () => {
+      const resp = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          items: [
+            { productId: 'prod-1', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 25000 },
+          ],
+          deliveryAddress: {
+            recipientName: 'Budi',
+            phone: '081234567890',
+            street: 'Jl. Merdeka No. 1',
+            city: 'Jakarta',
+            postalCode: '10110',
+            coordinates: ['115.2167', '-8.65'],
+          },
+        })
+        .expect(400);
+      const messages = Array.isArray(resp.body.message)
+        ? resp.body.message
+        : [resp.body.message];
+      expect(messages.some((m: string) => m.toLowerCase().includes('coordinates'))).toBe(true);
+    });
   });
 
   // Unit tests for race condition assertion logic.
