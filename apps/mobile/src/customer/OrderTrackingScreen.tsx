@@ -48,6 +48,7 @@ import {
 
 import type { Order, OrderStatus } from '@delivery/shared';
 
+import { orderStatusLabel } from '../orderStatusLabel';
 import { formatCurrency } from '../formatCurrency';
 import { getOrderById, UnauthorizedError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
@@ -69,28 +70,11 @@ const STATUS_COLORS: Record<OrderStatus, { bg: string; text: string }> = {
   CANCELLED: { bg: '#fee2e2', text: '#991b1b' },
 };
 
-const STATUS_DISPLAY: Record<OrderStatus, string> = {
-  PENDING: 'Menunggu konfirmasi',
-  CONFIRMED: 'Dikonfirmasi, mencari driver...',
-  // K9 (2026-09): ASSIGNED = pool state (Mencari driver) — bukan
-  // "Driver ditugaskan" lagi. Order boleh di-broadcast sebagai
-  // ASSIGNED + driverId null yang artinya customer melihatnya lagi
-  // mencari driver setelah reject/cancel/timeout. Backend sekarang
-  // emit status 'ASSIGNED' untuk order:rejected dan order:cancelled,
-  // lihat OrderRejectedPayload/OrderCancelledPayload.
-  ASSIGNED: 'Mencari driver...',
-  PREPARING: 'Driver sedang menyiapkan',
-  OUT_FOR_DELIVERY: 'Dalam perjalanan',
-  DELIVERED: 'Terkirim',
-  CANCELLED: 'Dibatalkan',
-};
-
 function StatusBadge({ status }: { status: OrderStatus }): React.JSX.Element {
   const colors = STATUS_COLORS[status] ?? { bg: '#f3f4f6', text: '#374151' };
-  const display = STATUS_DISPLAY[status] ?? status.replace('_', ' ');
   return (
     <View style={[styles.badge, { backgroundColor: colors.bg }]}>
-      <Text style={[styles.badgeText, { color: colors.text }]}>{display}</Text>
+      <Text style={[styles.badgeText, { color: colors.text }]}>{orderStatusLabel(status)}</Text>
     </View>
   );
 }
