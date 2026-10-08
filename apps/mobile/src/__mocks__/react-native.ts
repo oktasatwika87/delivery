@@ -25,25 +25,22 @@
  * Module ini di-resolve via moduleNameMapper di jest.config.js.
  */
 
-// File ini ditulis CommonJS style (require/module.exports) supaya jest runtime
-// bisa load via moduleNameMapper. TS module=ESNext tidak bawa `module`
-// secara default (`@types/node` tidak di-include di tsconfig types), jadi
-// declare di sini untuk typecheck only. Runtime pakai Node globals asli.
-declare const module: { exports: any };
+import type { ComponentType, ReactElement, ReactNode } from 'react';
+declare const module: { exports: unknown };
 
 const React = require('react');
 
 // ─── Helpers ────────────────────────────────────────────────────────
 function makeComponent(displayName: string) {
-  const Component = (props: any) => React.createElement(displayName, props, props.children);
+  const Component = (props: Record<string, unknown>) => React.createElement(displayName, props, props.children);
   Component.displayName = displayName;
   return Component;
 }
 
 // ─── StyleSheet ─────────────────────────────────────────────────────
 const StyleSheet = {
-  create: (styles: any) => styles,
-  flatten: (style: any) => {
+  create: (styles: Record<string, unknown>) => styles,
+  flatten: (style: unknown) => {
     if (style == null) return undefined;
     if (!Array.isArray(style)) return style;
     return Object.assign({}, ...style.filter(Boolean));
@@ -130,7 +127,67 @@ const Button = (props: any) => {
 };
 Button.displayName = 'Button';
 const KeyboardAvoidingView = makeComponent('KeyboardAvoidingView');
-const FlatList = makeComponent('FlatList');
+// FlatList stub: me-makeComponent() saja tidak cukup karena FlatList
+// asli tidak pakai children, tapi render data lewat renderItem.
+// Stub ini memanggil renderItem / ListEmptyComponent / ListHeaderComponent /
+// ListFooterComponent supaya RNTL bisa query output yang sesungguhnya.
+interface FlatListProps {
+  data?: readonly unknown[];
+  renderItem?: (info: { item: unknown; index: number }) => ReactNode;
+  keyExtractor?: (item: unknown, index: number) => string;
+  ListEmptyComponent?: ReactElement | ComponentType;
+  ListHeaderComponent?: ReactElement | ComponentType;
+  ListFooterComponent?: ReactElement | ComponentType;
+  [key: string]: unknown;
+}
+function FlatList(props: FlatListProps): ReactElement {
+  const {
+    data = [],
+    renderItem,
+    keyExtractor,
+    ListEmptyComponent,
+    ListHeaderComponent,
+    ListFooterComponent,
+    ...rest
+  } = props;
+  const children: unknown[] = [];
+  if (ListHeaderComponent) {
+    children.push(
+      React.isValidElement(ListHeaderComponent)
+        ? React.cloneElement(ListHeaderComponent, { key: 'list-header' })
+        : React.createElement(ListHeaderComponent, { key: 'list-header' }),
+    );
+  }
+  if (data.length === 0 && ListEmptyComponent) {
+    children.push(
+      React.isValidElement(ListEmptyComponent)
+        ? React.cloneElement(ListEmptyComponent, { key: 'list-empty' })
+        : React.createElement(ListEmptyComponent, { key: 'list-empty' }),
+    );
+  } else {
+    data.forEach((item: unknown, index: number) => {
+      const key = keyExtractor ? keyExtractor(item, index) : `flatlist-item-${index}`;
+      if (renderItem) {
+        children.push(
+          React.createElement(
+            React.Fragment,
+            { key },
+            renderItem({ item, index }),
+          ),
+        );
+      }
+    });
+  }
+  if (ListFooterComponent) {
+    children.push(
+      React.isValidElement(ListFooterComponent)
+        ? React.cloneElement(ListFooterComponent, { key: 'list-footer' })
+        : React.createElement(ListFooterComponent, { key: 'list-footer' }),
+    );
+  }
+  return React.createElement(View, rest, children);
+}
+FlatList.displayName = 'FlatList';
 
 class ActivityIndicator extends React.Component {
   render() {
@@ -150,7 +207,7 @@ class Linking {
 // ─── Platform (cukup untuk unit test) ────────────────────────────────
 const Platform = {
   OS: 'android',
-  select: (obj: any) => obj.android || obj.default,
+  select: (obj: Record<string, unknown>) => obj.android || obj.default,
   Version: 35,
 };
 
