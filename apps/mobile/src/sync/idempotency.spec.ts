@@ -37,7 +37,7 @@ describe('idempotency', () => {
 
     test('timestamp is not in the key', async () => {
       const key = await generateCodIdempotencyKey('order-123');
-      // Old format had Date.now() at the end — no longer
+      // Old format had Date.now() at the end, no longer
       const parts = key.split(':');
       expect(parts.length).toBe(2); // ['cod', 'uuid']
       // UUID part should not be all digits (which would indicate a timestamp)

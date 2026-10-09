@@ -1007,7 +1007,7 @@ describe('SyncService.applyOne chat_message', () => {
 // Order push via sync SELALU ditolak. Untuk update/delete, OCC conflict
 // masih didahulukan dari penolakan entity supaya mobile yang mengirim
 // baseVersion basi tetap bisa pulih dengan data server.
-describe('applyOne — order sync records (rejected)', () => {
+describe('applyOne, order sync records (rejected)', () => {
   let service: SyncService;
   let prisma: PrismaClient;
 

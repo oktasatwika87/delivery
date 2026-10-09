@@ -91,7 +91,7 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
     };
   }, [database, roomId]);
 
-  // Socket lifecycle — connect & join room, leave on cleanup
+  // Socket lifecycle, connect & join room, leave on cleanup
   useEffect(() => {
     let unsubNewMessage: (() => void) | null = null;
     let unsubConnect: (() => void) | null = null;
@@ -170,7 +170,7 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
           console.log(`[new_message] find(${message.id}): ${existing ? 'FOUND, will update' : 'NOT FOUND, will create'}`);
 
           if (existing) {
-            // Update status — message already inserted (from our own send or sync)
+            // Update status, message already inserted (from our own send or sync)
             console.log(`[new_message] BEFORE update: id=${message.id}, _status=${(existing._raw as any)._status}, status=${existing.status}`);
             await database.write(async () => {
               await existing.update((m) => {
@@ -232,7 +232,7 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
     const clientCreatedAt = Date.now();
     const tempId = generateUUID();
 
-    // 1. Create local record (offline-first) — save reference directly
+    // 1. Create local record (offline-first), save reference directly
     let localRecord: ChatMessageModel | null = null;
     try {
       await database.write(async () => {
@@ -286,7 +286,7 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
               });
               console.log(`[handleSend] SOCKET ACK: updated id=${tempId}, _status=synced`);
             }
-            return; // Success via socket — no need for REST fallback
+            return; // Success via socket, no need for REST fallback
           } else {
             console.warn(`[handleSend] SOCKET ACK FAILED: id=${tempId}, error=${ack.error}`);
             // Continue to REST fallback
@@ -322,7 +322,7 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
           console.log(`[handleSend] REST: updated id=${tempId}, _status=synced`);
         }
       } catch (err) {
-        // REST failed — message stays as PENDING_SEND, will be picked up by sync coordinator
+        // REST failed, message stays as PENDING_SEND, will be picked up by sync coordinator
         console.warn(`[handleSend] REST FAILED: id=${tempId}, err=${err}`);
       }
     } catch (err) {
@@ -377,7 +377,7 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
       {!isSocketConnected && (
         <View style={styles.connectionBanner}>
           <Text style={styles.connectionBannerText}>
-            Koneksi real-time terputus — pesan akan dikirim saat koneksi pulih
+            Koneksi real-time terputus, pesan akan dikirim saat koneksi pulih
           </Text>
         </View>
       )}
@@ -392,7 +392,7 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
         // extraData forces FlatList to re-render when observer emits new records.
         // Without it, React may skip re-render when the array reference is unchanged
         // (WatermelonDB observe() mutates Model instances in-place, so the same
-        // array + Model references can be returned — shallow compare sees "no change").
+        // array + Model references can be returned, shallow compare sees "no change").
         extraData={renderKey}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
@@ -428,7 +428,7 @@ const enhance = withDatabase(ChatScreenBase);
 
 export { enhance as ChatScreen };
 
-// ─── Styles ─────────────────────────────────────────────────────────────────
+// Styles
 
 const styles = StyleSheet.create({
   container: {

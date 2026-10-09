@@ -4,11 +4,11 @@
  * Screen ini online-only (tidak ada WatermelonDB), jadi mocking lebih simple.
  * Cakupan:
  * 1. Render tanpa crash
- * 2. Submit dengan field kosong → validasi block
- * 3. Submit dengan field lengkap → createOrder dipanggil dengan payload benar
- * 4. Submit sukses → Alert konfirmasi dengan tombol 'Lihat Status' + onCreateSuccess
- * 5. Submit sukses tanpa onCreateSuccess → fallback ke tombol 'Kembali ke Home' (legacy)
- * 6. Submit gagal → tampil pesan error, form tidak ke-reset
+ * 2. Submit dengan field kosong jadi validasi block
+ * 3. Submit dengan field lengkap jadi createOrder dipanggil dengan payload benar
+ * 4. Submit sukses jadi Alert konfirmasi dengan tombol 'Lihat Status' + onCreateSuccess
+ * 5. Submit sukses tanpa onCreateSuccess jadi fallback ke tombol 'Kembali ke Home' (legacy)
+ * 6. Submit gagal jadi tampil pesan error, form tidak ke-reset
  * 7. Submit butuh posisi GPS (titik antar) sebelum createOrder
  */
 
@@ -79,7 +79,7 @@ describe('OrderCreateScreen', () => {
     expect(getByText('Batal')).toBeTruthy();
   });
 
-  it('submit dengan field kosong → validasi block, createOrder tidak dipanggil', async () => {
+  it('submit dengan field kosong jadi validasi block, createOrder tidak dipanggil', async () => {
     const onBack = jest.fn();
     const { getByText } = render(<OrderCreateScreen onBack={onBack} />);
 
@@ -95,7 +95,7 @@ describe('OrderCreateScreen', () => {
     expect(createOrder).not.toHaveBeenCalled();
   });
 
-  it('qty = 0 → validasi block dengan pesan "Jumlah harus lebih dari 0"', async () => {
+  it('qty = 0 jadi validasi block dengan pesan "Jumlah harus lebih dari 0"', async () => {
     const onBack = jest.fn();
     const { getByText, getByPlaceholderText } = render(<OrderCreateScreen onBack={onBack} />);
 
@@ -119,7 +119,7 @@ describe('OrderCreateScreen', () => {
     expect(createOrder).not.toHaveBeenCalled();
   });
 
-  it('qty negatif → validasi block dengan pesan "Jumlah harus lebih dari 0"', async () => {
+  it('qty negatif jadi validasi block dengan pesan "Jumlah harus lebih dari 0"', async () => {
     const onBack = jest.fn();
     const { getByText, getByPlaceholderText } = render(<OrderCreateScreen onBack={onBack} />);
 
@@ -143,7 +143,7 @@ describe('OrderCreateScreen', () => {
     expect(createOrder).not.toHaveBeenCalled();
   });
 
-  it('harga = 0 → validasi block dengan pesan "Harga satuan harus lebih dari 0"', async () => {
+  it('harga = 0 jadi validasi block dengan pesan "Harga satuan harus lebih dari 0"', async () => {
     const onBack = jest.fn();
     const { getByText, getByPlaceholderText } = render(<OrderCreateScreen onBack={onBack} />);
 
@@ -167,7 +167,7 @@ describe('OrderCreateScreen', () => {
     expect(createOrder).not.toHaveBeenCalled();
   });
 
-  it('submit dengan field lengkap → createOrder dipanggil dengan payload benar', async () => {
+  it('submit dengan field lengkap jadi createOrder dipanggil dengan payload benar', async () => {
     const { createOrder } = require('../sync/client');
     createOrder.mockResolvedValueOnce({
       id: 'order-123',
@@ -224,7 +224,7 @@ describe('OrderCreateScreen', () => {
     expect(callArg.deliveryAddress.coordinates).toEqual([115.2167, -8.65]);
   });
 
-  it('submit sukses dengan onCreateSuccess → Alert tombol "Lihat Status", callback dipanggil dengan order.id', async () => {
+  it('submit sukses dengan onCreateSuccess jadi Alert tombol "Lihat Status", callback dipanggil dengan order.id', async () => {
     const orderId = '12345678-0000-0000-0000-000000000000';
     const { createOrder } = require('../sync/client');
     createOrder.mockResolvedValueOnce({
@@ -329,7 +329,7 @@ describe('OrderCreateScreen', () => {
     });
   });
 
-  it('submit gagal → tampil pesan error, form tidak ke-reset', async () => {
+  it('submit gagal jadi tampil pesan error, form tidak ke-reset', async () => {
     const { createOrder } = require('../sync/client');
     createOrder.mockRejectedValueOnce(new Error('Gagal membuat order: 500 - Server error'));
 
@@ -363,7 +363,7 @@ describe('OrderCreateScreen', () => {
     expect(getByPlaceholderText('Nama Penerima').props.value).toBe('Budi');
   });
 
-  it('double-tap race condition → order hanya di-create sekali', async () => {
+  it('double-tap race condition jadi order hanya di-create sekali', async () => {
     const { createOrder } = require('../sync/client');
     // Simulasi response lambat
     let resolveOrder: (value: unknown) => void;

@@ -2,18 +2,18 @@
  * Unit tests untuk location.ts
  *
  * Strategi test:
- * - Import locationService production langsung (no factory — kita uji kode production).
+ * - Import locationService production langsung (no factory, kita uji kode production).
  * - Mock default behavior sudah handle listener Set + fan-out via _emitLocation.
  * - Pakai LocationManager._reset() di beforeEach untuk reset mock state
  *   (locationListeners Set + call history). Implementation TIDAK di-reset
  *   (mockClear bukan mockReset), jadi default fan-out tetap jalan.
- * - JANGAN override .mockImplementation() di test manapun — sekali di-override,
+ * - JANGAN override .mockImplementation() di test manapun, sekali di-override,
  *   mockClear() tidak restore implementation, dan override nempel ke test
  *   berikutnya (akar masalah fan-out blank).
  * - Untuk capture listener yang di-pass ke addListener, baca dari
  *   addListener.mock.calls[0][0] SETELAH subscribe, bukan via mockImplementation.
  * - Setiap test cleanup subscribe-nya via unsubscribe (return dari subscribe)
- *   agar singleton.listeners Set kembali ke 0 untuk test berikutnya — supaya
+ *   agar singleton.listeners Set kembali ke 0 untuk test berikutnya, supaya
  *   subscribe berikutnya bisa re-register bridgeListener ke mock.
  * - subscribe() sekarang async (permission request), jadi semua subscribe()
  *   harus di-await.

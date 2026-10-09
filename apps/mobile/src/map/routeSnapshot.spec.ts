@@ -9,7 +9,7 @@
 
 import { haversineDistance, withinRadius, MATCH_RADIUS_METERS, MAX_SNAPSHOTS } from './routeSnapshot';
 
-// ─── Mock types ────────────────────────────────────────────────────────
+// Mock types
 
 interface MockRouteSnapshot {
   id: string;
@@ -20,7 +20,7 @@ interface MockRouteSnapshot {
   fetchedAt: number;
 }
 
-// ─── Test helpers ──────────────────────────────────────────────────────
+// Test helpers
 
 /**
  * Buat mock snapshot dengan koordinat.
@@ -62,7 +62,7 @@ function mockWithinRadius(
   return haversineDistance(a, b) <= radiusMeters;
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────
+// Tests
 
 describe('routeSnapshot', () => {
   beforeEach(() => {

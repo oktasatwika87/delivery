@@ -1,22 +1,22 @@
 /**
- * routeService — orchestration layer untuk offline-first routing.
+ * routeService, orchestration layer untuk offline-first routing.
  *
  * Tanggung jawab:
  *   1. Koordinasikan RoutingProvider (GraphHopper) dengan routeSnapshot (cache).
- *   2. Cek network status sebelum fetch — hemat waktu kalau offline.
+ *   2. Cek network status sebelum fetch, hemat waktu kalau offline.
  *   3. Simpan rute hasil fetch ke snapshot untuk fallback offline.
  *   4. Return flag `isFromCache` supaya UI bisa tampilkan indikator visual.
  *
  * Flow getRoute(request):
- *   - Online → fetch dari RoutingProvider → simpan snapshot → return live route
- *   - Online tapi fetch gagal + ada snapshot match → return snapshot (isFromCache: true)
- *   - Offline + ada snapshot match → return snapshot (isFromCache: true)
- *   - Offline + tidak ada snapshot → throw "Rute tidak tersedia..."
+ *   - Online jadi fetch dari RoutingProvider, simpan snapshot, return live route
+ *   - Online tapi fetch gagal + ada snapshot match, return snapshot (isFromCache: true)
+ *   - Offline + ada snapshot match, return snapshot (isFromCache: true)
+ *   - Offline + tidak ada snapshot, throw "Rute tidak tersedia..."
  *
  * Catatan desain:
- *   - Tidak hardcode GraphHopperRoutingProvider — terima RoutingProvider via
+ *   - Tidak hardcode GraphHopperRoutingProvider, terima RoutingProvider via
  *     constructor (DI pattern) supaya gampang di-swap atau di-mock untuk testing.
- *   - Tidak hardcode routeSnapshotService — juga terima via constructor.
+ *   - Tidak hardcode routeSnapshotService, juga terima via constructor.
  */
 
 import type { Database } from '@nozbe/watermelondb';
@@ -55,7 +55,7 @@ export interface RouteServiceDependencies {
 }
 
 /**
- * RouteService — menyusun RoutingProvider + routeSnapshot + networkMonitor
+ * RouteService, menyusun RoutingProvider + routeSnapshot + networkMonitor
  * jadi satu interface yang gampang dipanggil dari MapScreen.
  */
 export class RouteService {
@@ -70,10 +70,10 @@ export class RouteService {
   /**
    * Ambil rute dengan offline-first strategy.
    *
-   * 1. Kalau online → coba fetch dari routingProvider.
-   * 2. Fetch sukses → simpan ke snapshot, return live route.
-   * 3. Fetch gagal ATAU offline → fallback ke snapshot match.
-   * 4. Tidak ada snapshot match → throw RouteUnavailableError.
+   * 1. Kalau online, coba fetch dari routingProvider.
+   * 2. Fetch sukses, simpan ke snapshot, return live route.
+   * 3. Fetch gagal ATAU offline, fallback ke snapshot match.
+   * 4. Tidak ada snapshot match, throw RouteUnavailableError.
    */
   async getRoute(request: RouteRequest): Promise<RouteResult> {
     const isOnline = networkMonitor.getStatus() === 'online';
@@ -84,7 +84,7 @@ export class RouteService {
         await this.saveSnapshot(route);
         return { route, isFromCache: false };
       } catch (fetchError) {
-        // Fetch gagal — coba fallback ke snapshot
+        // Fetch gagal, coba fallback ke snapshot
         const snapshot = await this.findMatch(request);
 
         // Bedakan config error dari transient error
@@ -106,13 +106,13 @@ export class RouteService {
         if (snapshot) {
           return { route: this.snapshotToRoute(snapshot), isFromCache: true };
         }
-        // Tidak ada snapshot → gagal total
+        // Tidak ada snapshot, gagal total
         throw new RouteUnavailableError(
           `Rute tidak tersedia, tidak ada koneksi dan tidak ada rute tersimpan untuk area ini.`,
         );
       }
     } else {
-      // Offline langsung — tidak coba fetch
+      // Offline langsung, tidak coba fetch
       const snapshot = await this.findMatch(request);
       if (snapshot) {
         return { route: this.snapshotToRoute(snapshot), isFromCache: true };
@@ -136,7 +136,7 @@ export class RouteService {
   }
 
   /**
-   * Simpan rute ke snapshot. Error di-simpan secara async — caller tidak perlu tunggu.
+   * Simpan rute ke snapshot. Error di-simpan secara async, caller tidak perlu tunggu.
    */
   private async saveSnapshot(route: Route): Promise<void> {
     routeSnapshotService

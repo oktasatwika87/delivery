@@ -1,5 +1,5 @@
 /**
- * Pending Actions Outbox — offline-first driver action queue.
+ * Pending Actions Outbox, offline-first driver action queue.
  *
  * Architecture:
  * - When driver taps reject/cancel/COD collect while offline:
@@ -64,7 +64,7 @@ export async function enqueueReject(orderId: string, expectedVersion: number): P
       return { success: false, error: 'Not authenticated' };
     }
 
-    // Generate UUID dulu — prepareCreateFromDirtyRaw butuh ID yang sudah jadi.
+    // Generate UUID dulu, prepareCreateFromDirtyRaw butuh ID yang sudah jadi.
     const pendingActionId = generateUUID();
 
     await database.write(async () => {
@@ -179,7 +179,7 @@ export async function enqueueCollectCod(
       return { success: false, error: 'Not authenticated' };
     }
 
-    // Generate idempotency key NOW — must be stable across retries
+    // Generate idempotency key NOW, must be stable across retries
     const idempotencyKey = await generateCodIdempotencyKey(orderId);
     const payload: CollectCodPayload = { amountCents };
     const pendingActionId = generateUUID();
@@ -259,7 +259,7 @@ export function getPendingActionAgeMs(action: PendingActionModel | null): number
 
 /**
  * Check if a pending action is stale (older than STALE_THRESHOLD_MS).
- * Stale actions indicate the driver has been offline for a while — UI
+ * Stale actions indicate the driver has been offline for a while, UI
  * should show a more prominent warning.
  */
 export function isPendingActionStale(action: PendingActionModel | null): boolean {
@@ -283,7 +283,7 @@ export async function hasStalePendingAction(orderId: string): Promise<boolean> {
 }
 
 /**
- * Drain all pending actions — process them FIFO.
+ * Drain all pending actions, process them FIFO.
  * Called when device comes online.
  *
  * @param db - Database instance (defaults to global database)
@@ -376,8 +376,8 @@ async function processReject(action: PendingActionModel, db: Database): Promise<
 
     // Lookup order lokal lebih dulu (read-only, di luar transaction) supaya
     // bisa di-batch dengan delete pending_action di bawah. Kalau order tidak
-    // ada di lokal (sangat jarang — biasanya server data sudah di-pull
-    // sebelum sync berikutnya), skip update — delete pending_action saja.
+    // ada di lokal (sangat jarang, biasanya server data sudah di-pull
+    // sebelum sync berikutnya), skip update, delete pending_action saja.
     let orderRow: OrderModel | null = null;
     try {
       orderRow = await db.get<OrderModel>('orders').find(action.targetOrderId);
@@ -398,18 +398,18 @@ async function processReject(action: PendingActionModel, db: Database): Promise<
           r._setRaw('status', response.status);
           r._setRaw('driver_id', null);
           r._setRaw('server_version', response.version);
-          // Reject bukan pembatalan — clear cancel signal lama supaya
+          // Reject bukan pembatalan, clear cancel signal lama supaya
           // banner "Alasan Pembatalan" tidak muncul lagi untuk order ini.
           r._setRaw('cancelled_by', null);
           r._setRaw('cancel_reason', null);
-          // Clear persisted banner signal — driver sudah synced successfully,
+          // Clear persisted banner signal, driver sudah synced successfully,
           // jadi banner conflict lama sudah tidak relevan.
           r._setRaw('last_conflict_reason', null);
           r._setRaw('last_conflict_at', null);
           // Sinkronkan internal WatermelonDB state supaya _status='synced'
           // dan _changed kosong. Direct _raw mutation karena _setRaw
           // bypass internal fields (lihat OrdersScreen.tsx comment
-          // "prepareUpdate+batch" — pola yang sama).
+          // "prepareUpdate+batch", pola yang sama).
           r._raw._status = 'synced';
           r._raw._changed = '';
         }));
@@ -421,7 +421,7 @@ async function processReject(action: PendingActionModel, db: Database): Promise<
     // yang baru ASSIGNED + driverId null (= pool-eligible lagi).
     syncEvents.emit('pool-refresh', { source: 'reject-success', orderId: action.targetOrderId });
 
-    // Tetap emit orderConflict juga — ada UI yang listen untuk refresh
+    // Tetap emit orderConflict juga, ada UI yang listen untuk refresh
     // detail panel (lihat syncEvents taxonomy). OrderTrackingScreen
     // customer-side tidak terpengaruh (event ini driver-targeted).
     syncEvents.emit('orderConflict', {
@@ -460,7 +460,7 @@ async function processCancel(action: PendingActionModel, db: Database): Promise<
     const response = await cancelOrder(action.targetOrderId, action.expectedVersion, payload?.reason);
     console.log(`[outbox] Cancel succeeded for order ${action.targetOrderId}:`, response);
 
-    // Lookup order lokal — lihat processReject untuk rationale.
+    // Lookup order lokal, lihat processReject untuk rationale.
     let orderRow: OrderModel | null = null;
     try {
       orderRow = await db.get<OrderModel>('orders').find(action.targetOrderId);
@@ -480,12 +480,12 @@ async function processCancel(action: PendingActionModel, db: Database): Promise<
           r._setRaw('server_version', response.version);
           // Cancel menyimpan cancelledBy + cancelReason. response fields
           // typed `unknown` (DriverActionResponse index signature), jadi
-          // narrow ke string via typeof — bukan `as any`.
+          // narrow ke string via typeof, bukan `as any`.
           const cancelledBy = typeof response.cancelledBy === 'string' ? response.cancelledBy : null;
           const cancelReason = typeof response.cancelReason === 'string' ? response.cancelReason : null;
           r._setRaw('cancelled_by', cancelledBy);
           r._setRaw('cancel_reason', cancelReason);
-          // Clear persisted banner signal — driver sudah synced successfully.
+          // Clear persisted banner signal, driver sudah synced successfully.
           r._setRaw('last_conflict_reason', null);
           r._setRaw('last_conflict_at', null);
           r._raw._status = 'synced';
@@ -564,7 +564,7 @@ async function processCollectCod(action: PendingActionModel, db: Database): Prom
 
     // Check for version conflict (treat same as orphaned for COD)
     if (isVersionConflict(err)) {
-      console.warn(`[outbox] Version conflict for COD on order ${action.targetOrderId} — treating as orphaned`);
+      console.warn(`[outbox] Version conflict for COD on order ${action.targetOrderId}, treating as orphaned`);
       await markActionOrphaned(action, db);
 
       // Fire-and-forget: notify server so HSIN gets email
@@ -589,7 +589,7 @@ async function processCollectCod(action: PendingActionModel, db: Database): Prom
  * atau `code === 'VERSION_CONFLICT'`. Backward compat string check untuk
  * error lama yang pesan-nya generic ("version mismatch" dll).
  *
- * Catatan: clause `\b409\b` regex terhadap String(err) sudah dihapus —
+ * Catatan: clause `\b409\b` regex terhadap String(err) sudah dihapus,
  * redundant (ApiError dari client.ts selalu punya `err.status === 409`
  * duluan) DAN false-positive prone (body apapun yang memuat angka 409,
  * mis. `{"amount":409}`, akan lolos).
@@ -625,14 +625,14 @@ function isOrphanedCod(err: any): boolean {
  * Handle version conflict: pull fresh order data, delete pending action, notify UI.
  *
  * Untuk pending action bertipe 'cancel', tulis juga persisted banner signal
- * (lastConflictReason + lastConflictAt) ke order row lokal — banner
+ * (lastConflictReason + lastConflictAt) ke order row lokal, banner
  * LastConflictBanner baca field ini untuk surface cancel-offline conflict
  * ke driver (Skenario A, Temuan 1).
  *
  * Aksi 'reject' / 'collect_cod' TIDAK menulis field ini. Reason
  * 'cancelled-by-server' spesifik untuk skenario cancel-offline (driver tap
  * Batal offline, server sudah reassign/close/cancel sebelum mobile sempat
- * sync) — bukan untuk cancel online biasa.
+ * sync), bukan untuk cancel online biasa.
  */
 async function handleVersionConflict(action: PendingActionModel, db: Database, reason: string): Promise<void> {
   console.log(`[outbox] Handling version conflict for action ${action.id}`);
@@ -640,7 +640,7 @@ async function handleVersionConflict(action: PendingActionModel, db: Database, r
   // Untuk pending action bertipe cancel: lookup order row lebih dulu
   // (read-only, di luar transaction) supaya bisa di-batch dengan delete
   // pending_action di bawah. Kalau order tidak ada di lokal (sangat
-  // jarang — server data di-pull duluan sebelum sync berikutnya), log
+  // jarang, server data di-pull duluan sebelum sync berikutnya), log
   // warning dan lanjut tanpa tulis banner signal.
   let cancelOrder: OrderModel | null = null;
   if (action.actionType === 'cancel') {
@@ -655,7 +655,7 @@ async function handleVersionConflict(action: PendingActionModel, db: Database, r
   }
 
   // Single batch: delete pending_action + (kalau cancel) tulis banner signal.
-  // Tidak buka transaksi terpisah untuk lastConflictReason/lastConflictAt —
+  // Tidak buka transaksi terpisah untuk lastConflictReason/lastConflictAt,
   // gabung dengan delete pending_action (sesuai spec Temuan 1).
   await db.write(async () => {
     const ops: Model[] = [action.prepareDestroyPermanently()];
@@ -668,7 +668,7 @@ async function handleVersionConflict(action: PendingActionModel, db: Database, r
     await db.batch(...ops);
   });
 
-  // Pull fresh order data via sync coordinator (transaksi sendiri — tidak
+  // Pull fresh order data via sync coordinator (transaksi sendiri), tidak
   // bisa digabung dengan batch di atas karena syncCoordinator.pullNow()
   // mengelola batch internal applyPull-nya sendiri).
   try {
@@ -714,7 +714,7 @@ async function markActionOrphaned(action: PendingActionModel, db: Database): Pro
  * on the next drain trigger (reconnect or after enqueue).
  *
  * Outbox actions (reject/cancel/collectCod) represent physical driver actions
- * that must eventually sync — we NEVER give up on them automatically.
+ * that must eventually sync, we NEVER give up on them automatically.
  * Unlike regular field sync which respects MAX_SYNC_ATTEMPTS, outbox actions
  * keep retrying indefinitely until they succeed or the device goes away.
  */

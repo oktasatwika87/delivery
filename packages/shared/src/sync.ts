@@ -1,8 +1,8 @@
 /**
- * Sync envelopes — dipakai oleh offline-first layer.
+ * Sync envelopes, dipakai oleh offline-first layer.
  *
- * Mobile -> Backend:  SyncPushPayload   (apa yang berubah di client)
- * Backend -> Mobile:  SyncPullResponse  (apa yang berubah di server)
+ * Mobile ke Backend:  SyncPushPayload   (apa yang berubah di client)
+ * Backend ke Mobile:  SyncPullResponse  (apa yang berubah di server)
  *
  * Konvensi ID & timestamp:
  *   - id selalu UUIDv4 string
@@ -37,7 +37,7 @@ export interface SyncRecordPush {
 export interface SyncPushPayload {
   deviceId: string;
   userId: string;
-  /** Incremental cursor — null untuk first sync. */
+  /** Incremental cursor, null untuk first sync. */
   sinceCursor: string | null;
   records: SyncRecordPush[];
 }
@@ -51,7 +51,7 @@ export interface SyncRecordAck {
    * - accepted: perubahan berhasil di-apply
    * - rejected: payload invalid atau business rule violation
    * - merged: server auto-merged (rare, untuk simple scalar conflicts)
-   * - conflict: OCC mismatch — client harus pull dulu, retry setelah dapat version terbaru
+   * - conflict: OCC mismatch, client harus pull dulu, retry setelah dapat version terbaru
    */
   status: 'accepted' | 'rejected' | 'merged' | 'conflict';
   /** Bila rejected/conflict, alasannya. */
@@ -60,7 +60,7 @@ export interface SyncRecordAck {
   serverVersion: number;
   /** Server timestamp kapan record ini ter-update. */
   serverChangedAt: string;
-  /** Data server terbaru — wajib ada kalau status = 'conflict'. */
+  /** Data server terbaru, wajib ada kalau status = 'conflict'. */
   serverData?: Order | Payment | ChatMessage;
 }
 
@@ -80,11 +80,11 @@ export interface SyncPullResponse {
   /** Cursor baru untuk pull berikutnya (null jika sudah up-to-date). */
   nextCursor: string | null;
   records: SyncRecordPull[];
-  /** Server time saat ini — dipakai client untuk jam-jitter correction. */
+  /** Server time saat ini, dipakai client untuk jam-jitter correction. */
   serverTime: string;
 }
 
-/** Response untuk push — mengembalikan ack per record + opsional pull delta. */
+/** Response untuk push, mengembalikan ack per record + opsional pull delta. */
 export interface SyncPushResponse {
   acks: SyncRecordAck[];
   /** Backend boleh sisipkan pull kecil (mis. update terbaru) untuk hemat round-trip. */

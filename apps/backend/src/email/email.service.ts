@@ -41,7 +41,7 @@ export class EmailService {
       this.logger.log('Email service configured');
     } else {
       this.logger.warn(
-        'Email service not configured — SMTP env vars missing. ' +
+        'Email service not configured, SMTP env vars missing. ' +
         'Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS to enable email notifications.',
       );
     }
@@ -49,16 +49,16 @@ export class EmailService {
 
   /**
    * Kirim notifikasi orphan COD ke HSIN.
-   * Fire-and-forget — gagal kirim email tidak boleh block endpoint.
+   * Fire-and-forget, gagal kirim email tidak boleh block endpoint.
    */
   async sendOrphanedCodNotification(data: OrphanedCodEmailData): Promise<void> {
     if (!this.notifyEmail) {
-      this.logger.warn('[email] ORPHAN_NOTIFY_EMAIL not configured — skipping notification');
+      this.logger.warn('[email] ORPHAN_NOTIFY_EMAIL not configured, skipping notification');
       return;
     }
 
     if (!this.transporter) {
-      this.logger.warn('[email] SMTP not configured — skipping notification');
+      this.logger.warn('[email] SMTP not configured, skipping notification');
       return;
     }
 
@@ -130,7 +130,7 @@ Delivery System — otomatis dari backend
       });
       this.logger.log(`[email] Orphaned COD notification sent for order ${data.orderId}`);
     } catch (err) {
-      // Fire-and-forget — log error tapi jangan throw
+      // Fire-and-forget, log error tapi jangan throw
       this.logger.error(`[email] Failed to send orphan notification for order ${data.orderId}:`, err);
     }
   }

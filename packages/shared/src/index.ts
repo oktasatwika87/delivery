@@ -24,7 +24,7 @@ import type { Payment } from './payment.js';
 import type { ChatMessage } from './chat.js';
 import type { User } from './user.js';
 
-/** Branded ID helpers — bantu TypeScript membedakan ID type saat dipakai. */
+/** Branded ID helpers, bantu TypeScript membedakan ID type saat dipakai. */
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace DeliveryTypes {
@@ -40,5 +40,5 @@ declare global {
 /** Snapshot seluruh entity yang dilacak di sync layer. */
 export type DomainEntity = Order | Payment | ChatMessage | User;
 
-/** Versi schema shared — bump saat ada field/union yang breaking. */
+/** Versi schema shared, bump saat ada field/union yang breaking. */
 export const SHARED_SCHEMA_VERSION = 1 as const;

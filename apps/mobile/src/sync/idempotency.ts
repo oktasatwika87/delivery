@@ -1,12 +1,12 @@
 /**
  * Idempotency key generation for COD sync (offline-first).
  *
- * Format: cod:${uuid} — UUID v4 (RFC 4122).
+ * Format: cod:${uuid}, UUID v4 (RFC 4122).
  *
  * The UUID is the single source of uniqueness for the payment. Generated
  * ONCE when the driver taps "Terima Cash COD" and stored permanently on
  * the local PaymentModel row. Stability across retries is guaranteed by
- * the fact that the key lives on the row — `collectDirty()` reads it
+ * the fact that the key lives on the row, `collectDirty()` reads it
  * from `row.idempotencyKey` rather than regenerating.
  *
  * UI-level guards prevent double-tapping from generating duplicate keys:
@@ -16,8 +16,8 @@
  * Why not the previous `cod:${orderId}:${deviceId}:${Date.now()}`:
  *   The `Date.now()` component made the key non-deterministic if the
  *   local row was ever re-created (app reinstall, DB corruption, debug
- *   insertion). Re-creation produced a new key → server's unique
- *   constraint couldn't dedupe → duplicate payment record. UUID v4
+ *   insertion). Re-creation produced a new key, server's unique
+ *   constraint couldn't dedupe, duplicate payment record. UUID v4
  *   eliminates this foot-gun by making the key a single global UUID
  *   with 2^122 collision space.
  */
@@ -34,7 +34,7 @@ const COD_UUID_REGEX =
 
 /**
  * Generate a fresh idempotency key for a COD collection. The `_orderId`
- * parameter is intentionally ignored — the UUID itself is unique enough
+ * parameter is intentionally ignored, the UUID itself is unique enough
  * to distinguish between COD collections regardless of which order,
  * device, or timestamp. Keeping the parameter in the signature preserves
  * the existing call site at `OrderDetailScreen.tsx:219`.

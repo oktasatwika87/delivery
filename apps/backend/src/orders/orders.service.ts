@@ -20,7 +20,7 @@ import { OrdersGateway } from './orders.gateway';
  *
  * Beda dari `Order` full: tidak ada customerId, items[], deliveryAddress{},
  * notes, version, cancelledBy, cancelReason. Driver cuma butuh preview
- * minimal untuk nge-tap card — full detail di-fetch via GET /orders/:id
+ * minimal untuk nge-tap card, full detail di-fetch via GET /orders/:id
  * setelah tap.
  *
  * Shape ini PARALEL dengan WebSocket broadcast `emitOrderAvailable`
@@ -84,23 +84,23 @@ export class OrdersService {
   }
 
   /**
-   * PATCH /orders/:id/status — driver pemilik order meng-update status.
-   * Hanya dua transisi yang diizinkan: PREPARING → OUT_FOR_DELIVERY dan
-   * OUT_FOR_DELIVERY → DELIVERED. Role check dilakukan di controller (lihat
+   * PATCH /orders/:id/status, driver pemilik order meng-update status.
+   * Hanya dua transisi yang diizinkan: PREPARING jadi OUT_FOR_DELIVERY dan
+   * OUT_FOR_DELIVERY jadi DELIVERED. Role check dilakukan di controller (lihat
    * OrdersController.updateStatus).
    *
    * Urutan cek:
-   * 1. Order tidak ditemukan → 404 NotFound
-   * 2. userId !== order.driverId → 403 Forbidden
-   * 3. nextStatus bukan OUT_FOR_DELIVERY atau DELIVERED → 403 Forbidden
+   * 1. Order tidak ditemukan jadi 404 NotFound
+   * 2. userId !== order.driverId jadi 403 Forbidden
+   * 3. nextStatus bukan OUT_FOR_DELIVERY atau DELIVERED jadi 403 Forbidden
    * 4. current.status tidak cocok dengan sumber yang diharapkan untuk
-   *    nextStatus → 409 INVALID_TRANSITION
+   *    nextStatus jadi 409 INVALID_TRANSITION
    *    (mis. DELIVERED diminta dari PREPARING, OUT_FOR_DELIVERY diminta
    *    saat sudah OUT_FOR_DELIVERY)
-   * 5. Prisma update P2025 → 409 VERSION_CONFLICT
+   * 5. Prisma update P2025 jadi 409 VERSION_CONFLICT
    *
    * Setelah sukses: emit order:status_updated ke customer room (satu kali).
-   * Tidak ada emitOrderUnavailable — dua transisi ini tidak pernah berasal
+   * Tidak ada emitOrderUnavailable, dua transisi ini tidak pernah berasal
    * dari pool, jadi order tidak pernah "leaving pool".
    *
    * Daftar transisi disimpan lokal di sini (bukan pakai
@@ -115,7 +115,7 @@ export class OrdersService {
   /**
    * Untuk setiap target yang diizinkan, sumber yang diharapkan. Disimpan
    * sebagai Readonly<Partial<...>> karena OrderStatus union termasuk status
-   * yang tidak pernah jadi target PATCH (PENDING, PENDING, CONFIRMED, dll) —
+   * yang tidak pernah jadi target PATCH (PENDING, PENDING, CONFIRMED, dll),
    * Partial<T> memungkinkan Record tanpa harus isi semua key secara literal.
    */
   private static readonly PATCH_STATUS_EXPECTED_SOURCE: Readonly<
@@ -141,19 +141,19 @@ export class OrdersService {
     const current = await this.prisma.order.findUnique({ where: { id } });
     if (!current) throw new NotFoundException(`Order ${id} not found`);
 
-    // Cek 2: bukan driver order → 403
+    // Cek 2: bukan driver order jadi 403
     if (current.driverId !== userId) {
       throw new ForbiddenException('Not your order');
     }
 
-    // Cek 3: target bukan OUT_FOR_DELIVERY atau DELIVERED → 403
+    // Cek 3: target bukan OUT_FOR_DELIVERY atau DELIVERED jadi 403
     if (!OrdersService.isPatchStatusTarget(nextStatus)) {
       throw new ForbiddenException(
         'Status tujuan tidak diizinkan lewat endpoint ini',
       );
     }
 
-    // Cek 4: sumber tidak cocok dengan target → 409 INVALID_TRANSITION
+    // Cek 4: sumber tidak cocok dengan target jadi 409 INVALID_TRANSITION
     const expectedSource = OrdersService.PATCH_STATUS_EXPECTED_SOURCE[nextStatus];
     if (current.status !== expectedSource) {
       throw new ConflictException({
@@ -171,7 +171,7 @@ export class OrdersService {
         },
       });
 
-      // Emit ke customer — satu kali per PATCH sukses. Cek 3 di atas
+      // Emit ke customer, satu kali per PATCH sukses. Cek 3 di atas
       // sudah menyempitkan nextStatus ke OUT_FOR_DELIVERY | DELIVERED.
       this.ordersGateway.emitOrderStatusUpdated(current.customerId, {
         orderId: updated.id,
@@ -182,7 +182,7 @@ export class OrdersService {
 
       return this.toDomain(updated);
     } catch (err) {
-      // Cek 5: OCC conflict → 409 VERSION_CONFLICT (pola sama dengan
+      // Cek 5: OCC conflict jadi 409 VERSION_CONFLICT (pola sama dengan
       // releaseToPool/acceptOrder).
       const error = err as { code?: string };
       if (error.code === 'P2025') {
@@ -212,7 +212,7 @@ export class OrdersService {
     // Status check: harus ASSIGNED baru bisa di-accept.
     // Order yang sudah di-unassign cron (kembali ke CONFIRMED) atau sudah
     // pindah status (PREPARING, dst.) dianggap tidak lagi tersedia untuk
-    // driver yang sedang menekan Terima — kembalikan 409 ORDER_UNAVAILABLE
+    // driver yang sedang menekan Terima, kembalikan 409 ORDER_UNAVAILABLE
     // supaya client tahu pool perlu refresh, bukan pesan gagal umum.
     if (current.status !== OrderStatusDb.ASSIGNED) {
       throw new ConflictException({
@@ -222,7 +222,7 @@ export class OrdersService {
     }
 
     // Ownership: order harus belum di-accept driver lain (driverId === null berarti belum ada yang accept)
-    // Kalau driverId === driverId (driver yang sama), bisa jadi retry — OCC akan handle
+    // Kalau driverId === driverId (driver yang sama), bisa jadi retry, OCC akan handle
     if (current.driverId !== null && current.driverId !== driverId) {
       throw new ConflictException({
         code: 'ORDER_UNAVAILABLE',
@@ -236,7 +236,7 @@ export class OrdersService {
         data: {
           status: OrderStatusDb.PREPARING,
           driverId, // assign driver saat accept
-          // Bersihkan data batal lama — order barulang ASSIGNED setelah cron
+          // Bersihkan data batal lama, order barulang ASSIGNED setelah cron
           // (cancelledBy 'SYSTEM', cancelReason 'system_timeout') akan overwrite
           // ke null di sini supaya toDomain tidak lagi bawa cancelReason saat
           // accept berikutnya.
@@ -259,9 +259,9 @@ export class OrdersService {
 
       return this.toDomain(updated);
     } catch (err) {
-      // OCC conflict: version mismatch → 409 VERSION_CONFLICT.
+      // OCC conflict: version mismatch jadi 409 VERSION_CONFLICT.
       // Body object di-pass langsung ke ConflictException supaya Nest HTTP
-      // exception filter serialize { code, message } as-is — pola sama
+      // exception filter serialize { code, message } as-is, pola sama
       // dengan cancelOrder/rejectOrder.
       const error = err as { code?: string };
       if (error.code === 'P2025') {
@@ -278,26 +278,26 @@ export class OrdersService {
    * Driver reject order yang sudah di-assign KHUSUS ke driver tsb.
    * Validasi: DRIVER role, status ASSIGNED, DAN driver adalah owner order ini.
    *
-   * FIX (2026-09): dua bug ditemukan di implementasi lama —
+   * FIX (2026-09): dua bug ditemukan di implementasi lama,
    * (a) tidak ada ownership check sama sekali (siapa pun dengan role DRIVER
    *     bisa reject ORDER MANAPUN yang berstatus ASSIGNED, termasuk order
    *     pool yang tidak terkait dengan mereka);
    * (b) transisi ke CANCELLED, padahal CANCELLED adalah status terminal
-   *     (ORDER_ALLOWED_TRANSITIONS.CANCELLED = []) — jadi setiap reject
+   *     (ORDER_ALLOWED_TRANSITIONS.CANCELLED = []), jadi setiap reject
    *     membunuh order tsb permanen, bertentangan dengan komentar lama
    *     "order bisa di-assign ke driver lain".
    * Fix: ownership check sama seperti cancelOrder, dan transisi balik ke
    * CONFIRMED + driverId: null (reassign-able), sama seperti cancelOrder.
    *
    * NOTE: order pool saat ini (status ASSIGNED, driverId: null, lihat
-   * findAvailable()) adalah broadcast — acceptOrder() adalah satu-satunya
+   * findAvailable()) adalah broadcast, acceptOrder() adalah satu-satunya
    * jalan order jadi ASSIGNED+driverId terisi, dan acceptOrder() langsung
    * loncat ke PREPARING dalam operasi yang sama. Artinya tidak ada state
-   * reachable saat ini di mana order ASSIGNED punya driverId terisi — jadi
+   * reachable saat ini di mana order ASSIGNED punya driverId terisi, jadi
    * dengan ownership check ini, endpoint reject aman (selalu 403) sampai
    * ada model "offer ke driver tertentu" yang benar-benar mengisi driverId
    * pada status ASSIGNED. Ini bukan bug baru, ini konsekuensi yang benar
-   * dari belum adanya model tsb — lihat Decision 4 (reassignment) di
+   * dari belum adanya model tsb, lihat Decision 4 (reassignment) di
    * progress doc.
    */
   async rejectOrder(
@@ -327,7 +327,7 @@ export class OrdersService {
     const updated = await this.releaseToPool({
       orderId: id,
       expectedVersion,
-      // reject bukan pembatalan — kedua field ditulis null supaya tidak
+      // reject bukan pembatalan, kedua field ditulis null supaya tidak
       // bocor dari cancel/timeout sebelumnya.
       cancelledBy: null,
       cancelReason: null,
@@ -340,7 +340,7 @@ export class OrdersService {
       updated.version,
     );
 
-    // NOTE: tidak ada emitOrderUnavailable() di sini — order yang di-reject
+    // NOTE: tidak ada emitOrderUnavailable() di sini, order yang di-reject
     // di sini punya driverId terisi (bukan pool item), jadi tidak pernah
     // terlihat di pool drivers:available untuk mulai dengan; releaseToPool
     // sudah memanggil emitOrderAvailable untuk broadcast availability ke
@@ -417,10 +417,10 @@ export class OrdersService {
    *
    * Setelah sukses, broadcast ke pool (emitOrderAvailable). Untuk reject
    * dan cancel, customer juga dikabari lewat emitOrderRejected/emitOrderCancelled
-   * — itu tetap tanggung jawab caller, bukan releaseToPool, karena ada
+   * itu tetap tanggung jawab caller, bukan releaseToPool, karena ada
    * payload spesifik per event (reason untuk cancel, dll).
    *
-   * P2025 → ConflictException(VERSION_CONFLICT) supaya caller bisa
+   * P2025 jadi ConflictException(VERSION_CONFLICT) supaya caller bisa
    * translate sesuai konteks (OrdersService.rejectOrder/cancelOrder
    * propagate ke HTTP 409, ReassignmentService tangkap dan skip silently).
    */
@@ -489,12 +489,12 @@ export class OrdersService {
    * Map Prisma row ke slim `AvailableOrderPayload`.
    *
    * Mapping:
-   * - r.id → orderId
-   * - Array `itemsJson.length` → itemsCount (safe: itemsJson selalu array,
+   * - r.id jadi orderId
+   * - Array `itemsJson.length` jadi itemsCount (safe: itemsJson selalu array,
    *   schema enforced di service.create)
-   * - r.addressJson?.city → city (optional chain karena addressJson typed
-   *   sebagai `Json` di Prisma — defensif, meski schema enforce object)
-   * - r.createdAt.toISOString() → createdAt (string format ISO 8601,
+   * - r.addressJson?.city jadi city (optional chain karena addressJson typed
+   *   sebagai `Json` di Prisma, defensif, meski schema enforce object)
+   * - r.createdAt.toISOString() jadi createdAt (string format ISO 8601,
    *   sesuai `Order.createdAt` convention)
    * - r.version jadi version (kunci versi untuk accept)
    */

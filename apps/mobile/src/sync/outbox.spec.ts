@@ -5,7 +5,7 @@
 // Shared state
 const mockState = {
   records: new Map<string, any>(),
-  // Orders collection — track state untuk assertions lastConflictReason/lastConflictAt
+  // Orders collection, track state untuk assertions lastConflictReason/lastConflictAt
   orders: new Map<string, any>(),
   batchOps: [] as Array<{ type: string; row: any; fn?: (r: any) => void }>,
   // Per-test query overrides
@@ -38,7 +38,7 @@ function attachMethods(row: any) {
     row._raw[column] = value;
   };
   row.prepareDestroyPermanently = function() {
-    // Prepared destroy op — batch() detects _isDestroy dan remove from map.
+    // Prepared destroy op, batch() detects _isDestroy dan remove from map.
     return { _isDestroy: true, _targetRow: row, id: row.id };
   };
   row.destroyPermanently = async function() {
@@ -85,7 +85,7 @@ jest.mock('./session', () => ({
 }));
 
 jest.mock('./client', () => {
-  // requireActual untuk preserve class identity — dipakai test isVersionConflict
+  // requireActual untuk preserve class identity, dipakai test isVersionConflict
   // untuk instantiate ApiError langsung. rejectOrder/cancelOrder/collectCodOrder
   // /flagOrphanedCod di-override dengan jest.fn() karena outbox.ts cuma butuh
   // side effect-nya, bukan implementasinya.
@@ -115,7 +115,7 @@ jest.mock('../db', () => ({
   database: {
     get(name: string) {
       if (name === 'orders') {
-        // Orders collection — track state via mockState.orders untuk
+        // Orders collection, track state via mockState.orders untuk
         // assertions di handleVersionConflict tests (lastConflictReason,
         // lastConflictAt). Method mirror pending_actions pattern supaya
         // find/prepareUpdate/prepareDestroyPermanently seragam.
@@ -158,7 +158,7 @@ jest.mock('../db', () => ({
           // outbox.ts only ever queries pending_actions with two column
           // patterns: Q.where('target_order_id', ...) and
           // Q.where('status', ...). Map those DB column names to the
-          // record's (camelCase) JS property names — this is deliberately
+          // record's (camelCase) JS property names, this is deliberately
           // NOT a general-purpose Q parser, just these two known patterns.
           const columnToProp: Record<string, string> = {
             target_order_id: 'targetOrderId',
@@ -225,13 +225,13 @@ jest.mock('../db', () => ({
       return fn();
     },
     async batch(...ops: unknown[]) {
-      // Process prepared records — store them in records map.
+      // Process prepared records, store them in records map.
       // Also handle _isDestroy prepared ops (delete by reference identity).
       //
       // Backward compat: process pending batchOps yang di-queue via
-      // prepareUpdate. Pola lama: prepareUpdate → db.write (yang
+      // prepareUpdate. Pola lama: prepareUpdate jadi db.write (yang
       // pre-iterate batchOps di mock). Pola baru: prepareUpdate
-      // di dalam writer fn → db.batch (yang process batchOps di sini).
+      // di dalam writer fn ke db.batch (yang process batchOps di sini).
       // Handle keduanya supaya single-batch pattern handleVersionConflict
       // (yang call prepareUpdate sebelum db.batch) jalan benar.
       for (const op of mockState.batchOps) {
@@ -242,7 +242,7 @@ jest.mock('../db', () => ({
       for (const op of ops) {
         const prepared = op as any;
         if (prepared && prepared._isDestroy && prepared._targetRow) {
-          // destroyPermanently prepared op — remove dari records & orders
+          // destroyPermanently prepared op, remove dari records & orders
           for (const [key, val] of mockState.records) {
             if (val === prepared._targetRow) {
               mockState.records.delete(key);
@@ -574,7 +574,7 @@ describe('outbox', () => {
     // lagi di pool setelah reject offline.
     test('reject success, tulis baris lokal dari response (status=ASSIGNED, driverId null)', async () => {
       // Setup order lokal dengan status ASSIGNED + driverId terisi
-      // (driver sudah accept, lalu offline → tap reject)
+      // (driver sudah accept, lalu offline, tap reject)
       const order = {
         id: 'order-k15-reject',
         _raw: { id: 'order-k15-reject', _status: 'synced' },
@@ -612,7 +612,7 @@ describe('outbox', () => {
       expect(updatedOrder._raw.status).toBe('ASSIGNED');
       expect(updatedOrder._raw.driver_id).toBeNull();
       expect(updatedOrder._raw.server_version).toBe(4);
-      // Reject bukan pembatalan — cancelled_by/cancel_reason harus null
+      // Reject bukan pembatalan, cancelled_by/cancel_reason harus null
       expect(updatedOrder._raw.cancelled_by).toBeNull();
       expect(updatedOrder._raw.cancel_reason).toBeNull();
 
@@ -696,7 +696,7 @@ describe('outbox', () => {
       // Pending action tetap ter-delete
       expect(mockState.records.has('k15-orphan-action')).toBe(false);
 
-      // pool-refresh tetap ter-emit — server tahu order ada lagi
+      // pool-refresh tetap ter-emit, server tahu order ada lagi
       expect(syncEvents.emit).toHaveBeenCalledWith(
         'pool-refresh',
         expect.objectContaining({ orderId: 'order-not-local' }),
@@ -721,9 +721,9 @@ describe('outbox', () => {
   // Temuan 1 (Skenario A): handleVersionConflict di outbox.ts menulis
   // persisted banner signal (lastConflictReason + lastConflictAt) HANYA
   // untuk pending action bertipe 'cancel'. Aksi 'reject' / 'collect_cod'
-  // TIDAK menulis field ini — diverifikasi via integration drain flow.
-  describe('handleVersionConflict() — cancel-offline banner signal', () => {
-    test('cancel conflict → tulis lastConflictReason=cancelled-by-server + lastConflictAt', async () => {
+  // TIDAK menulis field ini, diverifikasi via integration drain flow.
+  describe('handleVersionConflict(), cancel-offline banner signal', () => {
+    test('cancel conflict, tulis lastConflictReason=cancelled-by-server + lastConflictAt', async () => {
       // Setup order lokal (mockState.orders)
       const order = {
         id: 'order-cancel-banner-test',
@@ -743,7 +743,7 @@ describe('outbox', () => {
       mockState.records.set('cancel-banner-action', action);
       attachMethods(action);
 
-      // Mock cancelOrder → reject dengan version conflict (409)
+      // Mock cancelOrder, reject dengan version conflict (409)
       mockCancelOrder.mockRejectedValue({ status: 409 });
 
       await drainPendingActions();
@@ -764,7 +764,7 @@ describe('outbox', () => {
       }));
     });
 
-    test('reject conflict → TIDAK tulis lastConflictReason / lastConflictAt', async () => {
+    test('reject conflict, TIDAK tulis lastConflictReason / lastConflictAt', async () => {
       // Setup order lokal
       const order = {
         id: 'order-reject-banner-test',
@@ -783,7 +783,7 @@ describe('outbox', () => {
       mockState.records.set('reject-banner-action', action);
       attachMethods(action);
 
-      // Mock rejectOrder → reject dengan version conflict (409)
+      // Mock rejectOrder, reject dengan version conflict (409)
       mockRejectOrder.mockRejectedValue({ status: 409 });
 
       await drainPendingActions();
@@ -797,7 +797,7 @@ describe('outbox', () => {
       expect(mockState.records.has('reject-banner-action')).toBe(false);
     });
 
-    test('collect_cod conflict → TIDAK tulis lastConflictReason / lastConflictAt', async () => {
+    test('collect_cod conflict, TIDAK tulis lastConflictReason / lastConflictAt', async () => {
       // Setup order lokal
       const order = {
         id: 'order-cod-banner-test',
@@ -817,7 +817,7 @@ describe('outbox', () => {
       mockState.records.set('cod-banner-action', action);
       attachMethods(action);
 
-      // Mock collectCodOrder → reject dengan version conflict (409)
+      // Mock collectCodOrder, reject dengan version conflict (409)
       // Note: processCollectCod treat 409 sebagai orphaned_needs_review,
       // BUKAN handleVersionConflict. Verifikasi bahwa path ini juga tidak
       // menulis banner signal.
@@ -889,17 +889,17 @@ describe('outbox', () => {
     });
   });
 
-  // Unit test isVersionConflict — kontrak typed error ApiError dari client.ts
+  // Unit test isVersionConflict, kontrak typed error ApiError dari client.ts
   // memungkinkan deteksi 409 tanpa parse pesan. Tests ini verifikasi:
   // (a) status === 409 di ApiError cukup, walaupun pesan tidak memuat 'version'
   //     (kasus yang dulu gagal dengan regex parse);
   // (b) ApiError non-409 tidak match;
   // (c) error network biasa tidak match.
   describe('isVersionConflict()', () => {
-    test('ApiError 409 tanpa kata "version" di pesan → true', () => {
+    test('ApiError 409 tanpa kata "version" di pesan, true', () => {
       // Persis pola backend baru: status 409, code VERSION_CONFLICT,
       // message "Order was modified by another request..." (TIDAK ada
-      // kata "version" atau "conflict" di pesan — itulah yang dulu
+      // kata "version" atau "conflict" di pesan, itulah yang dulu
       // bikin handleVersionConflict tidak terpanggil).
       const err = new ApiError(
         'cancelOrder failed: 409 - {"code":"VERSION_CONFLICT","message":"Order was modified by another request. Please refresh and try again."}',
@@ -910,14 +910,14 @@ describe('outbox', () => {
       expect(isVersionConflict(err)).toBe(true);
     });
 
-    test('ApiError 409 dengan code undefined → tetap true via status', () => {
+    test('ApiError 409 dengan code undefined, tetap true via status', () => {
       // Defensive: kalau backend somehow tidak kirim `code` field, status 409
       // saja sudah cukup untuk trigger handleVersionConflict.
       const err = new ApiError('cancelOrder failed: 409 - some body', 409);
       expect(isVersionConflict(err)).toBe(true);
     });
 
-    test('ApiError 403 → false (bukan version conflict, itu ownership check)', () => {
+    test('ApiError 403, false (bukan version conflict, itu ownership check)', () => {
       const err = new ApiError(
         'rejectOrder failed: 403 - {"code":"ORDER_NOT_ASSIGNED","message":"You are not assigned to this order"}',
         403,
@@ -927,28 +927,28 @@ describe('outbox', () => {
       expect(isVersionConflict(err)).toBe(false);
     });
 
-    test('Error network biasa (status undefined, code undefined) → false', () => {
+    test('Error network biasa (status undefined, code undefined), false', () => {
       const err = new Error('Network request failed');
       expect(isVersionConflict(err)).toBe(false);
     });
 
-    test('Error dengan pesan "version mismatch" → true (backward compat string check)', () => {
-      // Backward compat — error lama dengan pesan generic masih ke-detect.
+    test('Error dengan pesan "version mismatch", true (backward compat string check)', () => {
+      // Backward compat, error lama dengan pesan generic masih ke-detect.
       const err = new Error('version mismatch detected');
       expect(isVersionConflict(err)).toBe(true);
     });
 
-    test('Error null/undefined → false', () => {
+    test('Error null/undefined, false', () => {
       expect(isVersionConflict(null)).toBe(false);
       expect(isVersionConflict(undefined)).toBe(false);
     });
 
     // Regression lock: clause regex `\b409\b` pernah ada di isVersionConflict
-    // tapi rentan false-positive — body response apapun yang memuat angka 409
+    // tapi rentan false-positive, body response apapun yang memuat angka 409
     // berdiri sendiri (mis. `{"amount":409}` dari endpoint yang tidak terkait)
     // akan lolos sebagai version conflict. Setelah clause dihapus,
     // ApiError 403 dengan body mengandung "409" HARUS return false.
-    test('ApiError 403 dengan body yang memuat angka 409 → false (lock: jangan parse pesan untuk 409)', () => {
+    test('ApiError 403 dengan body yang memuat angka 409, false (lock: jangan parse pesan untuk 409)', () => {
       const err = new ApiError(
         'cancelOrder failed: 403 - {"code":"ORDER_NOT_ASSIGNED","message":"You are not assigned to this order","debug":{"requestId":409}}',
         403,
@@ -960,11 +960,11 @@ describe('outbox', () => {
   });
 
   // Integration test: processCancel dengan client yang melempar ApiError 409
-  // (kasus riil dari Skenario A — driver cancel offline, server sudah
+  // (kasus riil dari Skenario A, driver cancel offline, server sudah
   // reassign/complete, mobile sync dapat 409). handleVersionConflict harus
   // terpanggil, pending_action terhapus, dan order lokal punya banner signal.
-  describe('processCancel + ApiError 409 → handleVersionConflict + banner signal', () => {
-    test('cancel conflict via ApiError 409 → tulis banner signal cancelled-by-server', async () => {
+  describe('processCancel + ApiError 409, handleVersionConflict + banner signal', () => {
+    test('cancel conflict via ApiError 409, tulis banner signal cancelled-by-server', async () => {
       // Setup order lokal
       const order = {
         id: 'order-cancel-apierror-test',
@@ -984,9 +984,9 @@ describe('outbox', () => {
       mockState.records.set('cancel-apierror-action', action);
       attachMethods(action);
 
-      // Mock cancelOrder → reject dengan ApiError 409 (real instance, sama
+      // Mock cancelOrder, reject dengan ApiError 409 (real instance, sama
       // dengan yang akan dilempar client.ts setelah fix). Pesan TIDAK
-      // memuat 'version' atau 'conflict' — sehingga isVersionConflict
+      // memuat 'version' atau 'conflict', sehingga isVersionConflict
       // hanya match via status === 409 atau code === 'VERSION_CONFLICT'.
       mockCancelOrder.mockRejectedValue(
         new ApiError(
@@ -1042,7 +1042,7 @@ describe('outbox', () => {
       mockState.records.set('reject-status-x-action', action);
       attachMethods(action);
 
-      // Server kembalikan status non-ASSIGNED — harus tertulis apa adanya.
+      // Server kembalikan status non-ASSIGNED, harus tertulis apa adanya.
       mockRejectOrder.mockResolvedValue({
         id: 'order-reject-status-x',
         status: 'X',
@@ -1092,7 +1092,7 @@ describe('outbox', () => {
 
     // Cancel gagal jaringan: baris order tidak ditulis, pending action tetap ada
     // (retry di next drain).
-    test('cancel network failure → baris order TIDAK ditulis, pending action tetap pending', async () => {
+    test('cancel network failure, baris order TIDAK ditulis, pending action tetap pending', async () => {
       const order = {
         id: 'order-cancel-netfail',
         _raw: { id: 'order-cancel-netfail', _status: 'synced', status: 'PREPARING', driver_id: 'driver-123' },
@@ -1123,7 +1123,7 @@ describe('outbox', () => {
 
     // Cancel 409: handleVersionConflict jalan, TIDAK menulis baris order
     // (jalur sukses write dari response tidak boleh terpanggil).
-    test('cancel 409 conflict → baris order TIDAK ditulis (handleVersionConflict, bukan success path)', async () => {
+    test('cancel 409 conflict, baris order TIDAK ditulis (handleVersionConflict, bukan success path)', async () => {
       const order = {
         id: 'order-cancel-409',
         _raw: { id: 'order-cancel-409', _status: 'synced', status: 'PREPARING', driver_id: 'driver-123' },
@@ -1146,7 +1146,7 @@ describe('outbox', () => {
       expect(results[0].status).toBe('conflict');
       // Pending action terhapus (handleVersionConflict delete)
       expect(mockState.records.has('cancel-409-action')).toBe(false);
-      // Baris order TIDAK ditulis oleh jalur sukses → status tetap PREPARING
+      // Baris order TIDAK ditulis oleh jalur sukses, status tetap PREPARING
       const unchangedOrder = mockState.orders.get('order-cancel-409')!;
       expect(unchangedOrder._raw.status).toBe('PREPARING');
       expect(unchangedOrder._raw.driver_id).toBe('driver-123');

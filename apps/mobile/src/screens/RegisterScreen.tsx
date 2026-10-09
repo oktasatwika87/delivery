@@ -4,8 +4,8 @@
  * Flow:
  *   1. User pilih role (Customer / Driver) via toggle pills
  *   2. User isi name, phone, password
- *   3. Submit → register() → saveToken() → panggil onRegisterSuccess()
- *   4. Gagal → tampilkan pesan error
+ *   3. Submit jadi register() jadi saveToken() jadi panggil onRegisterSuccess()
+ *   4. Gagal jadi tampilkan pesan error
  *
  * Navigation ke home dilakukan oleh parent (App.tsx) setelah callback.
  */

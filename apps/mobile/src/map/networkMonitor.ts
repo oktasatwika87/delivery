@@ -1,8 +1,8 @@
 /**
- * networkMonitor — abstraksi untuk deteksi online/offline.
+ * networkMonitor, abstraksi untuk deteksi online/offline.
  *
  * Default implementation ping ringan ke API_BASE_URL (HEAD request, 5s timeout).
- * Saat ping gagal → 'offline'. Saat ping sukses → 'online'.
+ * Saat ping gagal jadi 'offline'. Saat ping sukses jadi 'online'.
  *
  * Catatan:
  *   - Implementation ini coupling ke backend (API_BASE_URL), tapi semua
@@ -25,7 +25,7 @@ interface NetworkMonitor {
   getStatus(): NetworkStatus;
   /** Subscribe ke perubahan status. Return unsubscribe. */
   subscribe(listener: Listener): () => void;
-  /** Manual probe — update status dari ping sekarang. */
+  /** Manual probe, update status dari ping sekarang. */
   check(): Promise<NetworkStatus>;
   /** Start periodic check (default 30s). */
   start(intervalMs?: number): void;
@@ -58,12 +58,12 @@ class NetworkMonitorImpl implements NetworkMonitor {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), PING_TIMEOUT_MS);
     try {
-      // HEAD — body tidak dipakai, lebih ringan dari GET.
+      // HEAD, body tidak dipakai, lebih ringan dari GET.
       const res = await fetch(API_BASE, {
         method: 'HEAD',
         signal: controller.signal,
       });
-      // Backend up — anggap online. 4xx/5xx pun masih dianggap online
+      // Backend up, anggap online. 4xx/5xx pun masih dianggap online
       // (server respond) karena device punya koneksi.
       void res;
       this.setStatus('online');

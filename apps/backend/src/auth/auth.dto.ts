@@ -16,7 +16,7 @@ export class RegisterDto {
   @IsNotEmpty()
   name!: string;
 
-  /** Optional — default CUSTOMER saat register dari mobile. */
+  /** Optional, default CUSTOMER saat register dari mobile. */
   @IsOptional()
   @IsIn([UserRole.CUSTOMER, UserRole.DRIVER])
   role?: UserRole;

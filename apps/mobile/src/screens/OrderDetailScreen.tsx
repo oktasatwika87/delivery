@@ -26,7 +26,7 @@ import { enqueueCancel, enqueueCollectCod, drainPendingActions, isPendingActionS
 import { updateOrderStatus, getOrderById, ApiError } from '../sync/client';
 import { networkMonitor } from '../map/networkMonitor';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// Types
 
 interface ItemRow {
   name: string;
@@ -44,7 +44,7 @@ interface Props {
   database: Database;
 }
 
-// ─── Failed Payment Banner ────────────────────────────────────────────────────
+// Failed Payment Banner
 
 interface FailedPaymentBannerProps {
   payments: PaymentModel[];
@@ -69,7 +69,7 @@ function FailedPaymentBanner({ payments, onDismiss, isDismissed }: FailedPayment
   );
 }
 
-// ─── Order Conflict Banner ─────────────────────────────────────────────────────
+// Order Conflict Banner
 
 interface OrderConflictBannerProps {
   event: OrderConflictEvent | null;
@@ -110,7 +110,7 @@ function OrderConflictBanner({ event, onDismiss }: OrderConflictBannerProps): Re
   );
 }
 
-// ─── Last Conflict Banner (Skenario A) ─────────────────────────────────────
+// Last Conflict Banner (Skenario A)
 
 interface LastConflictBannerProps {
   order: OrderModel;
@@ -151,7 +151,7 @@ function LastConflictBanner({ order, isDismissed, onDismiss }: LastConflictBanne
   );
 }
 
-// ─── Status Badge ───────────────────────────────────────────────────────────
+// Status Badge
 
 const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
   PENDING: { bg: '#fef3c7', text: '#92400e' },
@@ -173,7 +173,7 @@ function StatusBadge({ status }: { status: string }): React.JSX.Element {
   );
 }
 
-// ─── Item Row ───────────────────────────────────────────────────────────────
+// Item Row
 
 function ItemRow({ item }: { item: ItemRow }): React.JSX.Element {
   return (
@@ -188,7 +188,7 @@ function ItemRow({ item }: { item: ItemRow }): React.JSX.Element {
   );
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// Helpers
 
 function formatDate(date: Date): string {
   const months = [
@@ -204,7 +204,7 @@ function formatDate(date: Date): string {
   return `${day} ${month} ${year}, pukul ${hours}:${minutes}`;
 }
 
-// ─── Base Component ─────────────────────────────────────────────────────────
+// Base Component
 
 function OrderDetailBase({ database }: Props): React.JSX.Element {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'OrderDetail'>>();
@@ -228,9 +228,9 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [conflictEvent, setConflictEvent] = useState<OrderConflictEvent | null>(null);
   // Skenario A: dismiss state untuk LastConflictBanner (persisted signal)
   const [lastConflictDismissed, setLastConflictDismissed] = useState(false);
-  // Observe pending_actions untuk banner reaktif — berubah/hilang sendiri
+  // Observe pending_actions untuk banner reaktif, berubah/hilang sendiri
   const [pendingActions, setPendingActions] = useState<PendingActionModel[]>([]);
-  // hasPending: sumber utama dari observe. observe bikin tombol reaktif —
+  // hasPending: sumber utama dari observe. observe bikin tombol reaktif,
   // nonaktif saat ada pending, aktif lagi saat pending dihapus dari outbox.
   const [hasPending, setHasPending] = useState(false);
   // Use ref for synchronous inflight guard (state updates are async, refs are sync)
@@ -303,8 +303,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
               );
               setHasCodPayment(hasCod);
               // hasCashPaymentNotFailed: turunan terpisah untuk gate tombol
-              // Selesai diantar (OUT_FOR_DELIVERY→DELIVERED). Hanya true kalau
-              // ada payment CASH yang belum FAILED — payment FAILED tetap
+              // Selesai diantar (OUT_FOR_DELIVERY jadi DELIVERED). Hanya true kalau
+              // ada payment CASH yang belum FAILED, payment FAILED tetap
               // dianggap "belum ada COD yang valid", jadi driver perlu retry
               // collect sebelum boleh selesaikan delivery.
               const hasCashNotFailed = records.some(
@@ -352,7 +352,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     };
   }, [orderId, order?.status]);
 
-  // Observe pending_actions untuk banner reaktif — berubah/hilang sendiri
+  // Observe pending_actions untuk banner reaktif, berubah/hilang sendiri
   useEffect(() => {
     if (!orderId) return;
     let subscription: { unsubscribe: () => void } | null = null;
@@ -383,7 +383,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     };
   }, [database, orderId]);
 
-  // isPendingStale: turunan pendingActions — banner stale reaktif dari observe.
+  // isPendingStale: turunan pendingActions, banner stale reaktif dari observe.
   const isPendingStale = pendingActions.some((a) => isPendingActionStale(a));
 
   /**
@@ -417,7 +417,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
 
   /**
    * Check if driver status button should be shown.
-   * Shows for PREPARING → OUT_FOR_DELIVERY or OUT_FOR_DELIVERY → DELIVERED
+   * Shows for PREPARING jadi OUT_FOR_DELIVERY or OUT_FOR_DELIVERY jadi DELIVERED
    * transitions, assigned to current driver, with no pending action.
    */
   const canUpdateStatus = (order: OrderModel): boolean => {
@@ -430,7 +430,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   };
 
   /**
-   * Handle driver status update (PREPARING→OUT_FOR_DELIVERY, OUT_FOR_DELIVERY→DELIVERED).
+   * Handle driver status update (PREPARING jadi OUT_FOR_DELIVERY, OUT_FOR_DELIVERY jadi DELIVERED).
    * Online-only, direct API call with OCC.
    */
   const handleUpdateStatus = async (orderToUpdate: OrderModel) => {
@@ -527,7 +527,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
                   );
                 });
               } catch {
-                // GET gagal — row tidak diubah
+                // GET gagal, row tidak diubah
               }
             } else if (err instanceof ApiError && err.status === 403) {
               Alert.alert(
@@ -572,16 +572,16 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
               }
               // Optimistic UI: show as collected immediately
               setHasCodPayment(true);
-              // hasPending datang dari observe pending_actions — jangan set manual di sini.
+              // hasPending datang dari observe pending_actions, jangan set manual di sini.
               // Pencegah double-tap pakai inflightCollectRef.
-              // Try to drain immediately in case we're already online — the
+              // Try to drain immediately in case we're already online, the
               // coordinator's own drain only fires on an offline->online
               // transition, so an action enqueued while already online would
               // otherwise sit pending until the next real disconnect/reconnect.
               // NOTE: outbox.ts is already statically imported above (for
               // enqueueCancel/enqueueCollectCod/hasPendingAction), so there's
               // no module-load-time-WatermelonDB concern here the way there
-              // is in coordinator.ts (which does NOT otherwise import outbox.ts) —
+              // is in coordinator.ts (which does NOT otherwise import outbox.ts),
               // a dynamic import isn't needed, and dynamic import() inside a
               // .tsx file isn't supported by this project's Jest config anyway
               // (throws without --experimental-vm-modules), so it would be
@@ -589,7 +589,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
               try {
                 await drainPendingActions(database);
               } catch (err) {
-                // If drain fails (offline), that's expected — action stays pending
+                // If drain fails (offline), that's expected, action stays pending
                 console.log('[OrderDetail] drain attempt while offline, action queued');
               }
             } catch (err) {
@@ -624,16 +624,16 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
                 Alert.alert('Gagal', result.error ?? 'Tidak bisa membatalkan order. Coba lagi.');
                 return;
               }
-              // hasPending datang dari observe pending_actions — jangan set manual di sini.
+              // hasPending datang dari observe pending_actions, jangan set manual di sini.
               // Pencegah double-tap pakai inflightCollectRef (shared dengan COD).
-              // Try to drain immediately in case we're already online — the
+              // Try to drain immediately in case we're already online, the
               // coordinator's own drain only fires on an offline->online
               // transition, so an action enqueued while already online would
               // otherwise sit pending until the next real disconnect/reconnect.
               // NOTE: outbox.ts is already statically imported above (for
               // enqueueCancel/enqueueCollectCod/hasPendingAction), so there's
               // no module-load-time-WatermelonDB concern here the way there
-              // is in coordinator.ts (which does NOT otherwise import outbox.ts) —
+              // is in coordinator.ts (which does NOT otherwise import outbox.ts),
               // a dynamic import isn't needed, and dynamic import() inside a
               // .tsx file isn't supported by this project's Jest config anyway
               // (throws without --experimental-vm-modules), so it would be
@@ -641,7 +641,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
               try {
                 await drainPendingActions(database);
               } catch (err) {
-                // If drain fails (offline), that's expected — action stays pending
+                // If drain fails (offline), that's expected, action stays pending
                 console.log('[OrderDetail] drain attempt while offline, action queued');
               }
             } catch (err) {
@@ -762,7 +762,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         </Text>
       </View>
 
-      {/* Chat Button — hanya untuk driver yang ditugaskan ke order ini */}
+      {/* Chat Button, hanya untuk driver yang ditugaskan ke order ini */}
       {order && currentUserId && order.driverId === currentUserId && (
         <TouchableOpacity
           style={styles.chatButton}
@@ -772,7 +772,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         </TouchableOpacity>
       )}
 
-      {/* Map Button — hanya untuk driver yang ditugaskan ke order ini */}
+      {/* Map Button, hanya untuk driver yang ditugaskan ke order ini */}
       {order && currentUserId && order.driverId === currentUserId && (
         <TouchableOpacity
           style={styles.mapButton}
@@ -782,7 +782,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         </TouchableOpacity>
       )}
 
-      {/* Cancel Button — only visible if driver can cancel this order and there's
+      {/* Cancel Button, only visible if driver can cancel this order and there's
           no cancel already queued (prevents re-tapping and enqueueing duplicate
           cancel actions while offline, same guard pattern as the COD button below) */}
       {order && currentUserId && canDriverCancel(order) && !hasPending && (
@@ -794,7 +794,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         </TouchableOpacity>
       )}
 
-      {/* COD Button — only visible if driver can collect COD and no COD payment exists */}
+      {/* COD Button, only visible if driver can collect COD and no COD payment exists */}
       {order && currentUserId && canCollectCod(order) && (
         <TouchableOpacity
           style={styles.codButton}
@@ -804,7 +804,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         </TouchableOpacity>
       )}
 
-      {/* Driver Status Button — PREPARING→OUT_FOR_DELIVERY or OUT_FOR_DELIVERY→DELIVERED.
+      {/* Driver Status Button, PREPARING jadi OUT_FOR_DELIVERY or OUT_FOR_DELIVERY jadi DELIVERED.
           PREPARING: always shown (no pending).
           OUT_FOR_DELIVERY: shown only if ada payment CASH yang BUKAN FAILED,
           DAN tidak ada pending action. */}
@@ -834,13 +834,13 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   );
 }
 
-// ─── Enhanced with Database ─────────────────────────────────────────────────
+// Enhanced with Database
 
 const enhance = withDatabase(OrderDetailBase);
 
 export { enhance as OrderDetailScreen };
 
-// ─── Styles ─────────────────────────────────────────────────────────────────
+// Styles
 
 const styles = StyleSheet.create({
   container: {

@@ -32,7 +32,7 @@ export async function saveCursor(next: string | null): Promise<void> {
 }
 
 /**
- * Synchronous accessor — dipakai di tempat yang sudah preload cursor.
+ * Synchronous accessor, dipakai di tempat yang sudah preload cursor.
  * Return null kalau belum di-init.
  */
 export function getCursorSync(): string | null {

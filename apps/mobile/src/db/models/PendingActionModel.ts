@@ -20,14 +20,14 @@ export type ActionType = 'reject' | 'cancel' | 'collect_cod';
 export type PendingActionStatus = 'pending' | 'syncing' | 'failed' | 'orphaned_needs_review';
 
 /**
- * Payload for cancel action — includes reason.
+ * Payload for cancel action, includes reason.
  */
 export interface CancelPayload {
   reason?: string;
 }
 
 /**
- * Payload for collect_cod action — includes amountCents.
+ * Payload for collect_cod action, includes amountCents.
  */
 export interface CollectCodPayload {
   amountCents: number;

@@ -7,7 +7,7 @@
  * Dipilih menyimpan token + userId dalam 1 object karena:
  *   - Mereka selalu bersamaan (token tanpa userId meaningless)
  *   - Kurangi jumlah keychain operation (1x save/login, 1x delete/logout)
- *   - Simpel — saat logout, hapus 1 object saja
+ *   - Simpel, saat logout, hapus 1 object saja
  *
  * Keychain service: 'delivery-app' (identifier untuk app ini)
  */

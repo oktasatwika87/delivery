@@ -2,7 +2,7 @@
  * Order Tracking Screen.
  *
  * Customer-side real-time order tracking. Lifecycle:
- *   1. Mount → fetch order state via GET /orders/:id (initial state)
+ *   1. Mount jadi fetch order state via GET /orders/:id (initial state)
  *   2. Subscribe OrdersSocketManager untuk event order:accepted/rejected/cancelled
  *   3. Display status, items, address, notes + connection banner
  *   4. Cleanup: unsubscribe semua listeners saat unmount
@@ -12,7 +12,7 @@
  * subscribe listener untuk orderId yang lagi dibuka.
  *
  * Status updates live (tanpa refresh manual):
- *   - order:accepted → status PREPARING + driverId + CLEARED cancelReason
+ *   - order:accepted jadi status PREPARING + driverId + CLEARED cancelReason
  *     (server clear dua-duanya, mobile mirror supaya fetch awal yang dapat
  *     cancelReason stale dari order yang melalui cron reassign sebelum
  *     accept juga langsung bersih)
@@ -20,7 +20,7 @@
  *     driverId di-reset
  *   - order:cancelled, status dari payload ('ASSIGNED' saat ini) + cancelReason
  *     dari driver
- *   - order:cod_collected → TIDAK mengubah status order (lihat catatan di
+ *   - order:cod_collected jadi TIDAK mengubah status order (lihat catatan di
  *     PaymentsService.collectCod()/OrdersGateway.emitOrderCodCollected,
  *     status order memang tidak berubah saat COD di-collect). Ini murni
  *     live receipt: tampilkan banner konfirmasi pembayaran, dismissable,
@@ -99,7 +99,7 @@ export function OrderTrackingScreen({
 
   const unsubRef = useRef<Array<() => void>>([]);
 
-  // ─── Initial fetch + socket subscriptions ──────────────────────────────
+  // Initial fetch + socket subscriptions
   useEffect(() => {
     let cancelled = false;
 
@@ -115,7 +115,7 @@ export function OrderTrackingScreen({
       } catch (err) {
         if (cancelled) return;
         if (err instanceof UnauthorizedError) {
-          // Session expired → trigger logout flow di App.tsx
+          // Session expired jadi trigger logout flow di App.tsx
           syncEvents.emit('auth-expired', { source: 'tracking-fetch' });
           return;
         }
@@ -184,7 +184,7 @@ export function OrderTrackingScreen({
       );
     });
 
-    // Live payment receipt only — order status/version TIDAK berubah di sini
+    // Live payment receipt only, order status/version TIDAK berubah di sini
     // (lihat doc comment di atas), jadi ini update state terpisah, bukan
     // patch ke `order`.
     const unsubCodCollected = ordersSocket.onOrderCodCollected((payload) => {
@@ -196,7 +196,7 @@ export function OrderTrackingScreen({
       });
     });
 
-    // order:status_updated — live status update dari driver yang pegang order.
+    // order:status_updated, live status update dari driver yang pegang order.
     // Payload dari OrderStatusUpdatedPayload (packages/shared).
     const unsubStatusUpdated = ordersSocket.onOrderStatusUpdated((payload) => {
       if (!matchesOrder(payload)) return;
@@ -234,7 +234,7 @@ export function OrderTrackingScreen({
     };
   }, [orderId, retryTrigger]);
 
-  // ─── Loading state ──────────────────────────────────────────────────────
+  // Loading state
   if (loading) {
     return (
       <View style={[styles.container, styles.center]}>
@@ -244,7 +244,7 @@ export function OrderTrackingScreen({
     );
   }
 
-  // ─── Error state ───────────────────────────────────────────────────────
+  // Error state
   if (error) {
     return (
       <View style={[styles.container, styles.center]}>
@@ -264,7 +264,7 @@ export function OrderTrackingScreen({
   }
 
   if (!order) {
-    // Defensive — should never reach because loading/error branches cover all
+    // Defensive, should never reach because loading/error branches cover all
     return (
       <View style={[styles.container, styles.center]}>
         <Text>Order tidak ditemukan</Text>
@@ -273,7 +273,7 @@ export function OrderTrackingScreen({
     );
   }
 
-  // ─── Main render ───────────────────────────────────────────────────────
+  // Main render
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
       {!connected && (

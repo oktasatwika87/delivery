@@ -1,19 +1,19 @@
 /**
- * routeSnapshot — service untuk cache rute terakhir & fallback offline.
+ * routeSnapshot, service untuk cache rute terakhir & fallback offline.
  *
  * Tanggung jawab:
  *   1. Simpan snapshot baru ke route_snapshots setelah getRoute() sukses.
  *   2. Query snapshot yang cocok dengan query saat ini (origin & dest
  *      masing-masing dalam radius 300m, haversine).
- *   3. Enforce retention LRU max 20 entry — cleanup jalankan sekali saat
+ *   3. Enforce retention LRU max 20 entry, cleanup jalankan sekali saat
  *      app boot (dipanggil dari App.tsx via runRetentionCleanup).
  *
  * Catatan desain:
- *   - Radius 300m — cukup dekat untuk pickup point yang geser sedikit,
+ *   - Radius 300m, cukup dekat untuk pickup point yang geser sedikit,
  *     cukup longgar untuk false-match dihindari.
- *   - LRU 20 entry — independen dari pasangan origin-destination, snapshot
+ *   - LRU 20 entry, independen dari pasangan origin-destination, snapshot
  *     paling lama di-evict ketika insert baru kelebihan.
- *   - Cleanup TIDAK pakai interval — sekali per boot, lewat App.tsx,
+ *   - Cleanup TIDAK pakai interval, sekali per boot, lewat App.tsx,
  *     supaya hemat baterai (lihat keputusan #8).
  */
 
@@ -23,13 +23,13 @@ import type { Database } from '@nozbe/watermelondb';
 import { RouteSnapshotModel } from '../db/models/RouteSnapshotModel';
 import type { LngLat, Route } from './routing';
 
-/** Radius matching — origin & dest masing-masing harus berada dalam 300m. */
+/** Radius matching, origin & dest masing-masing harus berada dalam 300m. */
 export const MATCH_RADIUS_METERS = 300;
 
-/** LRU cap — lihat keputusan #7. */
+/** LRU cap, lihat keputusan #7. */
 export const MAX_SNAPSHOTS = 20;
 
-/** Earth radius dalam meter — dipakai untuk haversine. */
+/** Earth radius dalam meter, dipakai untuk haversine. */
 const EARTH_RADIUS_M = 6_371_000;
 
 /**
@@ -61,7 +61,7 @@ export function withinRadius(a: LngLat, b: LngLat, radiusMeters: number): boolea
 }
 
 /**
- * Cek apakah snapshot match dengan query — baik origin maupun dest
+ * Cek apakah snapshot match dengan query, baik origin maupun dest
  * masing-masing harus berada dalam MATCH_RADIUS_METERS.
  */
 export function snapshotMatches(
@@ -77,7 +77,7 @@ export function snapshotMatches(
   );
 }
 
-// ─── Service ────────────────────────────────────────────────────────────────
+// Service
 
 export interface RouteSnapshotService {
   insertFromRoute(db: Database, route: Route): Promise<RouteSnapshotModel>;
@@ -113,7 +113,7 @@ class RouteSnapshotServiceImpl implements RouteSnapshotService {
     });
 
     if (!created) throw new Error('Failed to create RouteSnapshotModel');
-    // Cleanup di background — caller tidak perlu tunggu.
+    // Cleanup di background, caller tidak perlu tunggu.
     this.runRetentionCleanup(db).catch((err) =>
       console.warn('[routeSnapshot] post-insert cleanup failed:', err),
     );
@@ -129,7 +129,7 @@ class RouteSnapshotServiceImpl implements RouteSnapshotService {
     query: { origin: LngLat; destination: LngLat },
   ): Promise<RouteSnapshotModel | null> {
     const collection = db.get<RouteSnapshotModel>('route_snapshots');
-    // Pull semua snapshot — dataset kecil (max 20), index scan tidak perlu.
+    // Pull semua snapshot, dataset kecil (max 20), index scan tidak perlu.
     // Sort by fetched_at desc supaya yang paling baru di-return kalau ada
     // beberapa match.
     const rows = await collection
@@ -145,7 +145,7 @@ class RouteSnapshotServiceImpl implements RouteSnapshotService {
   }
 
   /**
-   * Enforce retention LRU — hapus entry paling lama sampai count <= MAX_SNAPSHOTS.
+   * Enforce retention LRU, hapus entry paling lama sampai count <= MAX_SNAPSHOTS.
    * Dipanggil sekali saat app boot (lihat App.tsx useEffect), supaya hemat
    * interval & baterai (keputusan #8).
    *

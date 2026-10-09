@@ -1,5 +1,5 @@
 /**
- * Stub minimal untuk react-native — dipakai oleh component test.
+ * Stub minimal untuk react-native, dipakai oleh component test.
  *
  * Kenapa perlu stub ini:
  *   - `react-native` asli di-require oleh MapScreen.tsx untuk StyleSheet,
@@ -7,7 +7,7 @@
  *   - `react-native` asli Flow-typed dan komplek; di jest runtime, dia
  *     gagal resolve platform-specific files (../Utilities/Platform.android.js
  *     etc.) karena moduleFileExtensions default tidak include .android.js/.ios.js.
- *   - Untuk component test, kita tidak butuh implementasi native — cukup
+ *   - Untuk component test, kita tidak butuh implementasi native, cukup
  *     stub yang:
  *       1) me-return komponen yang dirender ke JSON tree (untuk query RNTL).
  *       2) StyleSheet.create() jadi pass-through.
@@ -30,14 +30,14 @@ declare const module: { exports: unknown };
 
 const React = require('react');
 
-// ─── Helpers ────────────────────────────────────────────────────────
+// Helpers
 function makeComponent(displayName: string) {
   const Component = (props: Record<string, unknown>) => React.createElement(displayName, props, props.children);
   Component.displayName = displayName;
   return Component;
 }
 
-// ─── StyleSheet ─────────────────────────────────────────────────────
+// StyleSheet
 const StyleSheet = {
   create: (styles: Record<string, unknown>) => styles,
   flatten: (style: unknown) => {
@@ -49,7 +49,7 @@ const StyleSheet = {
   absoluteFill: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
 };
 
-// ─── Components ─────────────────────────────────────────────────────
+// Components
 const View = makeComponent('View');
 const Text = makeComponent('Text');
 const TextInput = makeComponent('TextInput');
@@ -58,12 +58,12 @@ const Switch = makeComponent('Switch');
 const ScrollView = makeComponent('ScrollView');
 const Modal = makeComponent('Modal');
 const TouchableOpacity = makeComponent('TouchableOpacity');
-// SectionList stub — makeComponent() alone only renders props.children, but
+// SectionList stub, makeComponent() alone only renders props.children, but
 // the real SectionList takes no children: it renders `sections` itself via
 // renderItem/renderSectionHeader. A dumb passthrough stub silently renders
 // NOTHING for every section/item, which made every OrdersScreen.spec.tsx
 // assertion on rendered card/badge text pass or fail vacuously regardless of
-// actual component state (root cause of the badge test failures — see
+// actual component state (root cause of the badge test failures, see
 // OrdersScreen.spec.tsx "pending action badge" describe block). This stub
 // actually walks sections/data and calls renderItem/renderSectionHeader,
 // same as the real component would, so RNTL queries can find the output.
@@ -204,14 +204,14 @@ class Linking {
   }
 }
 
-// ─── Platform (cukup untuk unit test) ────────────────────────────────
+// Platform (cukup untuk unit test)
 const Platform = {
   OS: 'android',
   select: (obj: Record<string, unknown>) => obj.android || obj.default,
   Version: 35,
 };
 
-// ─── PermissionsAndroid ───────────────────────────────────────────────
+// PermissionsAndroid
 const PermissionsAndroid = {
   PERMISSIONS: {
     ACCESS_FINE_LOCATION: 'android.permission.ACCESS_FINE_LOCATION',
@@ -225,7 +225,7 @@ const PermissionsAndroid = {
   request: jest.fn().mockResolvedValue('granted'),
 };
 
-// ─── Re-exports minimal ─────────────────────────────────────────────
+// Re-exports minimal
 // Untuk hal yang tidak dipakai component ini tapi mungkin di-require
 // transitively, kita re-export mock undefined (akan throw kalau dipakai).
 const AppRegistry = { registerComponent: () => {} };

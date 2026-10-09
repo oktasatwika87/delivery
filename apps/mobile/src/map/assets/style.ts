@@ -1,14 +1,14 @@
 /**
- * Map style constants — consistent tile source across download and view.
+ * Map style constants, consistent tile source across download and view.
  *
  * Self-hosted OSM tiles via tileserver-gl (VPS):
  *   - Style: ${TILE_BASE_URL}/styles/bali/style.json
  *   - Tiles: ${TILE_BASE_URL}/data/bali/{z}/{x}/{y}.pbf
  *
  * TILE_STYLE_URL is used by:
- *   1. MapScreen (online path) — MapView.mapStyle references TILE_STYLE,
+ *   1. MapScreen (online path), MapView.mapStyle references TILE_STYLE,
  *      which points at TILE_STYLE_URL (tileserver-gl style.json).
- *   2. offlineStorage.downloadRegion (offline path) — OfflineManager.createPack
+ *   2. offlineStorage.downloadRegion (offline path), OfflineManager.createPack
  *      uses OFFLINE_STYLE_URL to pre-cache tiles from tileserver-gl.
  *
  * Both paths read the same tile source (tileserver-gl serves the .mbtiles

@@ -1,9 +1,9 @@
 /**
- * Unit tests untuk socket.ts — ChatSocketManager
+ * Unit tests untuk socket.ts, ChatSocketManager
  *
  * Approach:
  * - SATU mockSocket instance, state di-reset tiap beforeEach
- * - connect() itu ASYNC (await getCurrentToken) — perlu flush microtask queue
+ * - connect() itu ASYNC (await getCurrentToken), perlu flush microtask queue
  * - afterEach: cleanup dengan flush promise queue
  *
  * KNOWN ISSUES:
@@ -14,7 +14,7 @@
 var mockHandlers: Record<string, Set<Function>> = {};
 var isConnected = false;
 
-// Track io() call arguments — array of [url, options] pairs per call
+// Track io() call arguments, array of [url, options] pairs per call
 var ioCallHistory: Array<{ url: string; options: any }> = [];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -89,13 +89,13 @@ describe('ChatSocketManager', function() {
   var getCurrentTokenMock: any;
 
   beforeEach(function() {
-    // 1. Reset module cache — ini penting karena chatSocket adalah singleton
+    // 1. Reset module cache, ini penting karena chatSocket adalah singleton
     //    (export const chatSocket = new ChatSocketManager()). Tanpa resetModules,
     //    require('./socket') berikutnya return module cached dan singleton state
     //    (hasEverConnected, connectPromise, dll.) ikut terbawa antar test.
     jest.resetModules();
 
-    // 2. Reset mock state SEBELUM require — mockHandlers, isConnected, dan ioCallHistory
+    // 2. Reset mock state SEBELUM require, mockHandlers, isConnected, dan ioCallHistory
     //    adalah variable module-level, bukan export, jadi tidak ter-reset oleh resetModules.
     isConnected = false;
     ioCallHistory = [];
@@ -179,7 +179,7 @@ describe('ChatSocketManager', function() {
       trigger('connect');
       await promise1;
 
-      // io() HARUS cuma dipanggil sekali — bukan 3x
+      // io() HARUS cuma dipanggil sekali, bukan 3x
       expect(ioMock).toHaveBeenCalledTimes(1);
     });
 
@@ -194,7 +194,7 @@ describe('ChatSocketManager', function() {
 
       expect(ioMock).toHaveBeenCalledTimes(1);
 
-      // Sekarang sudah connected — connect() lagi harus resolve langsung
+      // Sekarang sudah connected, connect() lagi harus resolve langsung
       // tanpa bikin socket baru
       var promise2 = chatSocket.connect();
       await expect(promise2).resolves.toBeUndefined();
@@ -245,18 +245,18 @@ describe('ChatSocketManager', function() {
     });
 
     test('REJECT kalau getCurrentToken return null/undefined (no token)', async function() {
-      // Override default token behavior untuk test ini saja — getCurrentTokenMock
+      // Override default token behavior untuk test ini saja, getCurrentTokenMock
       // di-reassign dari require() di beforeEach, jadi bisa di-override per test.
       getCurrentTokenMock.mockResolvedValueOnce(null);
 
       await expect(chatSocket.connect()).rejects.toThrow('No auth token available');
-      // io() TIDAK boleh dipanggil kalau token missing — socket tidak dibuat
+      // io() TIDAK boleh dipanggil kalau token missing, socket tidak dibuat
       var ioMock = require('socket.io-client').io;
       expect(ioMock).not.toHaveBeenCalled();
     });
 
     test('disconnect() TIDAK throw walaupun dipanggil tanpa connect() sebelumnya', function() {
-      // disconnect() harus idempotent / safe — boleh dipanggil kapan saja.
+      // disconnect() harus idempotent / safe, boleh dipanggil kapan saja.
       // Pemanggil (mis. logout flow) tidak perlu cek state dulu.
       expect(function() { chatSocket.disconnect(); }).not.toThrow();
     });
@@ -367,7 +367,7 @@ describe('ChatSocketManager', function() {
       // Disconnect
       chatSocket.disconnect();
 
-      // Second: connect again — should use different config
+      // Second: connect again, should use different config
       var promise2 = chatSocket.connect();
       await Promise.resolve();
       await Promise.resolve();
@@ -485,10 +485,10 @@ describe('ChatSocketManager', function() {
   });
 });
 
-// File ini script (no top-level imports/exports) secara default → TS2393
+// File ini script (no top-level imports/exports) secara default ke TS2393
 // duplicate function implementation bakal fire waktu ada file script
 // lain di project yang declare function dengan nama sama (e.g.
 // ordersSocket.spec.ts juga punya `function trigger`). export {} di
-// bawah ini bikin file jadi module → function jadi module-scoped, gak
+// bawah ini bikin file jadi module ke function jadi module-scoped, gak
 // collision lagi. Test body gak berubah.
 export {};

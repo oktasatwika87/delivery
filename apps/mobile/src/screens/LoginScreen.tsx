@@ -3,11 +3,11 @@
  *
  * Flow:
  *   1. User isi phone + password
- *   2. Submit → login() → saveToken() → panggil onLoginSuccess()
- *   3. Gagal → tampilkan pesan error
+ *   2. Submit jadi login() jadi saveToken() jadi panggil onLoginSuccess()
+ *   3. Gagal jadi tampilkan pesan error
  *
  * Catatan: navigation ke Orders TIDAK dilakukan di sini.
- * Biarkan App.tsx yang handle — ia akan re-render Navigator begitu
+ * Biarkan App.tsx yang handle, ia akan re-render Navigator begitu
  * authenticated=true dan otomatis menampilkan Orders.
  */
 
@@ -55,7 +55,7 @@ export function LoginScreen({ onLoginSuccess, logoutReason, onNavigateToRegister
     try {
       const { token, user } = await login(phone.trim(), password);
       await saveToken(token, user.id);
-      // Tidak navigate langsung — cukup beritahu App.tsx via callback.
+      // Tidak navigate langsung, cukup beritahu App.tsx via callback.
       // App.tsx akan re-render Navigator dan otomatis tampilkan Orders.
       onLoginSuccess();
     } catch (err) {

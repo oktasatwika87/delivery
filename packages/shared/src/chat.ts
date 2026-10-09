@@ -14,7 +14,7 @@ export const ChatMessageStatus = {
   DELIVERED: 'DELIVERED',
   /** Receiver sudah baca. */
   READ: 'READ',
-  /** Gagal kirim — akan di-retry oleh sync layer. */
+  /** Gagal kirim, akan di-retry oleh sync layer. */
   FAILED: 'FAILED',
 } as const;
 

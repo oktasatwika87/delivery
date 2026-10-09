@@ -10,8 +10,8 @@ const SYSTEM_DRIVER_ID = 'SYSTEM';
 /**
  * Timeout reassignment service.
  *
- * Cron job ini mendeteksi order yang "macet" — driver tidak ada kontak ke server
- * setelah durasi tertentu — dan otomatis melepas order tersebut kembali ke pool
+ * Cron job ini mendeteksi order yang "macet", driver tidak ada kontak ke server
+ * setelah durasi tertentu, dan otomatis melepas order tersebut kembali ke pool
  * supaya bisa di-assign driver lain.
  *
  * Timeout diukur dari `User.lastSeenAt` (terakhir kali device driver sync ke server),
@@ -19,12 +19,12 @@ const SYSTEM_DRIVER_ID = 'SYSTEM';
  *
  * Ini memastikan:
  * - ASSIGNED/PREPARING (belum bawa barang, belum ada kontak fisik ke customer):
- *   timeout 15 menit tanpa kontak server → reassign
+ *   timeout 15 menit tanpa kontak server jadi reassign
  * - OUT_FOR_DELIVERY (driver udah bawa barang, COD bisa collect kapan saja):
  *   timeout lebih lama (50 menit) karena driver mungkin di area sinyal buruk
  *
  * Pattern OCC (Optimistic Concurrency Control): atomic update dengan composite
- * key `{id, version}` — kalau version berubah antara check dan update, skip silently.
+ * key `{id, version}`, kalau version berubah antara check dan update, skip silently.
  * Ini aman untuk multi-instance deployment dan race condition dengan acceptOrder().
  *
  * Release path didelegasikan ke OrdersService.releaseToPool, satu helper
@@ -59,7 +59,7 @@ export class ReassignmentService {
    *
    * Pakai OCC via OrdersService.releaseToPool: update WHERE id=X AND version=Y.
    * Kalau version berubah (acceptOrder/modifikasi lain), helper melemparkan
-   * ConflictException(VERSION_CONFLICT) → kita tangkap dan return false
+   * ConflictException(VERSION_CONFLICT) jadi kita tangkap dan return false
    * (skip silently, normal untuk multi-instance).
    *
    * @returns true kalau reassign berhasil, false kalau skipped/conflict
@@ -77,7 +77,7 @@ export class ReassignmentService {
       });
 
       this.logger.log(
-        `[reassign] Order ${orderId} timeout → reassigned to pool (v${expectedVersion}→${updated.version})`,
+        `[reassign] Order ${orderId} timeout jadi reassigned to pool (v${expectedVersion} jadi ${updated.version})`,
       );
 
       // releaseToPool sudah broadcast ke pool (emitOrderAvailable),
@@ -88,15 +88,15 @@ export class ReassignmentService {
       if (err instanceof ConflictException) {
         const response = err.getResponse() as { code?: string };
         if (response?.code === 'VERSION_CONFLICT') {
-          // OCC conflict — order sudah dimodifikasi (acceptOrder atau cancelOrder),
+          // OCC conflict, order sudah dimodifikasi (acceptOrder atau cancelOrder),
           // skip silently. Ini normal di multi-instance atau race condition.
           this.logger.debug(
-            `[reassign] Order ${orderId} skipped — version changed (OCC conflict)`,
+            `[reassign] Order ${orderId} skipped, version changed (OCC conflict)`,
           );
           return false;
         }
       }
-      // Error lain — log dan rethrow
+      // Error lain, log dan rethrow
       this.logger.error(`[reassign] Order ${orderId} error:`, err);
       throw err;
     }
@@ -153,7 +153,7 @@ export class ReassignmentService {
           : preparingThreshold;
 
       // Kalau driver belum pernah sync (lastSeenAt = null) ATAU
-      // lastSeenAt udah lebih lama dari threshold → reassign
+      // lastSeenAt udah lebih lama dari threshold jadi reassign
       const driverLastSeen = driver.lastSeenAt;
       const isTimedOut: boolean =
         driverLastSeen === null || driverLastSeen < threshold;

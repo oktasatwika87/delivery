@@ -3,20 +3,20 @@ import { schemaMigrations, createTable, addColumns } from '@nozbe/watermelondb/S
 /**
  * WatermelonDB schema migrations.
  *
- * v1 -> v2: Buat tabel users, tambah idempotency_key ke payments
- * v2 -> v3: Tambah created_at & updated_at ke semua tabel
- * v3 -> v4: Tambah tabel route_snapshots (offline-first route cache)
- * v4 -> v5: Tambah failed_sync_attempts ke orders/payments/chat_messages
+ * v1 ke v2: Buat tabel users, tambah idempotency_key ke payments
+ * v2 ke v3: Tambah created_at & updated_at ke semua tabel
+ * v3 ke v4: Tambah tabel route_snapshots (offline-first route cache)
+ * v4 ke v5: Tambah failed_sync_attempts ke orders/payments/chat_messages
  *           (cap retry agar record yang gagal sync tidak stuck retry forever)
- * v5 -> v6: Tambah cancelled_by & cancel_reason ke orders (cancel offline)
- * v6 -> v7: Tambah tabel pending_actions (offline-first driver actions outbox)
- * v7 -> v8: Tambah last_conflict_reason & last_conflict_at ke orders
- *           (Skenario A — persisted banner signal untuk cancel-offline
+ * v5 ke v6: Tambah cancelled_by & cancel_reason ke orders (cancel offline)
+ * v6 ke v7: Tambah tabel pending_actions (offline-first driver actions outbox)
+ * v7 ke v8: Tambah last_conflict_reason & last_conflict_at ke orders
+ *           (Skenario A, persisted banner signal untuk cancel-offline
  *           conflict, survive app restart)
  */
 export const watermelonMigrations = schemaMigrations({
   migrations: [
-    // v1 -> v2
+    // v1 ke v2
     {
       toVersion: 2,
       steps: [
@@ -35,7 +35,7 @@ export const watermelonMigrations = schemaMigrations({
         }),
       ],
     },
-    // v2 -> v3: created_at & updated_at ke semua tabel
+    // v2 ke v3: created_at & updated_at ke semua tabel
     {
       toVersion: 3,
       steps: [
@@ -69,8 +69,8 @@ export const watermelonMigrations = schemaMigrations({
         }),
       ],
     },
-    // v3 -> v4: tambah tabel route_snapshots (cache rute terakhir).
-    // LRU max 20 entry — lihat src/map/routeSnapshot.ts.
+    // v3 ke v4: tambah tabel route_snapshots (cache rute terakhir).
+    // LRU max 20 entry, lihat src/map/routeSnapshot.ts.
     {
       toVersion: 4,
       steps: [
@@ -89,7 +89,7 @@ export const watermelonMigrations = schemaMigrations({
         }),
       ],
     },
-    // v4 -> v5: failed_sync_attempts — cap retry pada record yang gagal
+    // v4 ke v5: failed_sync_attempts, cap retry pada record yang gagal
     // sync. Tanpa kolom ini, record yang dikirim sebagai create tapi
     // diterima sebagai rejected (e.g. server validation error) akan
     // stuck retry selamanya di sync coordinator.
@@ -110,7 +110,7 @@ export const watermelonMigrations = schemaMigrations({
         }),
       ],
     },
-    // v5 -> v6: cancelled_by & cancel_reason — track siapa yang cancel
+    // v5 ke v6: cancelled_by & cancel_reason, track siapa yang cancel
     // dan alasannya. Dipakai untuk offline cancel order flow.
     {
       toVersion: 6,
@@ -124,7 +124,7 @@ export const watermelonMigrations = schemaMigrations({
         }),
       ],
     },
-    // v6 -> v7: pending_actions — outbox untuk offline-first driver actions
+    // v6 ke v7: pending_actions, outbox untuk offline-first driver actions
     // (reject, cancel, collect_cod). Diproses FIFO saat device online.
     {
       toVersion: 7,
@@ -144,7 +144,7 @@ export const watermelonMigrations = schemaMigrations({
         }),
       ],
     },
-    // v7 -> v8: last_conflict_reason & last_conflict_at — persisted UI signal
+    // v7 ke v8: last_conflict_reason & last_conflict_at, persisted UI signal
     // untuk Skenario A (cancel-offline-vs-server-changed). Saat resolveAcks()
     // dapat 'conflict' ack dari server untuk record dengan pre-overwrite
     // status='CANCELLED', tulis reason + timestamp ke 2 field ini. BannerC

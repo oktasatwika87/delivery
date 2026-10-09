@@ -3,7 +3,7 @@
  *
  * Test focus:
  * 1. Terima orderId dan lookup order dengan benar
- * 2. Order tidak ketemu / coordinates kosong → error tanpa crash
+ * 2. Order tidak ketemu / coordinates kosong jadi error tanpa crash
  * 3. getRoute() dipanggil dengan origin/destination yang benar (urutan lat/lng)
  * 4. Loading state, isFromCache indicator, error state
  * 5. Navigasi OrderDetailScreen kirim orderId dengan benar
@@ -27,7 +27,7 @@ import type { RouteResult } from '../map/routeService';
 import type { RouteRequest } from '../map/routing';
 import { MATCH_RADIUS_METERS, haversineDistance } from '../map/routeSnapshot';
 
-// ─── Mock setup ───────────────────────────────────────────────────────────────
+// Mock setup
 
 // Tipe untuk mocks yang diekspor lewat jest.requireMock.
 type MapLibreMockExports = {
@@ -57,7 +57,7 @@ jest.mock('@react-navigation/native', () => ({
   }),
 }));
 
-// Mock MapLibreGL — Camera adalah forwardRef agar ref imperatif bisa di-spy.
+// Mock MapLibreGL, Camera adalah forwardRef agar ref imperatif bisa di-spy.
 // Props yang masuk ke Camera dicatat lewat __cameraProps (jest.fn) supaya
 // inspeksi props di tes tidak bergantung pada internal jest.mocked().
 jest.mock('@maplibre/maplibre-react-native', () => {
@@ -141,7 +141,7 @@ jest.mock('../map/offlineStorage', () => ({
 
 jest.mock('../db/models/OrderModel', () => ({}));
 
-// ─── Test helpers ──────────────────────────────────────────────────────────────
+// Test helpers
 
 function createMockRouteResult(geometry: Array<[number, number]>, isFromCache = false): RouteResult {
   return {
@@ -154,12 +154,12 @@ function createMockRouteResult(geometry: Array<[number, number]>, isFromCache = 
   };
 }
 
-/** Offset meter ke utara — latitude geser sekian derajat. */
+/** Offset meter ke utara, latitude geser sekian derajat. */
 function metersNorth(latitude: number, meters: number): number {
   return latitude + meters / 111_000;
 }
 
-/** Offset meter ke timur pada latitude tertentu — longitude geser sekian derajat. */
+/** Offset meter ke timur pada latitude tertentu, longitude geser sekian derajat. */
 function metersEast(longitude: number, latitude: number, meters: number): number {
   const metersPerDegLng = 111_000 * Math.cos((latitude * Math.PI) / 180);
   return longitude + meters / metersPerDegLng;
@@ -178,7 +178,7 @@ function renderMapScreen() {
   );
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// Tests
 
 describe('MapScreen', () => {
   beforeEach(() => {
@@ -423,7 +423,7 @@ describe('MapScreen', () => {
         addressJson: { coordinates: [106.85, -6.2] },
       });
 
-      const mockGetRoute = jest.fn().mockRejectedValue(new Error('Network error — cek koneksi internet.'));
+      const mockGetRoute = jest.fn().mockRejectedValue(new Error('Network error, cek koneksi internet.'));
       (RouteService as unknown as jest.Mock).mockImplementation(() => ({
         getRoute: mockGetRoute,
       }));
@@ -476,8 +476,8 @@ describe('MapScreen', () => {
     });
 
     test('pusat cadangan Denpasar saat currentLocation null dan MapView tampil', async () => {
-      // default mock: locationService.getLastKnown return null → currentLocation null
-      // default mock: offlineStorage.listPacks return [{ state: 'complete' }] → hasOfflineRegion true
+      // default mock: locationService.getLastKnown return null, currentLocation null
+      // default mock: offlineStorage.listPacks return [{ state: 'complete' }], hasOfflineRegion true
       render(
         <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
       );
@@ -498,7 +498,7 @@ describe('MapScreen', () => {
     });
   });
 
-  // ─── Tes baru ──────────────────────────────────────────────────────────────
+  // Tes baru
 
   /**
    * Helper: pasang GPS subscriber yang mengembalikan callback supaya bisa
@@ -742,13 +742,13 @@ describe('MapScreen', () => {
         <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
       );
 
-      // Offline + GPS pertama → getRoute pertama (snapshot path).
+      // Offline + GPS pertama, getRoute pertama (snapshot path).
       act(() => {
         gps.emit(-6.175, 106.8);
       });
       await waitFor(() => expect(mockGetRoute).toHaveBeenCalledTimes(1));
 
-      // Pulih ke online — handler clear lastRouteOriginRef.
+      // Pulih ke online, handler clear lastRouteOriginRef.
       act(() => {
         networkCallback?.('online');
       });

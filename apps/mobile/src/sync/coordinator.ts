@@ -73,27 +73,27 @@ export class SyncCoordinator implements Coordinator {
   private db: Database | null = null;
   private stopped = false;
   private syncInterval: ReturnType<typeof setInterval> | null = null;
-  /** Guards against concurrent start() calls — set BEFORE any await, reset in finally. */
+  /** Guards against concurrent start() calls, set BEFORE any await, reset in finally. */
   private isStarting = false;
-  /** Unsubscribe from networkMonitor — stored so we can clean up on stop(). */
+  /** Unsubscribe from networkMonitor, stored so we can clean up on stop(). */
   private networkUnsubscribe: (() => void) | null = null;
   /** Track last known network status to detect reconnect events. */
   private lastNetworkStatus: 'online' | 'offline' | 'unknown' = 'unknown';
 
   async start(db: Database): Promise<void> {
-    // Always update db reference FIRST — even if this call gets skipped due to
+    // Always update db reference FIRST, even if this call gets skipped due to
     // concurrent start(), the db instance stays fresh. Placed BEFORE the
     // isStarting guard so skipped calls still update this.db.
     this.db = db;
 
-    // Reset stopped flag — allows restart after stop() was previously called
+    // Reset stopped flag, allows restart after stop() was previously called
     this.stopped = false;
 
     // Guard against concurrent start() calls.
     // Set isStarting BEFORE any await so call #2 cannot slip past this guard
     // while call #1 is still inside its await this.pull(null).
     if (this.isStarting) {
-      console.log('[SyncCoordinator] start() called — another start() already in progress, skipping');
+      console.log('[SyncCoordinator] start() called, another start() already in progress, skipping');
       return;
     }
     this.isStarting = true;
@@ -101,14 +101,14 @@ export class SyncCoordinator implements Coordinator {
     // Skip re-initialization if periodic sync is already running.
     // db reference was already updated above.
     if (this.syncInterval) {
-      console.log('[SyncCoordinator] start() called — already running, skipping duplicate interval');
+      console.log('[SyncCoordinator] start() called, already running, skipping duplicate interval');
       this.isStarting = false;
       return;
     }
 
     console.log('[SyncCoordinator] start() called');
 
-    // Subscribe to network changes — drain pending actions on reconnect
+    // Subscribe to network changes, drain pending actions on reconnect
     this.setupNetworkListener();
 
     // First sync: full pull (cursor null)
@@ -149,7 +149,7 @@ export class SyncCoordinator implements Coordinator {
 
       // Detect reconnect: was offline, now online
       if (this.lastNetworkStatus === 'offline' && status === 'online') {
-        console.log('[SyncCoordinator] Reconnected — draining pending actions...');
+        console.log('[SyncCoordinator] Reconnected, draining pending actions...');
         try {
           // Dynamic import to avoid circular dependency with WatermelonDB
           const { drainPendingActions } = await import('./outbox');
@@ -210,7 +210,7 @@ export class SyncCoordinator implements Coordinator {
     try {
       resp = await pushBatch(payload);
     } catch (err) {
-      // Network gagal atau backend reject request — row lokal tetap dirty,
+      // Network gagal atau backend reject request, row lokal tetap dirty,
       // akan di-retry di sync cycle berikutnya. Log warning.
       console.warn('[flushNow] pushBatch failed, will retry next sync:', err);
 
@@ -225,7 +225,7 @@ export class SyncCoordinator implements Coordinator {
     // Check if push timed out (empty acks means no server response)
     if (resp.acks.length === 0 && payload.records.length > 0) {
       // Timeout: increment failedSyncAttempts for all attempted records
-      console.warn('[flushNow] pushBatch returned empty acks — treating as timeout');
+      console.warn('[flushNow] pushBatch returned empty acks, treating as timeout');
       await this.markRecordsFailed(payload.records, this.db);
     }
 
@@ -265,11 +265,11 @@ export class SyncCoordinator implements Coordinator {
           if ((record.entityType === 'chat_message' || record.entityType === 'payment') && nextAttempts >= MAX_SYNC_ATTEMPTS) {
             (r as any).status = 'FAILED';
             console.error(
-              `[markRecordsFailed] Record timed out after ${MAX_SYNC_ATTEMPTS} attempts — ${record.entityType} id=${record.id} marked FAILED.`,
+              `[markRecordsFailed] Record timed out after ${MAX_SYNC_ATTEMPTS} attempts, ${record.entityType} id=${record.id} marked FAILED.`,
             );
           } else if (nextAttempts >= MAX_SYNC_ATTEMPTS) {
             console.error(
-              `[markRecordsFailed] Record timed out after ${MAX_SYNC_ATTEMPTS} attempts — ${record.entityType} id=${record.id}.`,
+              `[markRecordsFailed] Record timed out after ${MAX_SYNC_ATTEMPTS} attempts, ${record.entityType} id=${record.id}.`,
             );
           }
         }));
@@ -297,14 +297,14 @@ export class SyncCoordinator implements Coordinator {
   // ============ pull ============
 
   /**
-   * Manual pull — panggil setelah login (atau event lain yang butuh
+   * Manual pull, panggil setelah login (atau event lain yang butuh
    * data server segera) supaya tidak harus menunggu tick periodik
-   * berikutnya. Reuse pull() dan applyPull() yang sudah ada; TIDAK
+   * berikutnya. Reuse pull() dan applyPull() yang sudah ada, TIDAK
    * menduplikasi logic.
    */
   async pullNow(): Promise<SyncPullResponse | null> {
     if (this.stopped || !this.db) return null;
-    console.log('[SyncCoordinator] pullNow() called — manual pull');
+    console.log('[SyncCoordinator] pullNow() called, manual pull');
     try {
       const cursor = await loadCursor();
       const pull = await this.pull(cursor);
@@ -362,7 +362,7 @@ export class SyncCoordinator implements Coordinator {
       if (!collection) continue;
 
       if (record.deleted) {
-        // Soft delete lokal — cari row, kalau ada, mark deleted_at
+        // Soft delete lokal, cari row, kalau ada, mark deleted_at
         const existing = await collection.find(record.id).catch(() => null);
         if (existing) {
           batch.push(existing.prepareUpdate((r: any) => {
@@ -383,7 +383,7 @@ export class SyncCoordinator implements Coordinator {
             r._raw._status = 'synced';
           }));
         } else {
-          // Gunakan prepareCreateFromDirtyRaw + database.batch() — official
+          // Gunakan prepareCreateFromDirtyRaw + database.batch(), official
           // WatermelonDB API untuk record dengan custom ID (server UUID).
           // Pola lama (collection.prepareCreate + r._raw.id = record.id)
           // tidak didukung resmi WatermelonDB dan bisa bikin row korup.
@@ -417,7 +417,7 @@ export class SyncCoordinator implements Coordinator {
    * - snake_case DB columns -> camelCase domain types
    * - JSON string columns (items_json, address_json, attachment_json) -> parsed objects
    *   NOTE: @json decorator di OrderModel auto-parses on read & auto-stringifies on write
-   *   DO NOT call JSON.stringify/JSON.parse manually — assign raw objects directly.
+   *   DO NOT call JSON.stringify/JSON.parse manually, assign raw objects directly.
    *
    * MAPPING TABLE (WatermelonDB -> @delivery/shared):
    *
@@ -450,7 +450,7 @@ export class SyncCoordinator implements Coordinator {
       row.customerId = (d as any).customerId;
       row.driverId = (d as any).driverId ?? null;
       row.status = (d as any).status;
-      // @json decorator auto-stringify on write — assign raw object
+      // @json decorator auto-stringify on write, assign raw object
       row.itemsJson = (d as any).items;
       row.addressJson = (d as any).deliveryAddress;
       row.totalCents = (d as any).totalCents;
@@ -471,7 +471,7 @@ export class SyncCoordinator implements Coordinator {
       row.roomId = (d as any).roomId;
       row.senderId = (d as any).senderId;
       row.body = (d as any).body;
-      // @json decorator auto-stringify on write — assign raw object
+      // @json decorator auto-stringify on write, assign raw object
       row.attachmentJson = (d as any).attachment ?? null;
       row.status = (d as any).status;
       row.clientCreatedAt = new Date((d as any).clientCreatedAt).getTime();
@@ -586,7 +586,7 @@ export class SyncCoordinator implements Coordinator {
   private async collectDirty(db: Database): Promise<SyncPushPayload> {
     const deviceId = await getDeviceId();
     const userId = await getCurrentUserId();
-    if (!userId) throw new Error('Not authenticated — cannot sync without login');
+    if (!userId) throw new Error('Not authenticated, cannot sync without login');
     const cursor = await loadCursor();
     const records: SyncRecordPush[] = [];
 
@@ -610,7 +610,7 @@ export class SyncCoordinator implements Coordinator {
       ).fetch();
 
       for (const row of dirty) {
-        // Skip rows yang sudah melewati retry cap — resolveAcks() sudah
+        // Skip rows yang sudah melewati retry cap, resolveAcks() sudah
         // tandai mereka FAILED_SYNC dan increment failedSyncAttempts.
         // Mereka tidak akan pernah disinkronkan ulang, menghindari
         // silent retry storm.
@@ -618,7 +618,7 @@ export class SyncCoordinator implements Coordinator {
         const attempts = (row as any).failedSyncAttempts ?? 0;
         if (attempts >= MAX_SYNC_ATTEMPTS) {
           console.warn(
-            `[collectDirty] Skipping ${colName}: id=${row.id} — hit retry cap (${attempts}/${MAX_SYNC_ATTEMPTS})`,
+            `[collectDirty] Skipping ${colName}: id=${row.id}, hit retry cap (${attempts}/${MAX_SYNC_ATTEMPTS})`,
           );
           continue;
         }
@@ -670,7 +670,7 @@ export class SyncCoordinator implements Coordinator {
         customerId: row.customerId,
         driverId: row.driverId ?? undefined,
         status: row.status,
-        // @json decorator auto-parse on read — use directly
+        // @json decorator auto-parse on read, use directly
         items: row.itemsJson ?? [],
         deliveryAddress: row.addressJson ?? {},
         totalCents: row.totalCents,
@@ -690,13 +690,13 @@ export class SyncCoordinator implements Coordinator {
         // fallback so the push payload is well-formed and server-side
         // dedup still has something to work with.
         //
-        // Do NOT writeback to the row here — collectDirty() is called from
+        // Do NOT writeback to the row here, collectDirty() is called from
         // concurrent sync paths and writeback during read phase is racy.
         // The next legitimate edit to this row (or another sync cycle) will
         // re-trigger this fallback, which is acceptable for the recovery path.
         const fallbackKey = `cod:${reactNativeUUID.v4()}`;
         console.warn(
-          `[localRowToSyncRecord] payment row ${row.id} missing idempotencyKey — ` +
+          `[localRowToSyncRecord] payment row ${row.id} missing idempotencyKey, ` +
           `generating fallback "${fallbackKey}". This indicates a data integrity ` +
           `issue (should have been set at create time).`
         );
@@ -722,7 +722,7 @@ export class SyncCoordinator implements Coordinator {
         roomId: row.roomId,
         senderId: row.senderId,
         body: row.body,
-        // @json decorator auto-parse on read — use directly
+        // @json decorator auto-parse on read, use directly
         attachment: row.attachmentJson ?? undefined,
         status: row.status,
         clientCreatedAt: new Date(row.clientCreatedAt).toISOString(),
@@ -751,7 +751,7 @@ export class SyncCoordinator implements Coordinator {
    * Find a local dirty payment row matching an ack. Used when the ack's `id`
    * doesn't match any local row but `serverData.idempotencyKey` does match
    * a dirty local row. This handles the "first push succeeded on server but
-   * ack was lost — second push gets existing-server-id as ack.id" case.
+   * ack was lost, second push gets existing-server-id as ack.id" case.
    */
   private async findLocalPaymentByAck(
     collection: any,
@@ -822,7 +822,7 @@ export class SyncCoordinator implements Coordinator {
             const serverDriverId = (ack.serverData as any).driverId;
             // currentUserId hanya dibutuhkan untuk deteksi order di-accept
             // oleh driver lain (orderRemovedFromView). Tidak lagi di-hoist
-            // untuk prepareUpdate callback — Temuan 1: cancel-offline
+            // untuk prepareUpdate callback, Temuan 1: cancel-offline
             // discriminator sudah dipindah ke outbox.ts handleVersionConflict.
             const currentUserId = await getCurrentUserId();
             const isAcceptedByOther = serverDriverId != null && serverDriverId !== currentUserId;
@@ -855,8 +855,8 @@ export class SyncCoordinator implements Coordinator {
             r.serverVersion = ack.serverVersion;
             // Mark as synced agar tidak dianggap dirty di collectDirty() berikutnya
             r._raw._status = 'synced';
-            // Flip domain status: chat_message -> SENT, payment -> CAPTURED
-            // Ini fix C3 — tanpa ini, pesan chat sync-path tampil 'mengirim...'
+            // Flip domain status: chat_message jadi SENT, payment jadi CAPTURED
+            // Ini fix C3, tanpa ini, pesan chat sync-path tampil 'mengirim...'
             // selamanya padahal sudah sukses terkirim ke server.
             if (ack.entityType === 'chat_message') {
               r.status = 'SENT';
@@ -869,7 +869,7 @@ export class SyncCoordinator implements Coordinator {
         }
       } else if (ack.status === 'rejected') {
         // Rejected: increment retry counter, cap at MAX_SYNC_ATTEMPTS.
-        // After hitting the cap, stop collecting — avoids infinite retry storms.
+        // After hitting the cap, stop collecting, avoids infinite retry storms.
         const collection = this.collectionFor(ack.entityType, db);
         if (!collection) continue;
 
@@ -881,16 +881,16 @@ export class SyncCoordinator implements Coordinator {
           batch.push(existing.prepareUpdate((r: any) => {
             r.failedSyncAttempts = nextAttempts;
             // For chat messages and payments, flip domain status to FAILED so UI can surface it
-            // Orders do NOT have a FAILED domain status — no status flip for orders
+            // Orders do NOT have a FAILED domain status, no status flip for orders
             if ((ack.entityType === 'chat_message' || ack.entityType === 'payment') && nextAttempts >= MAX_SYNC_ATTEMPTS) {
               (r as any).status = 'FAILED';
               console.error(
-                `[resolveAcks] Record permanently rejected after ${MAX_SYNC_ATTEMPTS} attempts — ${ack.entityType} id=${ack.id} marked FAILED. ` +
+                `[resolveAcks] Record permanently rejected after ${MAX_SYNC_ATTEMPTS} attempts, ${ack.entityType} id=${ack.id} marked FAILED. ` +
                 `User should be notified. Server reason: ${ack.reason ?? 'unknown'}`,
               );
             } else if (nextAttempts >= MAX_SYNC_ATTEMPTS) {
               console.error(
-                `[resolveAcks] Record permanently rejected after ${MAX_SYNC_ATTEMPTS} attempts — ${ack.entityType} id=${ack.id}. ` +
+                `[resolveAcks] Record permanently rejected after ${MAX_SYNC_ATTEMPTS} attempts, ${ack.entityType} id=${ack.id}. ` +
                 `Sync coordinator will stop retrying. Server reason: ${ack.reason ?? 'unknown'}`,
               );
             }

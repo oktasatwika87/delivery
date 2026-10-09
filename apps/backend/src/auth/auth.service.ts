@@ -9,7 +9,7 @@ import { LoginDto, RegisterDto } from './auth.dto';
 import { AuthenticatedUser } from './auth.types';
 
 /**
- * Bcrypt cost factor. 10 = ~100ms per hash di CPU modern — cukup kuat untuk
+ * Bcrypt cost factor. 10 = ~100ms per hash di CPU modern, cukup kuat untuk
  * kebanyakan threat model mobile tanpa bikin login/register terasa lambat.
  */
 const BCRYPT_ROUNDS = 10;

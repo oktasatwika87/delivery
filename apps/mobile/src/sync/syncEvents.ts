@@ -1,10 +1,10 @@
 /**
  * Tiny event bus for surfacing conflict/rejected events from SyncCoordinator
- * to UI screens. Module-level singleton — same lifetime as coordinator.
+ * to UI screens. Module-level singleton, same lifetime as coordinator.
  *
  * Originally used Node.js EventEmitter from 'events' module, but that module
  * is not available in React Native runtime (Metro can't resolve 'events').
- * Replaced with SimpleEventBus — same pattern as ChatSocketManager/OrdersSocketManager.
+ * Replaced with SimpleEventBus, same pattern as ChatSocketManager/OrdersSocketManager.
  */
 export interface OrderConflictEvent {
   orderId: string;
@@ -26,16 +26,16 @@ export interface OrderRejectedEvent {
 /** Event names supported by syncEvents */
 export type SyncEventName = 'orderConflict' | 'orderRemovedFromView' | 'orderRejected' | 'pool-refresh';
 
-/** Callback type — matches pattern from socket managers */
+/** Callback type, matches pattern from socket managers */
 type EventCallback<T = unknown> = (data: T) => void;
 
 /**
  * SimpleEventBus: React Native compatible event bus.
  *
  * API matches Node EventEmitter for syncEvents consumers:
- * - on(event, callback) — subscribe, returns unsubscribe function
- * - off(event, callback) — unsubscribe (must pass SAME function reference)
- * - emit(event, data) — broadcast to all subscribers
+ * - on(event, callback), subscribe, returns unsubscribe function
+ * - off(event, callback), unsubscribe (must pass SAME function reference)
+ * - emit(event, data), broadcast to all subscribers
  *
  * Type-safe: consumers pass typed callbacks and TypeScript infers the type
  * based on the event name.
@@ -45,7 +45,7 @@ class SimpleEventBus {
 
   /**
    * Subscribe to an event.
-   * Returns unsubscribe function — call it to remove the listener.
+   * Returns unsubscribe function, call it to remove the listener.
    */
   on<T = unknown>(event: string, callback: EventCallback<T>): () => void {
     if (!this.listeners.has(event)) {

@@ -1,27 +1,27 @@
 /**
- * location — abstraksi tipis di atas LocationManager MapLibre (v10.2.1).
+ * location, abstraksi tipis di atas LocationManager MapLibre (v10.2.1).
  *
  * MapLibre React Native sudah include LocationManager bawaan yang:
  *   - Foreground-only (start/stop saat app aktif)
  *   - Tidak butuh internet (GPS satelit)
  *   - Meng-update state internal + emit ke subscriber tiap ada location update
  *
- * Kita pakai itu, bukannya install @react-native-community/geolocation terpisah
- * — single source of truth untuk GPS, hemat dependensi.
+ * Kita pakai itu, bukannya install @react-native-community/geolocation terpisah,
+ * single source of truth untuk GPS, hemat dependensi.
  *
  * Runtime Permission:
  *   - Android API 23+ mewajibkan runtime permission request via PermissionsAndroid
  *     SEBELUM LocationManager.addListener() dipanggil.
  *   - Fallback-nya: request permission di dalam subscribe(), baru aktifkan listener.
  *   - Kalau permission denied, subscriber tetap ditambahkan tapi tidak akan dapat
- *     update (silent — caller bisa panggil requestPermission() sendiri untuk
+ *     update (silent, caller bisa panggil requestPermission() sendiri untuk
  *     menangani UI explainer).
  *
  * Catatan:
- *   - Lokasi TIDAK dikirim lewat socket.io chat — dua concern ini independen.
+ *   - Lokasi TIDAK dikirim lewat socket.io chat, dua concern ini independen.
  *     Lokasi hanya dipakai untuk render di MapView & simpan ke routing service
  *     saat kurir butuh rute.
- *   - Saat offline, location update dari satelit GPS tetap jalan — yang
+ *   - Saat offline, location update dari satelit GPS tetap jalan, yang
  *     butuh internet hanya sync data lain (chat, sync coordinator).
  */
 
@@ -33,7 +33,7 @@ export type { Location } from '@maplibre/maplibre-react-native';
 
 type Listener = (location: Location) => void;
 
-/** Minimum jarak (meter) antar-update — 0 = tiap fix. Default 5m untuk akurasi kurir. */
+/** Minimum jarak (meter) antar-update, 0 = tiap fix. Default 5m untuk akurasi kurir. */
 const DEFAULT_DISPLACEMENT_METERS = 5;
 void DEFAULT_DISPLACEMENT_METERS; // TODO: wire to LocationManager.setMinDisplacement on init if needed
 
@@ -103,7 +103,7 @@ class LocationServiceImpl implements LocationService {
         return 'granted';
       } else if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
         this.permissionStatus = 'blocked';
-        console.error('[location] Permission permanently blocked — user must enable in Settings');
+        console.error('[location] Permission permanently blocked, user must enable in Settings');
         return 'blocked';
       } else {
         this.permissionStatus = 'denied';
@@ -122,8 +122,8 @@ class LocationServiceImpl implements LocationService {
     if (this.permissionStatus !== 'granted') {
       const status = await this.requestPermission();
       if (status !== 'granted') {
-        // Permission denied — add listener anyway (no-op) but don't crash
-        console.warn('[location] subscribe without permission — listener added but will not receive updates');
+        // Permission denied, add listener anyway (no-op) but don't crash
+        console.warn('[location] subscribe without permission, listener added but will not receive updates');
         this.listeners.add(listener);
         return () => {
           this.listeners.delete(listener);
@@ -150,7 +150,7 @@ class LocationServiceImpl implements LocationService {
     return () => {
       this.listeners.delete(listener);
       if (this.listeners.size === 0 && this.isListening) {
-        // Last subscriber left — stop native listener
+        // Last subscriber left, stop native listener
         try {
           LocationManager.removeListener(this.bridgeListener);
           this.isListening = false;

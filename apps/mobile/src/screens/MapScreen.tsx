@@ -1,5 +1,5 @@
 /**
- * MapScreen — render MapLibre dengan map style lokal, GPS kurir, dan
+ * MapScreen, render MapLibre dengan map style lokal, GPS kurir, dan
  * routing rute dari origin (GPS kurir) ke destination (alamat pengiriman).
  *
  * Offline-first: ketika area belum ter-download sebagai offline region,
@@ -10,7 +10,7 @@
  *   2. Lookup order dari WatermelonDB
  *   3. Extract destination dari order.addressJson.coordinates
  *   4. Origin = GPS location kurir (currentLocation)
- *   5. Kalau keduanya tersedia → call routeService.getRoute()
+ *   5. Kalau keduanya tersedia, call routeService.getRoute()
  *   6. Render polyline di atas peta
  *   7. Tampilkan indikator cache/error/loading
  *
@@ -56,21 +56,21 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
   // Refs
   const cameraRef = useRef<MapLibreGL.CameraRef | null>(null);
 
-  // Titik asal rute yang dipakai panggilan getRoute terakhir — supaya update
+  // Titik asal rute yang dipakai panggilan getRoute terakhir, supaya update
   // GPS kecil tidak memicu hitung ulang rute. Radius sama dengan
   // MATCH_RADIUS_METERS (300 m) di routeSnapshot.
   const lastRouteOriginRef = useRef<LngLat | null>(null);
 
-  // Sudah pernah fitBounds untuk order ini — supaya kamera tidak di-zoom
+  // Sudah pernah fitBounds untuk order ini, supaya kamera tidak di-zoom
   // berulang tiap kali getRoute dipanggil ulang.
   const hasFitBoundsRef = useRef<boolean>(false);
 
-  // Sudah pernah setCamera ke GPS pertama — supaya GPS berikutnya tidak
+  // Sudah pernah setCamera ke GPS pertama, supaya GPS berikutnya tidak
   // menarik kamera lagi. Tidak dibuat kalau rute sudah fitBounds duluan
   // (lihat efek posisi awal kamera di bawah).
   const hasCenteredRef = useRef<boolean>(false);
 
-  // Nilai isOnline sebelumnya — untuk deteksi transisi false → true supaya
+  // Nilai isOnline sebelumnya, untuk deteksi transisi false jadi true supaya
   // rute di-refetch sekali setelah koneksi pulih.
   const prevOnlineRef = useRef<boolean>(false);
 
@@ -121,7 +121,7 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
   const [isFromCache, setIsFromCache] = useState<boolean>(false);
   const [routeError, setRouteError] = useState<string | null>(null);
 
-  // ─── Network monitor subscription ─────────────────────────────────────────
+  // Network monitor subscription
 
   useEffect(() => {
     const unsubscribe = networkMonitor.subscribe((status) => {
@@ -131,13 +131,13 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     return unsubscribe;
   }, []);
 
-  // ─── GPS subscription ────────────────────────────────────────────────────
+  // GPS subscription
 
   useEffect(() => {
     let cancelled = false;
     let unsubscribe: (() => void) | undefined;
 
-    // Initial fix dari last-known cache — gak nunggu listener fire.
+    // Initial fix dari last-known cache, gak nunggu listener fire.
     // Kalau null (no permission / no cache), no-op; listener live tetap jalan paralel.
     locationService.getLastKnown().then((loc) => {
       if (cancelled || !loc) return;
@@ -161,7 +161,7 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     };
   }, []);
 
-  // ─── Load offline regions ──────────────────────────────────────────────────
+  // Load offline regions
 
   useEffect(() => {
     let cancelled = false;
@@ -182,7 +182,7 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     };
   }, []);
 
-  // ─── Lookup order & extract destination ────────────────────────────────────
+  // Lookup order & extract destination
 
   useEffect(() => {
     let cancelled = false;
@@ -217,11 +217,11 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     };
   }, [database, orderId]);
 
-  // ─── Trigger route fetch saat origin & destination tersedia ─────────────────
+  // Trigger route fetch saat origin & destination tersedia
 
   useEffect(() => {
     if (!currentLocation || !orderDestination) {
-      // Belum punya keduanya — biarkan state rute apa adanya. GPS null sebentar
+      // Belum punya keduanya, biarkan state rute apa adanya. GPS null sebentar
       // tidak menghapus rute yang sudah tampil.
       return;
     }
@@ -277,8 +277,8 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     })();
   }, [currentLocation, orderDestination, routeService]);
 
-  // ─── Pemulihan online ───────────────────────────────────────────────────────
-  // Saat transisi false → true, kosongkan lastRouteOriginRef supaya rute di-
+  // Pemulihan online
+  // Saat transisi false jadi true, kosongkan lastRouteOriginRef supaya rute di-
   // refetch pada tick GPS pertama berikutnya. Setelah itu throttling 300 m
   // berlaku lagi sehingga tidak ada loop pemanggilan.
   useEffect(() => {
@@ -288,7 +288,7 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     prevOnlineRef.current = isOnline;
   }, [isOnline]);
 
-  // ─── fitBounds ke rute yang baru di-render ──────────────────────────────────
+  // fitBounds ke rute yang baru di-render
   // Efek ini dipasang SEBELUM efek posisi awal kamera di bawah. Kalau MapView
   // ter-mount belakangan dan keduanya sudah siap, fitBounds jalan duluan lalu
   // setEffect posisi awal skip karena hasFitBoundsRef sudah true.
@@ -312,7 +312,7 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     hasFitBoundsRef.current = true;
   }, [routeGeometry, routeOrigin, routeDestination, hasOfflineRegion]);
 
-  // ─── Posisi awal kamera: GPS pertama atau fallback Denpasar ────────────────
+  // Posisi awal kamera: GPS pertama atau fallback Denpasar
   // Hanya dipanggil sekali, dan hanya kalau:
   //   - belum pernah fitBounds (kalau sudah, rute yang menang)
   //   - tidak ada tujuan order (kalau ada, fitBounds yang akan menang dan
@@ -339,11 +339,11 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     hasCenteredRef.current = true;
   }, [currentLocation, hasOfflineRegion, orderDestination]);
 
-  // ─── Render ────────────────────────────────────────────────────────────────
+  // Render
 
   return (
     <View style={styles.container}>
-      {/* MapView — hanya render kalau ada offline region */}
+      {/* MapView, hanya render kalau ada offline region */}
       {hasOfflineRegion && (
         <MapLibreGL.MapView
           style={styles.map}
@@ -407,7 +407,7 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
         </MapLibreGL.MapView>
       )}
 
-      {/* Atribusi OSM — hanya saat MapView tampil (di dalam cabang hasOfflineRegion yang sama). */}
+      {/* Atribusi OSM, hanya saat MapView tampil (di dalam cabang hasOfflineRegion yang sama). */}
       {hasOfflineRegion && (
         <TouchableOpacity
           style={styles.attribution}
@@ -508,7 +508,7 @@ const enhance = withDatabase(MapScreenBase);
 
 export { enhance as MapScreen };
 
-// ─── Styles ─────────────────────────────────────────────────────────────────
+// Styles
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },

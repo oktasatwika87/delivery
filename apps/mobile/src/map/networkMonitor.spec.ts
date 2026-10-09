@@ -3,7 +3,7 @@
  *
  * Test focus:
  * - Initial state: optimistic 'online'
- * - State transitions: online → offline → online
+ * - State transitions: online jadi offline jadi online
  * - Subscriber notifications on state change
  * - Manual check() updates state
  * - Periodic checks via start/stop

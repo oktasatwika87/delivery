@@ -36,7 +36,7 @@ export const schema = appSchema({
         { name: 'failed_sync_attempts', type: 'number' },
         { name: 'cancelled_by', type: 'string', isOptional: true },
         { name: 'cancel_reason', type: 'string', isOptional: true },
-        // v8 — Skenario A: persisted banner signal untuk cancel-offline conflict
+        // v8, Skenario A: persisted banner signal untuk cancel-offline conflict
         { name: 'last_conflict_reason', type: 'string', isOptional: true },
         { name: 'last_conflict_at', type: 'number', isOptional: true, isIndexed: true },
         { name: 'created_at', type: 'number' },
@@ -78,7 +78,7 @@ export const schema = appSchema({
         { name: 'updated_at', type: 'number' },
       ],
     }),
-    // v4 — route_snapshots: cache rute terakhir untuk fallback offline-first
+    // v4, route_snapshots: cache rute terakhir untuk fallback offline-first
     // ketika routing API tidak bisa di-fetch (offline).
     tableSchema({
       name: 'route_snapshots',
@@ -93,7 +93,7 @@ export const schema = appSchema({
         { name: 'updated_at', type: 'number' },
       ],
     }),
-    // v7 — pending_actions: outbox untuk offline-first driver actions
+    // v7, pending_actions: outbox untuk offline-first driver actions
     // (reject, cancel, collect_cod). Diproses FIFO saat device online.
     tableSchema({
       name: 'pending_actions',

@@ -9,7 +9,7 @@
  * Reset state via beforeEach di setiap test file.
  */
 
-// ─── OfflineManager ────────────────────────────────────────────────────
+// OfflineManager
 
 const mockPacks = new Map<string, MockOfflinePack>();
 
@@ -56,7 +56,7 @@ const OfflineManager = {
   },
 };
 
-// ─── LocationManager ──────────────────────────────────────────────────
+// LocationManager
 
 const locationListeners = new Set<(location: MockLocation) => void>();
 
@@ -117,7 +117,7 @@ const LocationManager = {
   },
 };
 
-// ─── MapLibreGL default export (MapView, Camera) ─────────────────────
+// MapLibreGL default export (MapView, Camera)
 
 // CameraRef mock
 const mockCameraRef = {
@@ -148,16 +148,16 @@ const MapLibreGL = {
   },
 };
 
-// ─── Type re-exports (for imports in source) ─────────────────────────
+// Type re-exports (for imports in source)
 
 export type { OfflinePack, OfflinePackStatus } from '@maplibre/maplibre-react-native';
 export type { Location } from '@maplibre/maplibre-react-native';
 
-// ─── Root module export ──────────────────────────────────────────────
+// Root module export
 
 export { OfflineManager, LocationManager, MapLibreGL };
 
-// ─── Reset all mocks before each test ──────────────────────────────
+// Reset all mocks before each test
 
 beforeEach(() => {
   OfflineManager._reset();

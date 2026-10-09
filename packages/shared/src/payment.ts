@@ -31,7 +31,7 @@ export interface Payment {
   orderId: string;
 
   /**
-   * Idempotency key — UUID v4-based identifier for COD sync.
+   * Idempotency key, UUID v4-based identifier for COD sync.
    *
    * Format: `cod:${uuid}` where `uuid` is RFC 4122 v4. Generated once
    * client-side when driver taps "Terima Cash COD" and persisted on the

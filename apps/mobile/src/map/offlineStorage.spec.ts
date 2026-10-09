@@ -2,7 +2,7 @@
  * Unit tests untuk offlineStorage.ts
  *
  * Test focus:
- * - State number → DownloadState enum mapping (0/1/2 → inactive/active/complete)
+ * - State number jadi DownloadState enum mapping (0/1/2 jadi inactive/active/complete)
  * - PackInfo transformation
  * - Retry logic
  * - listPacks, deletePack
@@ -40,15 +40,15 @@ describe('offlineStorage', () => {
   });
 
   describe('stateFromNumber mapping', () => {
-    test('maps 0 → inactive', () => {
+    test('maps 0 jadi inactive', () => {
       expect(stateFromNumber(0)).toBe('inactive');
     });
 
-    test('maps 1 → active', () => {
+    test('maps 1 jadi active', () => {
       expect(stateFromNumber(1)).toBe('active');
     });
 
-    test('maps 2 → complete', () => {
+    test('maps 2 jadi complete', () => {
       expect(stateFromNumber(2)).toBe('complete');
     });
 
@@ -220,7 +220,7 @@ describe('offlineStorage', () => {
       expect(errorCallback).not.toHaveBeenCalled();
     });
 
-    test('gagal 1x lalu berhasil — retry dipanggil ulang dengan exponential backoff', async () => {
+    test('gagal 1x lalu berhasil, retry dipanggil ulang dengan exponential backoff', async () => {
       jest.useFakeTimers();
 
       const onProgress = jest.fn();
@@ -266,7 +266,7 @@ describe('offlineStorage', () => {
       expect(result.name).toBe('retry-test-1');
     });
 
-    test('gagal 2x lalu berhasil — dua retry dengan exponential backoff total ~4500ms', async () => {
+    test('gagal 2x lalu berhasil, dua retry dengan exponential backoff total ~4500ms', async () => {
       jest.useFakeTimers();
 
       let callCount = 0;
@@ -395,7 +395,7 @@ describe('offlineStorage', () => {
       }));
     });
 
-    test('retry tidak infinite loop — berhenti setelah MAX_RETRY_ATTEMPTS', async () => {
+    test('retry tidak infinite loop, berhenti setelah MAX_RETRY_ATTEMPTS', async () => {
       const MAX_ATTEMPTS = 3;
       const errorCallback = jest.fn();
 

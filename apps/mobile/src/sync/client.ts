@@ -1,6 +1,6 @@
 /**
  * HTTP client ke backend.
- * Stub — tinggal pasang fetch + auth token dari secure-store.
+ * Stub, tinggal pasang fetch + auth token dari secure-store.
  */
 
 import Config from 'react-native-config';
@@ -27,7 +27,7 @@ async function fetchWithAuth(
 }
 
 export async function pushBatch(payload: SyncPushPayload): Promise<SyncPushResponse> {
-  // AbortController: timeout 8 detik — fail fast kalau network unreachable
+  // AbortController: timeout 8 detik, fail fast kalau network unreachable
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8_000);
 
@@ -46,7 +46,7 @@ export async function pushBatch(payload: SyncPushPayload): Promise<SyncPushRespo
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
-      console.warn('[pushBatch] Request aborted due to 8s timeout — offline-first continues');
+      console.warn('[pushBatch] Request aborted due to 8s timeout, offline-first continues');
       // Return empty response so sync can retry later
       return { acks: [], pullDelta: undefined };
     }
@@ -55,14 +55,14 @@ export async function pushBatch(payload: SyncPushPayload): Promise<SyncPushRespo
 }
 
 export async function pullBatch(deviceId: string, cursor: string | null): Promise<SyncPullResponse> {
-  // Build query string manually — URL/URLSearchParams not available in React Native
+  // Build query string manually, URL/URLSearchParams not available in React Native
   let queryString = `deviceId=${encodeURIComponent(deviceId)}`;
   if (cursor) {
     queryString += `&since=${encodeURIComponent(cursor)}`;
   }
   const url = `${API_BASE}/sync/pull?${queryString}`;
 
-  // AbortController: timeout 8 detik — fail fast kalau network unreachable.
+  // AbortController: timeout 8 detik, fail fast kalau network unreachable.
   // Offline-first UX: tidak ada spinner 2 menit, langsung continue tanpa data.
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8_000);
@@ -78,7 +78,7 @@ export async function pullBatch(deviceId: string, cursor: string | null): Promis
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
-      console.warn('[pullBatch] Request aborted due to 8s timeout — offline-first continues');
+      console.warn('[pullBatch] Request aborted due to 8s timeout, offline-first continues');
       // Return empty response so sync continues gracefully
       return { nextCursor: null, records: [], serverTime: new Date().toISOString() };
     }
@@ -86,7 +86,7 @@ export async function pullBatch(deviceId: string, cursor: string | null): Promis
   }
 }
 
-// ─── Auth ───────────────────────────────────────────────────────────────────
+// Auth
 
 export interface LoginResponse {
   token: string;
@@ -182,7 +182,7 @@ export class UnauthorizedError extends Error {
  *
  * Pesan Error tetap dalam format lama (`<prefix> failed: <status> - <body>`)
  * supaya log existing tetap kebaca. Mobile callers yang butuh branching
- * pakai `err.code` atau `err.status` — JANGAN parse pesan.
+ * pakai `err.code` atau `err.status`, JANGAN parse pesan.
  */
 export class ApiError extends Error {
   status: number;
@@ -218,7 +218,7 @@ async function buildApiError(prefix: string, res: Response): Promise<ApiError> {
       }
     }
   } catch {
-    // body bukan JSON — keep as text
+    // body bukan JSON, keep as text
   }
 
   const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
@@ -248,7 +248,7 @@ export interface FetchAvailableOrdersResult {
 
 /**
  * Ambil daftar order yang tersedia di driver pool.
- * AbortController 8 detik — fail fast kalau network unreachable.
+ * AbortController 8 detik, fail fast kalau network unreachable.
  */
 export async function fetchAvailableOrders(take?: number): Promise<FetchAvailableOrdersResult> {
   let url = `${API_BASE}/orders/available`;
@@ -271,17 +271,17 @@ export async function fetchAvailableOrders(take?: number): Promise<FetchAvailabl
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
-      console.warn('[fetchAvailableOrders] Request aborted due to 8s timeout — returning empty');
+      console.warn('[fetchAvailableOrders] Request aborted due to 8s timeout, returning empty');
       return { items: [], hasMore: false };
     }
     throw err;
   }
 }
 
-// ─── Chat ─────────────────────────────────────────────────────────────────
+// Chat
 
 export interface SendMessagePayload {
-  /** Client-generated UUID — consistent ID across devices. */
+  /** Client-generated UUID, consistent ID across devices. */
   id: string;
   roomId: string;
   body: string;
@@ -303,7 +303,7 @@ export interface SendMessageResponse {
 
 /**
  * Kirim pesan chat via REST.
- * Dipanggil setelah pesan dibuat lokal (offline-first — pesan sudah tampil di UI).
+ * Dipanggil setelah pesan dibuat lokal (offline-first, pesan sudah tampil di UI).
  */
 export async function sendChatMessage(
   payload: SendMessagePayload
@@ -329,11 +329,11 @@ export async function sendChatMessage(
   return response as Promise<SendMessageResponse>;
 }
 
-// ─── Orders ────────────────────────────────────────────────────────────────
+// Orders
 
 /**
  * Buat order baru.
- * Online-only — gagal langsung throw, tidak ada offline queue.
+ * Online-only, gagal langsung throw, tidak ada offline queue.
  */
 export async function createOrder(input: CreateOrderInput): Promise<Order> {
   const res = await fetchWithAuth(`${API_BASE}/orders`, {
@@ -355,11 +355,11 @@ export async function createOrder(input: CreateOrderInput): Promise<Order> {
 
 /**
  * Fetch satu order by id.
- * Customer pakai ini untuk initial state di OrderTrackingScreen — backend
+ * Customer pakai ini untuk initial state di OrderTrackingScreen, backend
  * validate ownership (customer hanya bisa baca order miliknya sendiri,
- * kalau bukan → 403 ForbiddenException).
+ * kalau bukan jadi 403 ForbiddenException).
  *
- * Throw pada error — tracking screen harus tau kalau gagal fetch
+ * Throw pada error, tracking screen harus tau kalau gagal fetch
  * (beda dengan fetchAvailableOrders yang return [] karena driver pool
  * tolerates stale data). Di sini, customer yang baru saja create order
  * WAJUM liat status aktualnya.
@@ -387,7 +387,7 @@ export async function getOrderById(orderId: string): Promise<Order> {
   }
 }
 
-// ─── Driver Actions ──────────────────────────────────────────────────────────
+// Driver Actions
 
 /**
  * Response from driver action endpoints (reject, cancel, collect-cod).
@@ -545,7 +545,7 @@ export async function collectCodOrder(
 }
 
 /**
- * Flag COD as orphaned to server — driver collected COD offline but order
+ * Flag COD as orphaned to server, driver collected COD offline but order
  * was reassigned before sync. Fire-and-forget: network failure here is
  * acceptable because the local `orphaned_needs_review` status is the fallback.
  */
@@ -572,16 +572,16 @@ export async function flagOrphanedCod(
     if (!res.ok) {
       const body = await res.text();
       console.warn(`[flagOrphanedCod] Server rejected: status=${res.status}, body=${body}`);
-      // Non-fatal — local orphan status is the fallback
+      // Non-fatal, local orphan status is the fallback
     } else {
       console.log(`[flagOrphanedCod] Orphan flagged for order ${orderId}`);
     }
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
-      console.warn('[flagOrphanedCod] Request aborted due to 8s timeout — non-fatal');
+      console.warn('[flagOrphanedCod] Request aborted due to 8s timeout, non-fatal');
     } else {
-      console.warn('[flagOrphanedCod] Network error — non-fatal, local orphan status preserved:', err.message);
+      console.warn('[flagOrphanedCod] Network error, non-fatal, local orphan status preserved:', err.message);
     }
     // Fire-and-forget: throw is intentionally suppressed
   }
@@ -589,7 +589,7 @@ export async function flagOrphanedCod(
 
 /**
  * Driver updates order status.
- * Transitions: PREPARING → OUT_FOR_DELIVERY, OUT_FOR_DELIVERY → DELIVERED.
+ * Transitions: PREPARING jadi OUT_FOR_DELIVERY, OUT_FOR_DELIVERY jadi DELIVERED.
  */
 export async function updateOrderStatus(
   orderId: string,

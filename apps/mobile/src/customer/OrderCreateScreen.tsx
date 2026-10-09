@@ -3,8 +3,8 @@
  *
  * Flow:
  *   1. User isi form (alamat, barang, catatan)
- *   2. Submit → createOrder() → sukses/error
- *   3. Sukses → Alert konfirmasi + tombol "Lihat Status" (panggil onCreateSuccess)
+ *   2. Submit jadi createOrder() jadi sukses/error
+ *   3. Sukses jadi Alert konfirmasi + tombol "Lihat Status" (panggil onCreateSuccess)
  *
  * Online-only, tidak ada offline queue.
  *
@@ -88,7 +88,7 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
   const [globalError, setGlobalError] = useState<string | null>(null);
 
   // Synchronous guard untuk prevent double-tap race condition.
-  // useState update is async — tidak aman untuk inflight guard.
+  // useState update is async, tidak aman untuk inflight guard.
   // useRef provides synchronous access to current value.
   const isSubmitting = useRef(false);
 

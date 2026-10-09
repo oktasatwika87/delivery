@@ -26,7 +26,7 @@ let cachedDeviceId: string | null = null;
 /**
  * Ambil atau generate device ID.
  * ID di-load dari AsyncStorage kalau sudah ada, otherwise di-generate dan disimpan.
- * Konsisten di setiap app launch — tidak di-generate ulang.
+ * Konsisten di setiap app launch, tidak di-generate ulang.
  */
 export async function getDeviceId(): Promise<string> {
   if (cachedDeviceId) return cachedDeviceId;

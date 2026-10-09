@@ -1,5 +1,5 @@
 /**
- * DummyRoutingProvider — default implementation yang throw Error.
+ * DummyRoutingProvider, default implementation yang throw Error.
  *
  * Digunakan sampai provider konkret (OSRM / GraphHopper / Valhalla / Mapbox
  * Directions / etc) dipilih dan diimplementasi.
@@ -9,7 +9,7 @@
  * daftarkan di `src/map/routing/index.ts`, dan swap binding di sini
  * atau lewat DI dari component.
  *
- * TODO(user): implementasi concrete provider. Lihat keputusan #5 di spec —
+ * TODO(user): implementasi concrete provider. Lihat keputusan #5 di spec,
  * interface provider-agnostic dulu, concrete provider menyusul.
  */
 

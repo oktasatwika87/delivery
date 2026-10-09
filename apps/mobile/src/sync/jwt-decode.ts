@@ -2,7 +2,7 @@
  * JWT decode utility.
  *
  * Decodes JWT payload to extract user role for navigation decisions.
- * Does NOT verify signature — verification is handled by backend on each request.
+ * Does NOT verify signature, verification is handled by backend on each request.
  * This is intentional: mobile only needs to read claims for UX decisions.
  */
 
@@ -12,7 +12,7 @@ import { UserRole } from '@delivery/shared';
 
 /** Shape of the JWT payload from our auth backend. */
 export interface TokenPayload {
-  /** User ID (UUID) — `sub` claim */
+  /** User ID (UUID), `sub` claim */
   sub: string;
   /** User role: CUSTOMER or DRIVER */
   role: UserRole;

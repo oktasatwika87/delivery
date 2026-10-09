@@ -428,7 +428,7 @@ describe('OrdersScreen fetchPool - regresi kunci camelCase di prepareCreateFromD
       expect(row._getRaw('driver_id')).toBe('preexisting-driver');
       expect(row._getRaw('total_cents')).toBe(88000);
       expect(row._getRaw('server_version')).toBe(5);
-      // _status tidak berubah (tetap seeded value — fetchPool tidak menyentuh non-pool).
+      // _status tidak berubah (tetap seeded value, fetchPool tidak menyentuh non-pool).
       expect(row._raw._status).toBe('synced');
     });
   });
@@ -452,7 +452,7 @@ describe('OrdersScreen fetchPool - regresi kunci camelCase di prepareCreateFromD
   });
 });
 
-// ─── Tujuh tes regresi untuk fetchPool dengan hasMore ──────────────────────────
+// Tujuh tes regresi untuk fetchPool dengan hasMore
 // Pola: seed baris pool lama, panggil fetchPool, assert hasil.
 // Pakai Loki adapter asli (sama dengan tes regresi yang sudah ada).
 describe('fetchPool -tes regresi dengan hasMore', () => {
@@ -590,7 +590,7 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
       await seedPoolRow(existingRowId, defaultRowFields);
       await seedPoolRow(goneRowId, defaultRowFields);
 
-      // Server hanya kirim existingRowId — goneRowId tidak ada di daftar
+      // Server hanya kirim existingRowId, goneRowId tidak ada di daftar
       const serverItems: AvailableOrderItem[] = [
         {
           orderId: existingRowId,
@@ -687,7 +687,7 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
       await db.write(async () => {
         const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
           id: dirtyRowId,
-          _status: 'updated',  // BUKAN synced — ada perubahan lokal
+          _status: 'updated',  // BUKAN synced, ada perubahan lokal
           _changed: '',
           ...defaultRowFields,
           total_cents: 44000,   // nilai lokal yang berbeda
@@ -731,7 +731,7 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
       client.fetchAvailableOrders.mockRejectedValue(new Error('Network error'));
 
       render(<OrdersScreenBase database={db} myOrders={[]} />);
-      // fetchPool gagal di catch → tidak ada batch. Tapi tetap tunggu 1 tick agar efek cleanup selesai.
+      // fetchPool gagal di catch, tidak ada batch. Tapi tetap tunggu 1 tick agar efek cleanup selesai.
       await new Promise<void>((resolve) => { setImmediate(resolve); });
 
       // Semua baris pool tetap ada dan tidak berubah
@@ -744,8 +744,8 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
     });
   });
 
-  // Tes 7: hasMore true — baris yang hilang dari daftar TIDAK dihapus.
-  describe('tes 7: hasMore true — baris pool yang tidak ada di daftar server tidak dihapus', () => {
+  // Tes 7: hasMore true, baris yang hilang dari daftar TIDAK dihapus.
+  describe('tes 7: hasMore true, baris pool yang tidak ada di daftar server tidak dihapus', () => {
     it('hasMore true: baris pool yang hilang TIDAK dihapus; baris yang ada diperbarui; baris baru ditambahkan', async () => {
       const existingRowId = 'pool-t7-existing';
       const goneRowId = 'pool-t7-gone';
@@ -760,7 +760,7 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
       await seedPoolRow(goneRowId, defaultRowFields);
 
       // Server kirim: existingRowId (harus diperbarui) + newRowId (baru ditambahkan)
-      // goneRowId TIDAK ada di daftar — hasMore true, jadi TIDAK dihapus
+      // goneRowId TIDAK ada di daftar, hasMore true, jadi TIDAK dihapus
       const serverItems: AvailableOrderItem[] = [
         {
           orderId: existingRowId,
@@ -813,7 +813,7 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
       };
       await seedPoolRow(confirmedRowId, confirmedRowFields);
 
-      // Server kirim daftar kosong (hasMore false — jika baris ini dianggap pool, akan dihapus).
+      // Server kirim daftar kosong (hasMore false, jika baris ini dianggap pool, akan dihapus).
       await renderAndAwaitPool(db, [], false);
 
       // Baris tetap persis sama (tidak disentuh)
@@ -830,17 +830,17 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
   });
 });
 
-// ─── Regresi handleAccept: accept order lewat REST, bukan cuma lokal ────────────
+// Regresi handleAccept: accept order lewat REST, bukan cuma lokal
 // Sebelum diperbaiki, handleAccept hanya menulis WatermelonDB lokal tanpa memanggil
-// POST /orders/:id/accept. acceptOrder tidak pernah dipanggil → tes MERAH.
+// POST /orders/:id/accept. acceptOrder tidak pernah dipanggil, tes MERAH.
 // Sesudah diperbaiki: acceptOrder dipanggil, baris ditulis dari respons server,
 // _status='synced'+_changed='' pada sukses; 409 memicu fetchPool; error tidak mengubah baris lokal.
 describe('handleAccept - accept order lewat REST', () => {
   let db: Database;
 
   // Mock fetchAvailableOrders: kembalikan seeded row agar fetchPool onMount tidak menghapusnya.
-  // Row seeded dengan driver_id=null, status=ASSIGNED, jadi masuk pool query → ada di server list
-  // → tidak di-delete; juga tidak di-create (sudah ada).
+  // Row seeded dengan driver_id=null, status=ASSIGNED, jadi masuk pool query, ada di server list
+  // (lanjut), tidak di-delete; juga tidak di-create (sudah ada).
   function buildFetchPoolMock(rowId: string, rowFields: Record<string, unknown>) {
     const client = jest.requireMock('../sync/client') as { fetchAvailableOrders: jest.Mock };
     client.fetchAvailableOrders.mockResolvedValue({
@@ -914,7 +914,7 @@ describe('handleAccept - accept order lewat REST', () => {
     return all.some((r) => r.id === rowId);
   }
 
-  // Tes 1: accept sukses → acceptOrder dipanggil, baris ditulis dari respons server
+  // Tes 1: accept sukses, acceptOrder dipanggil, baris ditulis dari respons server
   it('acceptOrder dipanggil dengan order.id dan serverVersion; baris lokal ditulis dari respons server', async () => {
     const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
     const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
@@ -950,8 +950,8 @@ describe('handleAccept - accept order lewat REST', () => {
     expect(updatedRow._raw._changed).toBe('');
   });
 
-  // Tes 2: 409 conflict → syncEvents.emit dipanggil, baris lama TIDAK dihapus manual
-  it('409 Conflict → syncEvents.emit("pool-refresh") dipanggil; baris pool TIDAK berubah/hapus manual', async () => {
+  // Tes 2: 409 conflict, syncEvents.emit dipanggil, baris lama TIDAK dihapus manual
+  it('409 Conflict, syncEvents.emit("pool-refresh") dipanggil; baris pool TIDAK berubah/hapus manual', async () => {
     const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
     const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
     const syncEvents = jest.requireMock('../sync/syncEvents') as { syncEvents: { emit: jest.Mock } };
@@ -1079,10 +1079,10 @@ describe('handleAccept - accept order lewat REST', () => {
     expect(syncEventsMod.syncEvents.emit).toHaveBeenCalledWith('pool-refresh', {});
   });
 
-  // Tes 6: 400 dengan pesan "conflict" + "already accepted" → TIDAK pool-refresh, Alert gagal umum
+  // Tes 6: 400 dengan pesan "conflict" + "already accepted", TIDAK pool-refresh, Alert gagal umum
   // (handler lama cocok-teks pada err.message sehingga akan menganggap ini konflik dan
-  // memancarkan pool-refresh — perubahan ini memastikan pool-refresh HANYA dipicu oleh 409.)
-  it('400 dengan pesan "conflict" dan "already accepted" → TIDAK pool-refresh; Alert gagal umum', async () => {
+  // memancarkan pool-refresh, perubahan ini memastikan pool-refresh HANYA dipicu oleh 409.)
+  it('400 dengan pesan "conflict" dan "already accepted", TIDAK pool-refresh; Alert gagal umum', async () => {
     const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
     const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
     const syncEventsMod = jest.requireMock('../sync/syncEvents') as { syncEvents: { emit: jest.Mock } };
@@ -1112,14 +1112,14 @@ describe('handleAccept - accept order lewat REST', () => {
     const order = await db.get<OrderModel>('orders').find(rowId);
     await handleAcceptRef.current!(order);
 
-    // pool-refresh TIDAK dipancarkan — handler baru hanya merespons status 409
+    // pool-refresh TIDAK dipancarkan, handler baru hanya merespons status 409
     expect(syncEventsMod.syncEvents.emit).not.toHaveBeenCalledWith('pool-refresh', expect.anything());
     // Alert gagal umum dipanggil dengan judul 'Gagal' dan pesan 'Terima order gagal. Coba lagi.'
     expect(Alert.alert as jest.Mock).toHaveBeenCalledWith('Gagal', 'Terima order gagal. Coba lagi.');
   });
 
-  // Tes 3: error jaringan/5xx → baris lokal TIDAK diubah sama sekali
-  it('network error / 5xx → baris lokal TIDAK diubah; status tetap ASSIGNED', async () => {
+  // Tes 3: error jaringan/5xx, baris lokal TIDAK diubah sama sekali
+  it('network error / 5xx, baris lokal TIDAK diubah; status tetap ASSIGNED', async () => {
     const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
     const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
     client.acceptOrder = jest.fn().mockRejectedValue(new Error('Network error'));

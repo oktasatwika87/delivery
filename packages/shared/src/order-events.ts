@@ -1,14 +1,14 @@
 /**
- * Order-related Socket.IO event payload types — shared between apps/backend
+ * Order-related Socket.IO event payload types, shared between apps/backend
  * (OrdersGateway emit calls, apps/backend/src/orders/orders.gateway.ts) and
  * apps/mobile (OrdersSocketManager listeners, apps/mobile/src/sync/ordersSocket.ts).
  *
  * Why this file exists: before this, these 5 payload shapes were hand-
  * duplicated in both files with no shared source of truth. That's exactly
- * what let the reject status literal drift out of sync — backend emitted
+ * what let the reject status literal drift out of sync, backend emitted
  * 'CANCELLED', mobile independently declared the same 'CANCELLED' literal,
  * and when the backend was fixed to 'CONFIRMED' (rejectOrder() previously
- * had no ownership check AND transitioned to a terminal status — see
+ * had no ownership check AND transitioned to a terminal status, see
  * OrdersService.rejectOrder()'s doc comment for the full history), the
  * mobile side had to be manually caught and fixed in 3 separate follow-up
  * commits (cdc5363, e7118ad, f5bbabe) because nothing forced the two
@@ -19,7 +19,7 @@
  * Namespace: /orders (see OrdersGateway's @WebSocketGateway decorator).
  */
 
-/** order:available — driver-targeted (broadcast to the drivers:available room). */
+/** order:available, driver-targeted (broadcast to the drivers:available room). */
 export interface OrderAvailablePayload {
   orderId: string;
   totalCents: number;
@@ -29,14 +29,14 @@ export interface OrderAvailablePayload {
   createdAt: string;
 }
 
-/** order:unavailable — driver-targeted. */
+/** order:unavailable, driver-targeted. */
 export interface OrderUnavailablePayload {
   orderId: string;
   reason: 'accepted' | 'rejected' | 'reassigned';
 }
 
 /**
- * order:accepted — customer-targeted. Status hardcoded 'PREPARING' by the
+ * order:accepted, customer-targeted. Status hardcoded 'PREPARING' by the
  * server (see OrdersGateway.emitOrderAccepted).
  */
 export interface OrderAcceptedPayload {
@@ -47,9 +47,9 @@ export interface OrderAcceptedPayload {
 }
 
 /**
- * order:rejected — customer-targeted. Status hardcoded 'ASSIGNED' by the
+ * order:rejected, customer-targeted. Status hardcoded 'ASSIGNED' by the
  * server: the order reverts to the pool state (ASSIGNED + driverId null),
- * NOT terminal CANCELLED — see OrdersGateway.emitOrderRejected and
+ * NOT terminal CANCELLED, see OrdersGateway.emitOrderRejected and
  * OrdersService.rejectOrder() for why. Customer sees "Mencari driver"
  * lagi setelah reject, sama seperti order baru.
  */
@@ -60,9 +60,9 @@ export interface OrderRejectedPayload {
 }
 
 /**
- * order:cancelled — customer-targeted. Status hardcoded 'ASSIGNED' by the
+ * order:cancelled, customer-targeted. Status hardcoded 'ASSIGNED' by the
  * server (lihat OrdersGateway.emitOrderCancelled dan OrdersService.cancelOrder).
- * Order balik ke pool — status ASSIGNED + driverId null, bukan terminal.
+ * Order balik ke pool, status ASSIGNED + driverId null, bukan terminal.
  */
 export interface OrderCancelledPayload {
   orderId: string;
@@ -72,15 +72,15 @@ export interface OrderCancelledPayload {
 }
 
 /**
- * order:cod_collected — customer-targeted. Fired when a driver collects
+ * order:cod_collected, customer-targeted. Fired when a driver collects
  * cash-on-delivery for an order (see PaymentsService.collectCod() and
  * OrdersGateway.emitOrderCodCollected).
  *
  * Deliberately has NO `status`/`version` field: collecting COD does not
- * change the order's status (it stays wherever it was, e.g. DELIVERING) —
+ * change the order's status (it stays wherever it was, e.g. DELIVERING),
  * this event is a live payment confirmation only, not a state-sync event.
- * Emitted once, from the successful-create branch of collectCod() only —
- * NOT on idempotency-key replay — so an outbox retry after a flaky network
+ * Emitted once, from the successful-create branch of collectCod() only,
+ * NOT on idempotency-key replay, so an outbox retry after a flaky network
  * response never double-notifies the customer for the same collection.
  */
 export interface OrderCodCollectedPayload {
@@ -91,13 +91,13 @@ export interface OrderCodCollectedPayload {
 }
 
 /**
- * order:status_updated — customer-targeted. Dipakai oleh PATCH /orders/:id/status
- * untuk dua transisi yang sempit: PREPARING → OUT_FOR_DELIVERY
- * dan OUT_FOR_DELIVERY → DELIVERED, dilakukan driver pemilik order. Customer
+ * order:status_updated, customer-targeted. Dipakai oleh PATCH /orders/:id/status
+ * untuk dua transisi yang sempit: PREPARING jadi OUT_FOR_DELIVERY
+ * dan OUT_FOR_DELIVERY jadi DELIVERED, dilakukan driver pemilik order. Customer
  * room menerima event ini supaya OrderTrackingScreen tahu tanpa pull REST.
  *
  * Payload identik shape dengan OrderAcceptedPayload kecuali tanpa driverId
- * (transisi ini tidak mengubah driver — driver yang sama dengan order.driverId).
+ * (transisi ini tidak mengubah driver, driver yang sama dengan order.driverId).
  */
 export interface OrderStatusUpdatedPayload {
   orderId: string;

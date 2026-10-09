@@ -1,11 +1,11 @@
 /**
- * route_snapshots — cache rute terakhir untuk fallback offline.
+ * route_snapshots, cache rute terakhir untuk fallback offline.
  *
  * Setiap row = 1 snapshot rute yang berhasil di-fetch dari routing API.
  * Disimpan dengan:
- *   - origin_lat/lng, dest_lat/lng  → untuk matching (haversine 300m radius)
- *   - geometry_json → GeoJSON LineString sebagai string
- *   - fetched_at    → timestamp fetch (epoch ms). Dicatat terpisah dari
+ *   - origin_lat/lng, dest_lat/lng  jadi untuk matching (haversine 300m radius)
+ *   - geometry_json jadi GeoJSON LineString sebagai string
+ *   - fetched_at    jadi timestamp fetch (epoch ms). Dicatat terpisah dari
  *                     created_at supaya sinkron dengan waktu server.
  *
  * Retention: max 20 snapshot LRU (cleanup di src/map/routeSnapshot.ts,
@@ -23,7 +23,7 @@ export class RouteSnapshotModel extends Model {
   @text('dest_lat') destLat!: string;
   @text('dest_lng') destLng!: string;
   @text('geometry_json') geometryJson!: string;
-  /** Epoch ms — kapan routing API di-fetch. */
+  /** Epoch ms, kapan routing API di-fetch. */
   @field('fetched_at') fetchedAt!: number;
 
   @readonly @date('created_at') createdAt!: Date;

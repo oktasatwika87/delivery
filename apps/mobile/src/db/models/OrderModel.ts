@@ -20,7 +20,7 @@ export class OrderModel extends Model {
   @text('cancelled_by') cancelledBy?: string;
   @text('cancel_reason') cancelReason?: string;
 
-  // v8 — Skenario A: persisted banner signal untuk cancel-offline conflict
+  // v8, Skenario A: persisted banner signal untuk cancel-offline conflict
   @text('last_conflict_reason') lastConflictReason?: string;
   @date('last_conflict_at') lastConflictAt?: Date;
 
@@ -29,7 +29,7 @@ export class OrderModel extends Model {
 }
 
 function sanitizeItems(raw: unknown): unknown {
-  // Items adalah JSON array — sanitize saat read/write dari WatermelonDB.
+  // Items adalah JSON array, sanitize saat read/write dari WatermelonDB.
   return raw;
 }
 

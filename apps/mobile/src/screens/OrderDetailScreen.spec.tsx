@@ -1,5 +1,5 @@
 /**
- * Unit tests untuk OrderDetailScreen — cancel button visibility + behavior + outbox wiring.
+ * Unit tests untuk OrderDetailScreen, cancel button visibility + behavior + outbox wiring.
  */
 
 import React from 'react';
@@ -13,7 +13,7 @@ import { networkMonitor } from '../map/networkMonitor';
 import type { NetworkStatus } from '../map/networkMonitor';
 import type { OrderModel } from '../db/models/OrderModel';
 
-// ─── Client mocks ───────────────────────────────────────────────────────────────
+// Client mocks
 const mockUpdateOrderStatus = jest.fn();
 const mockGetOrderById = jest.fn();
 
@@ -26,7 +26,7 @@ jest.mock('../sync/client', () => {
   };
 });
 
-// ─── networkMonitor mock ────────────────────────────────────────────────────────
+// networkMonitor mock
 // mockGetStatusFn is module-level so the spy (created after jest.mock runs) can
 // still reference it. See ordersSocket.spec.ts pattern.
 var mockGetStatusFn = jest.fn(() => 'online');
@@ -49,7 +49,7 @@ jest.mock('react-native', () => {
   };
 });
 
-// ─── Navigation mock (pola sama kayak MapScreen.spec.tsx)
+// Navigation mock (pola sama kayak MapScreen.spec.tsx)
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ navigate: jest.fn() }),
   useRoute: () => ({ params: { orderId: 'order-123' } }),
@@ -61,7 +61,7 @@ jest.mock('../sync/session', () => ({
   getCurrentUserId: () => mockGetCurrentUserId(),
 }));
 
-// ─── Outbox mocks ───────────────────────────────────────────────────────────────
+// Outbox mocks
 // These are defined at module level so they can be referenced in tests
 const mockEnqueueCancel = jest.fn();
 const mockEnqueueCollectCod = jest.fn();
@@ -71,7 +71,7 @@ const mockGetPendingActionsForOrder = jest.fn();
 // Inline implementasi isPendingActionStale (sama dengan outbox.ts) supaya tes stale akurat
 // tanpa perlu jest.requireActual yang bisa gagal karena native module.
 const STALE_THRESHOLD_MS = 60 * 60 * 1000;
-// Minimal shape pending action buat test mock — hanya field yang dipakai tes.
+// Minimal shape pending action buat test mock, hanya field yang dipakai tes.
 interface MockPendingAction {
   id: string;
   createdAt: Date | number | string;
@@ -84,7 +84,7 @@ function computeIsPendingActionStale(action: MockPendingAction | null | undefine
 }
 const mockIsPendingActionStale = jest.fn().mockImplementation(computeIsPendingActionStale);
 
-// NOTE: __esModule: true is required here — OrderDetailScreen.tsx uses a
+// NOTE: __esModule: true is required here, OrderDetailScreen.tsx uses a
 // dynamic `await import('../sync/outbox')` for drainPendingActions (to avoid
 // pulling the WatermelonDB native module in statically, see coordinator.ts
 // for the same pattern). Without __esModule: true, Babel's dynamic-import
@@ -100,7 +100,7 @@ jest.mock('../sync/outbox', () => ({
   isPendingActionStale: (...args: unknown[]) => mockIsPendingActionStale(...args),
 }));
 
-// ─── WatermelonDB mock ─────────────────────────────────────────────────────────
+// WatermelonDB mock
 interface MockOrderItem {
   name: string;
   quantity: number;
@@ -174,7 +174,7 @@ const mockPaymentsCollection: any = {
   }),
 };
 
-// Mock pending_actions collection — observe terpanggil saat komponen mount
+// Mock pending_actions collection, observe terpanggil saat komponen mount
 const mockPendingActionsCollection: { query: jest.Mock } = {
   query: jest.fn().mockImplementation((_query: unknown) => ({
     observe: jest.fn().mockReturnValue({
@@ -226,7 +226,7 @@ function renderScreen() {
   );
 }
 
-// ─── Tests: Visibility ─────────────────────────────────────────
+// Tests: Visibility
 
 describe('cancel button visibility', () => {
   beforeEach(() => {
@@ -299,7 +299,7 @@ describe('cancel button visibility', () => {
   });
 });
 
-// ─── Tests: Cancel Button Behavior (Outbox) ──────────────────────────
+// Tests: Cancel Button Behavior (Outbox)
 
 describe('cancel button behavior (outbox wiring)', () => {
   let alertSpy: jest.SpyInstance;
@@ -399,7 +399,7 @@ describe('cancel button behavior (outbox wiring)', () => {
     });
 
     // order.status is unchanged by the outbox path (no local optimistic write
-    // of CANCELLED) — the button must instead be gated on hasPending (dari
+    // of CANCELLED), the button must instead be gated on hasPending (dari
     // observe). Simulasi observe fire dengan pending action agar hasPending
     // jadi true dan tombol hilang.
     await act(async () => {
@@ -411,7 +411,7 @@ describe('cancel button behavior (outbox wiring)', () => {
     expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
   });
 
-  // enqueueCancel gagal → tidak ada banner "Menunggu sinkronisasi"
+  // enqueueCancel gagal, tidak ada banner "Menunggu sinkronisasi"
   test('enqueueCancel gagal: banner "Menunggu sinkronisasi" tidak tampil', async () => {
     mockEnqueueCancel.mockResolvedValueOnce({ success: false, error: 'Tidak bisa membatalkan order.' });
 
@@ -432,7 +432,7 @@ describe('cancel button behavior (outbox wiring)', () => {
       yaButton?.onPress?.();
     });
 
-    // Observe TIDAK fire (gagal) — hasPending tetap false — banner tidak tampil
+    // Observe TIDAK fire (gagal), hasPending tetap false, banner tidak tampil
     expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
     expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
   });
@@ -483,7 +483,7 @@ describe('cancel button behavior (outbox wiring)', () => {
   });
 });
 
-// ─── Tests: COD Button Visibility ─────────────────────────────────
+// Tests: COD Button Visibility
 
 describe('COD button visibility', () => {
   beforeEach(() => {
@@ -551,7 +551,7 @@ describe('COD button visibility', () => {
   });
 });
 
-// ─── Tests: COD Button Behavior (Outbox) ────────────────────────────────
+// Tests: COD Button Behavior (Outbox)
 
 describe('COD button behavior (outbox wiring)', () => {
   let alertSpy: jest.SpyInstance;
@@ -678,7 +678,7 @@ describe('COD button behavior (outbox wiring)', () => {
   });
 });
 
-// ─── Tests: Failed Payment Banner ─────────────────────────────────────────
+// Tests: Failed Payment Banner
 
 describe('Failed Payment Banner', () => {
   beforeEach(() => {
@@ -790,7 +790,7 @@ describe('Failed Payment Banner', () => {
   });
 });
 
-// ─── Tests: Payment Observation ─────────────────────────────────────────────
+// Tests: Payment Observation
 
 describe('Payment observation', () => {
   beforeEach(() => {
@@ -847,7 +847,7 @@ describe('Payment observation', () => {
   });
 });
 
-// ─── Tests: Double-Tap Prevention ─────────────────────────────────────────
+// Tests: Double-Tap Prevention
 
 describe('Double-tap prevention', () => {
   let alertSpy: jest.SpyInstance;
@@ -911,7 +911,7 @@ describe('Double-tap prevention', () => {
   });
 });
 
-// ─── Tests: Stale Pending Action Banner ──────────────────────────────────────
+// Tests: Stale Pending Action Banner
 
 describe('Stale Pending Action Banner', () => {
   beforeEach(() => {
@@ -924,7 +924,7 @@ describe('Stale Pending Action Banner', () => {
   test('shows normal pending banner when pending action is fresh', async () => {
     Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
     const { getByText, queryByText } = renderScreen();
-    // Observe fire saat mount — trigger dengan fresh pending action (bukan stale)
+    // Observe fire saat mount, trigger dengan fresh pending action (bukan stale)
     await act(async () => {
       pendingActionsSubscriptionCallback?.([{ id: 'pending-1', createdAt: new Date() }]);
     });
@@ -994,7 +994,7 @@ describe('Stale Pending Action Banner', () => {
       expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
     });
 
-    // Pending action dihapus (misal: drain selesai) — banner hilang TANPA unmount
+    // Pending action dihapus (misal: drain selesai), banner hilang TANPA unmount
     await act(async () => {
       pendingActionsSubscriptionCallback?.([]);
     });
@@ -1004,7 +1004,7 @@ describe('Stale Pending Action Banner', () => {
   });
 });
 
-// ─── Tests: Chat / Map visibility ────────────────────────────────────────────────
+// Tests: Chat / Map visibility
 
 describe('Chat and Map button visibility', () => {
   beforeEach(() => {
@@ -1031,14 +1031,14 @@ describe('Chat and Map button visibility', () => {
   });
 });
 
-// ─── Tests: OrderConflictBanner suppression ──────────────────────────────────────
+// Tests: OrderConflictBanner suppression
 // orderConflict event dari processReject/processCancel menyebabkan banner "Status
 // diperbarui server". Kalau ada pending action, event ini terjadi karena aksi
 // driver sendiri (reject/cancel yang sukses), jadi banner dit-suppress via
 // !hasPending gate di JSX. Tidak dites di sini karena butuh syncEvents mock
-// yang lengkap — sudah ter-cover desain.
+// yang lengkap, sudah ter-cover desain.
 
-// ─── Tests: Item Price Display ─────────────────────────────────────────────────
+// Tests: Item Price Display
 
 describe('Item price display', () => {
   beforeEach(() => {
@@ -1089,7 +1089,7 @@ describe('Item price display', () => {
   });
 });
 
-// ─── Tests: Driver Status Button Visibility ─────────────────────────────────
+// Tests: Driver Status Button Visibility
 
 describe('driver status button visibility', () => {
   beforeEach(() => {
@@ -1114,7 +1114,7 @@ describe('driver status button visibility', () => {
     });
   });
 
-  // BAGIAN 3: OUT_FOR_DELIVERY→DELIVERED hanya kalau ada COD payment dan tidak ada pending
+  // BAGIAN 3: OUT_FOR_DELIVERY jadi DELIVERED hanya kalau ada COD payment dan tidak ada pending
   test('appears for OUT_FOR_DELIVERY with COD payment and no pending', async () => {
     Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
     mockPayments.push({ id: 'cod-1', orderId: 'order-123', method: PaymentMethod.CASH });
@@ -1148,7 +1148,7 @@ describe('driver status button visibility', () => {
     });
   });
 
-  // CASH FAILED harus dianggap "belum ada COD valid" — tombol Selesai diantar
+  // CASH FAILED harus dianggap "belum ada COD valid", tombol Selesai diantar
   // tidak tampil sampai ada payment CASH yang bukan FAILED (misal CAPTURED/PENDING).
   test('NOT shown for OUT_FOR_DELIVERY with only CASH FAILED payment', async () => {
     Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
@@ -1167,7 +1167,7 @@ describe('driver status button visibility', () => {
     });
   });
 
-  // Kalau ada CASH FAILED dan CASH CAPTURED, yang dihitung cuma CAPTURED — tombol tampil.
+  // Kalau ada CASH FAILED dan CASH CAPTURED, yang dihitung cuma CAPTURED, tombol tampil.
   test('appears for OUT_FOR_DELIVERY with CASH FAILED + CASH CAPTURED (CAPTURED yang menentukan)', async () => {
     Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
     mockPayments.push({ id: 'cod-failed-1', orderId: 'order-123', method: PaymentMethod.CASH, status: PaymentStatus.FAILED });
@@ -1220,7 +1220,7 @@ describe('driver status button visibility', () => {
   });
 });
 
-// ─── Tests: Driver Status Button Behavior ───────────────────────────────────
+// Tests: Driver Status Button Behavior
 
 describe('driver status button behavior', () => {
   let alertSpy: jest.SpyInstance;
@@ -1252,7 +1252,7 @@ describe('driver status button behavior', () => {
 
   test('offline: button nonaktif dengan pesan', async () => {
     Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
-    // Subscribe fires synchronously so isOnline=true from the start → button enabled.
+    // Subscribe fires synchronously so isOnline=true from the start, button enabled.
     nmSubscribeSpy = jest.spyOn(networkMonitor, 'subscribe').mockImplementation((cb: (s: NetworkStatus) => void) => {
       cb('online');
       return () => {};
@@ -1262,7 +1262,7 @@ describe('driver status button behavior', () => {
     await waitFor(() => {
       expect(getByText('Mulai antar')).toBeTruthy();
     });
-    // Press main button → confirmation alert fires
+    // Press main button, confirmation alert fires
     await act(async () => {
       fireEvent.press(getByText('Mulai antar'));
     });
@@ -1555,10 +1555,10 @@ describe('driver status button behavior', () => {
   });
 });
 
-// ─── Tests: OrderDetail re-renders on same-object next() ───────────────────────
+// Tests: OrderDetail re-renders on same-object next()
 // Bug: findAndObserve mengirim objek model yang SAMA setiap baris berubah, dan
 // setOrder(record) dengan referensi sama tidak memicu render ulang. Setelah
-// driver sukses ganti status PREPARING → OUT_FOR_DELIVERY (tulis baris lokal),
+// driver sukses ganti status PREPARING jadi OUT_FOR_DELIVERY (tulis baris lokal),
 // layar tetap menampilkan status lama sampai observer memicu render paksa.
 
 describe('OrderDetail re-renders when findAndObserve emits same object reference', () => {
@@ -1581,7 +1581,7 @@ describe('OrderDetail re-renders when findAndObserve emits same object reference
     Object.assign(mockOrder, { status: originalStatus, driverId: originalDriverId });
   });
 
-  test('status PREPARING → OUT_FOR_DELIVERY via next() yang sama: Mulai antar hilang, Terima Cash tampil', async () => {
+  test('status PREPARING jadi OUT_FOR_DELIVERY via next() yang sama: Mulai antar hilang, Terima Cash tampil', async () => {
     Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
 
     const { getByText, queryByText } = renderScreen();

@@ -1,5 +1,5 @@
 /**
- * offlineStorage — abstraction layer di atas MapLibre OfflineManager v10.2.1.
+ * offlineStorage, abstraction layer di atas MapLibre OfflineManager v10.2.1.
  *
  * Tujuan file ini:
  *   1. Bungkus API OfflineManager MapLibre dengan tipe yang konsisten &
@@ -9,7 +9,7 @@
  *      styleURL (URL, bukan Style JSON), dan state sebagai number.
  *   3. Retry otomatis saat gagal download (3x dengan exponential backoff).
  *   4. Stop-able: pause saat screen unmount (cleanup listener).
- *   5. Warning storage tipis — aggregate pack.size, threshold 200MB.
+ *   5. Warning storage tipis, aggregate pack.size, threshold 200MB.
  *
  * Pakai:
  *   import { offlineStorage, DownloadProgress } from '../map/offlineStorage';
@@ -30,38 +30,38 @@ import Config from 'react-native-config';
  * Served by tileserver-gl at /styles/bali/style.json.
  * Reaches tile server via TILE_BASE_URL (http://10.0.2.2:8080 on Android emulator).
  *
- * Note: OfflineManager.createPack() requires an HTTP(S) URL — file:// and
+ * Note: OfflineManager.createPack() requires an HTTP(S) URL, file:// and
  * asset:// schemes are rejected by maplibre-native's offline download system.
  */
 const OFFLINE_STYLE_URL = `${Config.TILE_BASE_URL}/styles/bali/style.json`;
 
-// ─── Types ──────────────────────────────────────────────────────────────
+// Types
 
-/** Bounding box: array of 2 [lng, lat] pairs — NE & SW. */
+/** Bounding box: array of 2 [lng, lat] pairs, NE & SW. */
 export type Bounds = [[number, number], [number, number]];
 
 export interface DownloadRegionInput {
-  /** Unique pack name — pack di-identify dengan string ini di v10. */
+  /** Unique pack name, pack di-identify dengan string ini di v10. */
   name: string;
   /**
-   * Bbox [[neLng, neLat], [swLng, swLat]] — first pair is NE corner
+   * Bbox [[neLng, neLat], [swLng, swLat]], first pair is NE corner
    * (larger lng, larger lat), second pair is SW corner. MapLibre v10
    * requires this positional order.
    */
   bounds: Bounds;
-  /** Default 10 — zoom level minimum yang di-download. */
+  /** Default 10, zoom level minimum yang di-download. */
   minZoom?: number;
-  /** Default 16 — zoom level maksimum. Untuk kurir, z16 cukup (level bangunan). */
+  /** Default 16, zoom level maksimum. Untuk kurir, z16 cukup (level bangunan). */
   maxZoom?: number;
 }
 
 /**
- * 0 = Inactive, 1 = Active, 2 = Complete — sesuai
+ * 0 = Inactive, 1 = Active, 2 = Complete, sesuai
  * MapLibre OfflineRegion.STATE_* di native (lihat MLRNOfflineModule.java).
  */
 export type DownloadState = 'inactive' | 'active' | 'complete';
 
-/** Snapshot ringkas dari pack — data minimal yang UI butuhkan. */
+/** Snapshot ringkas dari pack, data minimal yang UI butuhkan. */
 export interface PackInfo {
   name: string;
   bounds: Bounds;
@@ -72,7 +72,7 @@ export interface PackInfo {
   completedTileCount: number;
   /** Total size downloaded (bytes). */
   completedTileSize: number;
-  /** Resource total — kalau sudah tahu. */
+  /** Resource total, kalau sudah tahu. */
   requiredResourceCount: number;
 }
 
@@ -83,18 +83,18 @@ export type ProgressListener = (progress: DownloadProgress) => void;
 /** Listener: dipanggil saat error. */
 export type ErrorListener = (error: { message: string }) => void;
 
-// ─── Constants ──────────────────────────────────────────────────────────
+// Constants
 
 export const DEFAULT_MIN_ZOOM = 10;
-/** z16 = level bangunan. Untuk kurir delivery cukup — tidak perlu z18+ zoom ekstrem. */
+/** z16 = level bangunan. Untuk kurir delivery cukup, tidak perlu z18+ zoom ekstrem. */
 export const DEFAULT_MAX_ZOOM = 16;
 /** Tile terlalu kecil di z17+ (block-by-block), storage membengkak 4x per zoom. */
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 1_500;
-/** Warning threshold — kalau total downloaded tile > 200MB. */
+/** Warning threshold, kalau total downloaded tile > 200MB. */
 const STORAGE_WARNING_BYTES = 200 * 1024 * 1024;
 
-// ─── State mapping ──────────────────────────────────────────────────────
+// State mapping
 
 const STATE_NUMBER: Record<number, DownloadState> = {
   0: 'inactive',
@@ -102,7 +102,7 @@ const STATE_NUMBER: Record<number, DownloadState> = {
   2: 'complete',
 };
 
-/** Exported untuk unit test — map state number ke DownloadState enum. */
+/** Exported untuk unit test, map state number ke DownloadState enum. */
 export function stateFromNumber(n: number): DownloadState {
   return STATE_NUMBER[n] ?? 'inactive';
 }
@@ -110,7 +110,7 @@ export function stateFromNumber(n: number): DownloadState {
 function packInfoFromStatus(pack: OfflinePack, status: OfflinePackStatus): PackInfo {
   return {
     name: pack.name ?? status.name,
-    // v10 tidak expose bounds sebagai tipe numerik di status — ambil dari
+    // v10 tidak expose bounds sebagai tipe numerik di status, ambil dari
     // pack object (string serialized). Untuk info UI cukup ambil dari
     // metadata atau skip; UI bagian settings yang hold bounds.
     bounds: [[0, 0], [0, 0]],
@@ -122,18 +122,18 @@ function packInfoFromStatus(pack: OfflinePack, status: OfflinePackStatus): PackI
   };
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────
+// Helpers
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ─── Service ────────────────────────────────────────────────────────────
+// Service
 
 interface OfflineStorageService {
   /**
    * Download region dengan retry otomatis (3x exponential backoff).
-   * Listener dipasang permanen — listeners dihapus via unsubscribe().
+   * Listener dipasang permanen, listeners dihapus via unsubscribe().
    */
   downloadRegion(
     input: DownloadRegionInput,
@@ -148,7 +148,7 @@ interface OfflineStorageService {
   isStorageLow(): Promise<boolean>;
   /** Total downloaded tile size (bytes). */
   totalUsedBytes(): Promise<number>;
-  /** Warning sebelum download besar — return pesan kalau tipis, null kalau cukup. */
+  /** Warning sebelum download besar, return pesan kalau tipis, null kalau cukup. */
   checkStorageBeforeDownload(estimatedTiles?: number): Promise<string | null>;
 }
 
@@ -166,7 +166,7 @@ class OfflineStorageServiceImpl implements OfflineStorageService {
     while (attempt < MAX_RETRY_ATTEMPTS) {
       try {
         // Style JSON served by tileserver-gl at /styles/bali/style.json.
-        // HTTP URL required — maplibre-native's offline download system rejects file:// URLs.
+        // HTTP URL required, maplibre-native's offline download system rejects file:// URLs.
         await OfflineManager.createPack(
           {
             name: input.name,
@@ -219,7 +219,7 @@ class OfflineStorageServiceImpl implements OfflineStorageService {
         const status = await pack.status();
         results.push(packInfoFromStatus(pack, status));
       } catch {
-        // Pack might be in transition — skip silently.
+        // Pack might be in transition, skip silently.
       }
     }
     return results;
@@ -235,7 +235,7 @@ class OfflineStorageServiceImpl implements OfflineStorageService {
   }
 
   /**
-   * Heuristic check sebelum download — kalau ada pack existing yang
+   * Heuristic check sebelum download, kalau ada pack existing yang
    * sudah besar, atau ukuran estimasi di-download akan melewati
    * threshold.
    */

@@ -53,8 +53,8 @@ export class PaymentsService {
         },
       });
     } catch (err) {
-      // Unique constraint violation on idempotencyKey → record already exists.
-      // Deliberately NOT emitting order:cod_collected here — this branch is
+      // Unique constraint violation on idempotencyKey jadi record already exists.
+      // Deliberately NOT emitting order:cod_collected here, this branch is
       // reached by an outbox retry replaying the same collection, and the
       // customer was already notified on the original successful create.
       const error = err as { code?: string };
@@ -69,7 +69,7 @@ export class PaymentsService {
       throw err;
     }
 
-    // Live confirmation to the customer — order status itself doesn't change
+    // Live confirmation to the customer, order status itself doesn't change
     // (see OrdersGateway.emitOrderCodCollected doc comment), so this is a
     // notify-only emit, not a state-sync one.
     this.ordersGateway.emitOrderCodCollected(order.customerId, orderId, amountCents, order.currency);
@@ -138,7 +138,7 @@ export class PaymentsService {
 
       return this.toDomain(updated);
     } else {
-      // No existing payment record — create one marked as orphaned.
+      // No existing payment record, create one marked as orphaned.
       // This handles the case where the outbox detected orphan before any
       // payment record was ever created (e.g., collect-cod never succeeded).
       const row = await this.prisma.payment.create({

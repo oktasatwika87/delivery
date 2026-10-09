@@ -40,7 +40,7 @@ interface Props {
 
 // Exported (in addition to the default HOC-wrapped OrdersScreen below) so
 // tests can render it directly with plain-object props, bypassing the
-// withDatabase/withObservables HOC chain entirely — that chain is mocked as
+// withDatabase/withObservables HOC chain entirely, that chain is mocked as
 // an identity function in OrdersScreen.spec.tsx and doesn't actually compute
 // myOrders, so testing badge/render behavior through the wrapped export isn't
 // possible without a much more elaborate observable mock.
@@ -59,13 +59,13 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
     orderId: null,
   });
 
-  // ─── GPS location state ─────────────────────────────────────────────────────
+  // GPS location state
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
 
-  // ─── Refs for socket unsubscribe ────────────────────────────────────────────
+  // Refs for socket unsubscribe
   const unsubscribeRef = useRef<Array<() => void>>([]);
 
-  // ─── Location subscription ──────────────────────────────────────────────────
+  // Location subscription
   useEffect(() => {
     let cancelled = false;
     // Initial fix dari last-known cache
@@ -82,7 +82,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
     return () => { cancelled = true; };
   }, []);
 
-  // ─── Network monitor subscription ─────────────────────────────────────────────
+  // Network monitor subscription
   useEffect(() => {
     const unsubscribe = networkMonitor.subscribe((status) => {
       setIsOnline(status === 'online');
@@ -90,13 +90,13 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
     return unsubscribe;
   }, []);
 
-  // ─── Route service instance ─────────────────────────────────────────────────
+  // Route service instance
   const routeService = useMemo(() => {
     const provider = new GraphHopperRoutingProvider();
     return new RouteService({ routingProvider: provider, database });
   }, [database]);
 
-  // ─── Fetch available pool from REST ─────────────────────────────────────────
+  // Fetch available pool from REST
   const fetchPool = useCallback(async (): Promise<void> => {
     // Pool row = driver_id empty (null or ''), _status 'synced', no pending action.
     // Non-pool rows and rows with pending actions are never touched by fetchPool.
@@ -165,7 +165,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
           // Internal fields: not in schema, set directly on _raw.
           r._raw._status = 'synced';
           r._raw._changed = '';
-          // updated_at tetap Date.now() — sama seperti buildPoolRow.
+          // updated_at tetap Date.now(), sama seperti buildPoolRow.
           // created_at, items_json, address_json, customer_id tidak diubah.
         }),
       );
@@ -192,7 +192,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
       batch.push(database.get<OrderModel>('orders').prepareCreateFromDirtyRaw(row));
     }
 
-    // Delete pool rows not in server list — ONLY when hasMore is false.
+    // Delete pool rows not in server list, ONLY when hasMore is false.
     if (!hasMore) {
       for (const row of poolRows) {
         if (serverIds.has(row.id)) continue;
@@ -222,7 +222,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
   // Sinkronkan ref agar tes bisa memanggil langsung dari luar komponen.
   fetchPoolRef.current = fetchPool;
 
-  // ─── Initial fetch ─────────────────────────────────────────────────────────
+  // Initial fetch
   useEffect(() => {
     fetchPool();
   }, [fetchPool]);
@@ -238,7 +238,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
     };
   }, [fetchPool]);
 
-  // ─── Check pending actions for myOrders ─────────────────────────────────────
+  // Check pending actions for myOrders
   useEffect(() => {
     let cancelled = false;
     const checkPending = async () => {
@@ -264,18 +264,18 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
     return () => { cancelled = true; };
   }, [myOrders]);
 
-  // ─── Socket subscription ───────────────────────────────────────────────────
+  // Socket subscription
   useEffect(() => {
     // Clear previous unsubscribes
     unsubscribeRef.current.forEach((unsub) => unsub());
     unsubscribeRef.current = [];
 
     const onAvailable = () => {
-      console.log('[OrdersScreen] order:available — refetching pool');
+      console.log('[OrdersScreen] order:available, refetching pool');
       fetchPool();
     };
     const onUnavailable = () => {
-      console.log('[OrdersScreen] order:unavailable — refetching pool');
+      console.log('[OrdersScreen] order:unavailable, refetching pool');
       fetchPool();
     };
     // Server tidak kirim ulang event yang terlewat selama socket putus,
@@ -305,7 +305,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
     };
   }, [fetchPool]);
 
-  // ─── syncEvents subscription: orderRemovedFromView notice ─────────────────────
+  // syncEvents subscription: orderRemovedFromView notice
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -333,7 +333,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
     };
   }, []);
 
-  // ─── Pull to refresh ────────────────────────────────────────────────────────
+  // Pull to refresh
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchPool();
@@ -357,7 +357,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
     setRefreshing(false);
   }, [fetchPool, myOrders]);
 
-  // ─── Accept order ───────────────────────────────────────────────────────────
+  // Accept order
   const handleAccept = useCallback(
     async (order: OrderModel): Promise<void> => {
       if (networkMonitor.getStatus() !== 'online') {
@@ -381,7 +381,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
       } catch (err: unknown) {
         // Hanya ApiError dengan status 409 dianggap konflik (status backend
         // ConflictException, code bisa ORDER_UNAVAILABLE atau VERSION_CONFLICT).
-        // Pesan teks TIDAK lagi dicocokkan — backend kini mengirim body
+        // Pesan teks TIDAK lagi dicocokkan, backend kini mengirim body
         // { code, message } dan caller diharap pakai err.code, bukan parse pesan.
         if (err instanceof ApiError && err.status === 409) {
           Alert.alert(
@@ -416,7 +416,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
       // Remove from pool (local state)
       setPoolOrders((prev) => prev.filter((o) => o.id !== order.id));
 
-      // ─── Pre-compute route for offline-ready ───────────────────────────────
+      // Pre-compute route for offline-ready
       if (networkMonitor.getStatus() === 'online' && currentLocation) {
         const addressJson = order.addressJson as { coordinates?: [number, number] } | null;
         if (addressJson?.coordinates && addressJson.coordinates.length === 2) {
@@ -434,7 +434,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
   // Sinkronkan ref agar tes bisa memanggil langsung dari luar komponen.
   handleAcceptRef.current = handleAccept;
 
-  // ─── Section data ──────────────────────────────────────────────────────────
+  // Section data
   const sections: SectionData[] = [
     { title: 'Tersedia', data: poolOrders },
     { title: 'Order Saya', data: myOrders },
@@ -514,7 +514,7 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
   );
 }
 
-// ─── HOC: withObservables dengan triggerProps ['currentUserId'] ───────────────────
+// HOC: withObservables dengan triggerProps ['currentUserId']
 // currentUserId di-pass sebagai trigger prop ke withObservables.
 // Saat currentUserId berubah, observable myOrders akan re-query.
 const OrdersScreenWithObservables = withDatabase(
@@ -535,8 +535,8 @@ const OrdersScreenWithObservables = withDatabase(
   )(OrdersScreenBase),
 );
 
-// ─── Wrapper: resolve currentUserId sebelum render ─────────────────────────────────
-// Props explicit agar database flow dari test → wrapper → observables
+// Wrapper: resolve currentUserId sebelum render
+// Props explicit agar database flow dari test, wrapper, observables
 interface WrapperProps {
   database: Database;
 }

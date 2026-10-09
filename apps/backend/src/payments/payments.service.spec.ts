@@ -159,7 +159,7 @@ describe('PaymentsService', () => {
       // create should have been called once (and failed), findUnique called once to get existing
       expect(mockPrisma.payment.create).toHaveBeenCalledTimes(1);
       expect(mockPrisma.payment.findUnique).toHaveBeenCalledTimes(1);
-      // Replay path must NOT re-notify the customer — they were already
+      // Replay path must NOT re-notify the customer, they were already
       // notified on the original successful collection.
       expect(mockOrdersGateway.emitOrderCodCollected).not.toHaveBeenCalled();
     });

@@ -1,8 +1,8 @@
 /**
- * Unit tests untuk ordersSocket.ts — OrdersSocketManager
+ * Unit tests untuk ordersSocket.ts, OrdersSocketManager
  *
  * Pattern: SATU mockSocket instance, state di-reset tiap beforeEach
- * connect() itu ASYNC — perlu flush microtask queue
+ * connect() itu ASYNC, perlu flush microtask queue
  */
 
 // Module-level mock state
@@ -37,7 +37,7 @@ jest.mock('socket.io-client', () => ({
   io: jest.fn(function(url: string, options: any) {
     // Clear handlers dari socket instance sebelumnya. Real socket.io
     // punya handlers per-instance (ter-isolasi), tapi mock ini singleton
-    // jadi handler accumulate. Clear manual untuk mirror real behavior —
+    // jadi handler accumulate. Clear manual untuk mirror real behavior,
     // supaya handler dari old socket gak fire di new socket (yang sebelumnya
     // bug Limitation 1: saat reconnect_failed trigger recreate, handler
     // 'connect' dari old socket masih di Set dan bakal clear connectResolve
@@ -61,9 +61,9 @@ function trigger(event: string, ...args: any[]) {
     isConnected = true;
   } else if (event === 'disconnect') {
     // Mirror real socket.io: socket.connected = false setelah disconnect event.
-    // Tanpa reset ini, mockSocket.connected tetap true → connect() berikutnya
+    // Tanpa reset ini, mockSocket.connected tetap true, connect() berikutnya
     // bakal early-return dan io() TIDAK dipanggil ulang, jadi test transisi
-    // reconnection config (3 → Infinity) bakal fail.
+    // reconnection config (3 jadi Infinity) bakal fail.
     isConnected = false;
   }
 }
@@ -73,7 +73,7 @@ describe('OrdersSocketManager', () => {
   var getCurrentTokenMock: jest.Mock;
 
   beforeEach(async () => {
-    // 1. Reset module cache — singleton
+    // 1. Reset module cache, singleton
     jest.resetModules();
 
     // 2. Reset mock state
@@ -457,8 +457,8 @@ describe('OrdersSocketManager', () => {
       expect(() => ordersSocket.disconnect()).not.toThrow();
     });
 
-    test('disconnect() saat _doConnectAsync in-flight — async work bail, no socket created (race fix)', async () => {
-      // Override getCurrentToken untuk delay resolution — biar _doConnectAsync
+    test('disconnect() saat _doConnectAsync in-flight, async work bail, no socket created (race fix)', async () => {
+      // Override getCurrentToken untuk delay resolution, biar _doConnectAsync
       // suspended di await token, kita bisa disconnect() di tengah-tengah.
       var resolveToken: ((token: string | null) => void) | null = null;
       getCurrentTokenMock.mockImplementation(function() {
@@ -469,14 +469,14 @@ describe('OrdersSocketManager', () => {
 
       var promise = ordersSocket.connect();
 
-      // Async work masih pending — io() belum dipanggil
+      // Async work masih pending, io() belum dipanggil
       expect(ioCallHistory.length).toBe(0);
 
       // User disconnect saat _doConnectAsync suspended di await token.
       // Generation counter increment, connectPromise di-reject.
       ordersSocket.disconnect();
 
-      // Resolve token — _doConnectAsync resume, gen check fails, bail
+      // Resolve token, _doConnectAsync resume, gen check fails, bail
       // tanpa overwrite this.socket atau mutate state.
       resolveToken!('test-token');
 
@@ -484,19 +484,19 @@ describe('OrdersSocketManager', () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      // io() HARUS gak dipanggil — _doConnectAsync bail sebelum call io()
+      // io() HARUS gak dipanggil, _doConnectAsync bail sebelum call io()
       // karena gen !== this.generation (stale).
       expect(ioCallHistory.length).toBe(0);
 
       // Promise HARUS rejected (existing behavior preserved)
       await expect(promise).rejects.toThrow('Disconnected before connection established');
 
-      // State HARUS bersih — this.socket null, this.isConnected false
+      // State HARUS bersih, this.socket null, this.isConnected false
       expect(ordersSocket.isConnected).toBe(false);
     });
 
-    test('multiple connect()-disconnect()-connect() cycles — generation invalidates stale async', async () => {
-      // Cycle 1: connect → disconnect mid-async → no socket created
+    test('multiple connect()-disconnect()-connect() cycles, generation invalidates stale async', async () => {
+      // Cycle 1: connect, disconnect mid-async, no socket created
       var resolveToken1: ((token: string | null) => void) | null = null;
       getCurrentTokenMock.mockImplementationOnce(function() {
         return new Promise<string | null>(function(resolve) {
@@ -512,14 +512,14 @@ describe('OrdersSocketManager', () => {
       expect(ioCallHistory.length).toBe(0);
 
       // Cycle 2: connect (token now resolves normally via beforeEach setup)
-      // → async creates socket → io() called
+      // (lanjut), async creates socket, io() called
       var promise2 = ordersSocket.connect();
       await Promise.resolve();
       await Promise.resolve();
       trigger('connect');
       await promise2;
 
-      // io() dipanggil 1x untuk cycle 2 — cycle 1 di-bail
+      // io() dipanggil 1x untuk cycle 2, cycle 1 di-bail
       expect(ioCallHistory.length).toBe(1);
       expect(ordersSocket.wasEverConnected).toBe(true);
     });
@@ -792,10 +792,10 @@ describe('OrdersSocketManager', () => {
   });
 });
 
-// File ini script (no top-level imports/exports) secara default → TS2393
+// File ini script (no top-level imports/exports) secara default ke TS2393
 // duplicate function implementation bakal fire waktu ada file script
 // lain di project yang declare function dengan nama sama (e.g.
 // socket.spec.ts juga punya `function trigger`). export {} di bawah
-// ini bikin file jadi module → function jadi module-scoped, gak
+// ini bikin file jadi module ke function jadi module-scoped, gak
 // collision lagi. Test body gak berubah.
 export {};

@@ -1,9 +1,9 @@
 /**
  * Domain: Order
  *
- * Alur status: PENDING -> CONFIRMED -> PREPARING -> OUT_FOR_DELIVERY
- *           -> DELIVERED
- *           -or-> CANCELLED (bisa dari status manapun sebelum DELIVERED)
+ * Alur status: PENDING ke CONFIRMED ke PREPARING ke OUT_FOR_DELIVERY
+ *           ke DELIVERED
+ *           -or- ke CANCELLED (bisa dari status manapun sebelum DELIVERED)
  */
 
 export const OrderStatus = {
@@ -33,7 +33,7 @@ export interface DeliveryAddress {
   street: string;
   city: string;
   postalCode: string;
-  /** [lng, lat] — konsisten dengan GeoJSON convention. */
+  /** [lng, lat], konsisten dengan GeoJSON convention. */
   coordinates?: [number, number];
   /** Index signature untuk type compatibility dengan Prisma Json fields (InputJsonValue | null). */
   [key: string]: string | number | boolean | object | null | undefined;
@@ -52,12 +52,12 @@ export interface Order {
   totalCents: number;
   currency: string; // ISO 4217: 'IDR', 'USD', dll
 
-  /** Catatan driver/customer — digunakan untuk chat cepat terkait order ini. */
+  /** Catatan driver/customer, digunakan untuk chat cepat terkait order ini. */
   notes?: string;
 
   createdAt: string; // ISO 8601
   updatedAt: string;
-  /** Optimistic concurrency control — backend reject update kalau client kirim value lama. */
+  /** Optimistic concurrency control, backend reject update kalau client kirim value lama. */
   version: number;
 
   /** Driver yang cancel order ini (via cancel mid-delivery). */
@@ -73,7 +73,7 @@ export interface CreateOrderInput {
   notes?: string;
 }
 
-/** Valid state transitions — dipakai oleh backend validator. */
+/** Valid state transitions, dipakai oleh backend validator. */
 export const ORDER_ALLOWED_TRANSITIONS: Readonly<Record<OrderStatus, readonly OrderStatus[]>> = {
   PENDING: [OrderStatus.CONFIRMED, OrderStatus.CANCELLED],
   CONFIRMED: [OrderStatus.ASSIGNED, OrderStatus.CANCELLED],

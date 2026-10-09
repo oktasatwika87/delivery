@@ -1,8 +1,8 @@
 /**
  * Socket.IO client manager untuk chat real-time.
  *
- * - Singleton pattern — satu instance di seluruh app
- * - connect() / disconnect() eksplisit — tidak auto-connect saat import
+ * - Singleton pattern, satu instance di seluruh app
+ * - connect() / disconnect() eksplisit, tidak auto-connect saat import
  * - Event listener untuk 'new_message', 'connect', 'disconnect', 'connect_error'
  *
  * Reconnection strategy (offline-first):
@@ -107,7 +107,7 @@ class ChatSocketManager {
   }
 
   /**
-   * Async connection logic — called by connect() but runs after connect() returns.
+   * Async connection logic, called by connect() but runs after connect() returns.
    * Separating this from connect() ensures promise identity:
    * - connect() returns synchronously with the promise
    * - Multiple connect() calls see the same in-progress promise
@@ -172,7 +172,7 @@ class ChatSocketManager {
 
         // Detect token-related auth failure
         if (err.message && /jwt|unauthorized|token expired|invalid token/i.test(err.message)) {
-          console.warn('[ChatSocket] auth-related connect_error — emitting auth-expired');
+          console.warn('[ChatSocket] auth-related connect_error, emitting auth-expired');
           syncEvents.emit('auth-expired', { source: 'chat-socket' });
         }
       });
@@ -192,7 +192,7 @@ class ChatSocketManager {
       this.connectPromise = null;
       this.connectResolve = null;
       this.connectReject = null;
-      // Don't re-throw — _doConnectAsync() is called without await from connect(),
+      // Don't re-throw, _doConnectAsync() is called without await from connect(),
       // so throwing would become an unhandled rejection that crashes Node.
       // The promise is already rejected via connectReject, so caller await sees it.
       return;
@@ -201,7 +201,7 @@ class ChatSocketManager {
 
   /**
    * Disconnect dari WebSocket server secara sengaja.
-   * Panggil ini saat logout/unmount — akan mencegah auto-reconnect.
+   * Panggil ini saat logout/unmount, akan mencegah auto-reconnect.
    */
   disconnect(): void {
     if (this.socket) {
@@ -252,7 +252,7 @@ class ChatSocketManager {
     acknowledgment?: (response: R) => void,
   ): void {
     if (!this.socket?.connected) {
-      console.warn('[ChatSocket] not connected — cannot emit', event);
+      console.warn('[ChatSocket] not connected, cannot emit', event);
       return;
     }
     this.socket.emit(event, payload, acknowledgment);

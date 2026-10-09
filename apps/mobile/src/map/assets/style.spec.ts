@@ -1,5 +1,5 @@
 /**
- * Unit tests untuk style.ts — vector source url harus TileJSON, bukan style JSON.
+ * Unit tests untuk style.ts, vector source url harus TileJSON, bukan style JSON.
  */
 
 import { TILE_STYLE, TILE_STYLE_URL, TILE_TILEJSON_URL } from './style';

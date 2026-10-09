@@ -2,11 +2,11 @@
  * Unit tests untuk routeService.ts
  *
  * Test scenarios:
- * 1. Online + fetch sukses → return rute baru + snapshot tersimpan
- * 2. Online tapi fetch gagal + ada snapshot match → return snapshot dengan isFromCache
- * 3. Offline + ada snapshot match → return snapshot dengan isFromCache (tanpa fetch)
- * 4. Offline + tidak ada snapshot match → return error yang jelas
- * 5. Fetch sukses tapi origin/dest di luar 300m dari snapshot manapun → simpan sebagai
+ * 1. Online + fetch sukses jadi return rute baru + snapshot tersimpan
+ * 2. Online tapi fetch gagal + ada snapshot match jadi return snapshot dengan isFromCache
+ * 3. Offline + ada snapshot match jadi return snapshot dengan isFromCache (tanpa fetch)
+ * 4. Offline + tidak ada snapshot match jadi return error yang jelas
+ * 5. Fetch sukses tapi origin/dest di luar 300m dari snapshot manapun jadi simpan sebagai
  *    snapshot baru terpisah (bukan overwrite)
  */
 
@@ -18,7 +18,7 @@ import { RouteService, RouteUnavailableError } from './routeService';
 import { InvalidConfigError } from './routing';
 import type { Route, RouteRequest, RoutingProvider } from './routing';
 
-// ─── Mock types & helpers ────────────────────────────────────────────────────
+// Mock types & helpers
 
 interface MockRoutingProvider extends RoutingProvider {
   getRoute: jest.MockedFunction<(req: RouteRequest) => Promise<Route>>;
@@ -73,7 +73,7 @@ function createMockSnapshot(
   };
 }
 
-// ─── Test setup ──────────────────────────────────────────────────────────────
+// Test setup
 
 describe('RouteService', () => {
   let mockDb: jest.MockedObject<Database>;
@@ -246,7 +246,7 @@ describe('RouteService', () => {
     });
 
     describe('InvalidConfigError handling', () => {
-      test('InvalidConfigError + ada snapshot → fallback + console.error logged', async () => {
+      test('InvalidConfigError + ada snapshot jadi fallback + console.error logged', async () => {
         // Arrange: network online
         jest.spyOn(networkMonitor, 'getStatus').mockReturnValue('online');
 
@@ -277,7 +277,7 @@ describe('RouteService', () => {
         consoleSpy.mockRestore();
       });
 
-      test('InvalidConfigError + tidak ada snapshot → throw RouteUnavailableError dengan root cause', async () => {
+      test('InvalidConfigError + tidak ada snapshot jadi throw RouteUnavailableError dengan root cause', async () => {
         // Arrange: network online
         jest.spyOn(networkMonitor, 'getStatus').mockReturnValue('online');
 
@@ -316,7 +316,7 @@ describe('RouteService', () => {
   });
 });
 
-// ─── snapshotToRoute conversion ───────────────────────────────────────────────
+// snapshotToRoute conversion
 
 describe('RouteService snapshotToRoute', () => {
   let mockDb: jest.MockedObject<Database>;

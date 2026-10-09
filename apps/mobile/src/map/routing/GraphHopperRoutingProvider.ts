@@ -1,11 +1,11 @@
 /**
- * GraphHopperRoutingProvider — implementasi RoutingProvider via GraphHopper Directions API.
+ * GraphHopperRoutingProvider, implementasi RoutingProvider via GraphHopper Directions API.
  *
  * Pakai free tier GraphHopper API (https://graphhopper.com).
  * API key dibaca dari react-native-config (GRAPHHOPPER_API_KEY).
  *
  * Catatan desain:
- *   - Timeout 10 detik — jangan hang kalau API lambat/down.
+ *   - Timeout 10 detik, jangan hang kalau API lambat/down.
  *   - Throw Error dengan pesan actionable untuk semua failure case.
  *   - Geometry dikembalikan sebagai GeoJSON LineString [lng, lat].
  *   - Caller (routeSnapshot service) akan catch + fallback ke snapshot.
@@ -76,7 +76,7 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
   } catch (err) {
     clearTimeout(timeoutId);
     if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('GraphHopper request timeout — API lambat atau tidak reachable');
+      throw new Error('GraphHopper request timeout, API lambat atau tidak reachable');
     }
     throw err;
   }
@@ -141,13 +141,13 @@ export class GraphHopperRoutingProvider implements RoutingProvider {
       response = await fetchWithTimeout(url, this.timeoutMs);
     } catch (err) {
       if (err instanceof TypeError && err.message.includes('Network request failed')) {
-        throw new Error('Network error — cek koneksi internet atau VPN.');
+        throw new Error('Network error, cek koneksi internet atau VPN.');
       }
       throw err;
     }
 
     if (!response.ok) {
-      // 401/403 = invalid/revoked API key — config error, bukan transient
+      // 401/403 = invalid/revoked API key, config error, bukan transient
       if (response.status === 401 || response.status === 403) {
         throw new InvalidConfigError(
           `GraphHopper API unauthorized (HTTP ${response.status}). ` +
@@ -173,7 +173,7 @@ export class GraphHopperRoutingProvider implements RoutingProvider {
     }
 
     if (!data.paths || data.paths.length === 0) {
-      throw new Error('No route found — pastikan origin & destination valid.');
+      throw new Error('No route found, pastikan origin & destination valid.');
     }
 
     const path = data.paths[0];

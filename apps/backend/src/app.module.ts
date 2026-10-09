@@ -16,7 +16,7 @@ import { EmailModule } from './email/email.module';
     ConfigModule.forRoot({ isGlobal: true }),
     // Serve static files (future CDN assets, app manifests, etc.)
     // Accessible at /static/. The offline map style is now self-hosted
-    // via tileserver-gl — see TILE_BASE_URL in mobile/.env.development.
+    // via tileserver-gl, see TILE_BASE_URL in mobile/.env.development.
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'public'),
       serveRoot: '/static',

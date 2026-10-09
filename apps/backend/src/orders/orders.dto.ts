@@ -102,7 +102,7 @@ export class DeliveryAddressDto {
   @IsNotEmpty({ message: 'Postal code is required' })
   postalCode!: string;
 
-  /** [lng, lat] — konsisten dengan GeoJSON convention. */
+  /** [lng, lat], konsisten dengan GeoJSON convention. */
   @IsOptional()
   @IsLngLatTuple()
   coordinates?: [number, number];
@@ -132,13 +132,13 @@ export class CreateOrderDto {
 /**
  * Request body untuk PATCH /orders/:id/status.
  *
- * Endpoint ini mempersempit — hanya menerima dua transisi:
- * PREPARING → OUT_FOR_DELIVERY dan OUT_FOR_DELIVERY → DELIVERED,
+ * Endpoint ini mempersempit, hanya menerima dua transisi:
+ * PREPARING jadi OUT_FOR_DELIVERY dan OUT_FOR_DELIVERY jadi DELIVERED,
  * dilakukan driver pemilik order. ValidationPipe global di main.ts
  * mengembalikan 400 untuk body yang tidak lolos aturan di sini.
  *
  * Status di sini adalah full OrderStatus enum (bukan hanya dua nilai yang
- * diizinkan) — controller yang menyempitkan ke dua nilai, sehingga
+ * diizinkan), controller yang menyempitkan ke dua nilai, sehingga
  * respons 403 untuk target lain seragam dengan pola cancel/reject.
  */
 export class UpdateOrderStatusDto {

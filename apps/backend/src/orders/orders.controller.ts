@@ -63,17 +63,17 @@ export class OrdersController {
   }
 
   /**
-   * PATCH /orders/:id/status — driver pemilik order meng-update status
+   * PATCH /orders/:id/status, driver pemilik order meng-update status
    * order-nya. Hanya dua transisi yang diizinkan:
-   * PREPARING → OUT_FOR_DELIVERY dan OUT_FOR_DELIVERY → DELIVERED.
+   * PREPARING jadi OUT_FOR_DELIVERY dan OUT_FOR_DELIVERY jadi DELIVERED.
    *
    * Urutan cek penuh ada di OrdersService.transitionStatus doc comment.
-   * - DTO (status enum OrderStatus, version int min 1) → 400 oleh ValidationPipe global
-   * - role !== DRIVER → 403 di sini
+   * - DTO (status enum OrderStatus, version int min 1) jadi 400 oleh ValidationPipe global
+   * - role !== DRIVER jadi 403 di sini
    * - Sisa cek (404/403/409) dilakukan di service
    *
    * POLA: throw ForbiddenException dengan kode generik ('Only drivers can
-   * update order status'), sama seperti handler cancel/reject — bukan
+   * update order status'), sama seperti handler cancel/reject, bukan
    * bocor kode spesifik kenapa ditolak.
    */
   @Patch(':id/status')

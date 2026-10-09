@@ -1,5 +1,5 @@
 /**
- * MapSettingsScreen — manage offline regions.
+ * MapSettingsScreen, manage offline regions.
  *
  * Fungsi:
  *   - Lihat daftar pack yang sudah ter-download (nama + ukuran + state).
@@ -8,7 +8,7 @@
  *
  * Pola: functional component + withDatabase. Observe lewat offlineStorage.listPacks().
  * Tidak observe WatermelonDB table karena data offline region tidak di-cache
- * di sana — pack info langsung dari native layer (MapLibre OfflineManager).
+ * di sana, pack info langsung dari native layer (MapLibre OfflineManager).
  */
 
 import React, { useEffect, useState, useCallback } from 'react';

@@ -1,8 +1,8 @@
 /**
  * Socket.IO client manager untuk orders real-time.
  *
- * - Singleton pattern — satu instance di seluruh app
- * - connect() / disconnect() eksplisit — tidak auto-connect saat import
+ * - Singleton pattern, satu instance di seluruh app
+ * - connect() / disconnect() eksplisit, tidak auto-connect saat import
  * - Event listener untuk 'orderAvailable', 'orderUnavailable', 'connect', 'disconnect', 'connect_error'
  *
  * Reconnection strategy (offline-first):
@@ -101,7 +101,7 @@ class OrdersSocketManager {
   private hasEverConnected = false;
 
   /**
-   * Generation counter — incremented setiap connect() atau disconnect().
+   * Generation counter, incremented setiap connect() atau disconnect().
    * Async _doConnectAsync(gen) track gen-nya, dan BAIL kalo sudah stale
    * (mis. user disconnect() di tengah-tengah async token fetch).
    * Tanpa ini, _doConnectAsync yang suspended bisa resume dan overwrite
@@ -160,7 +160,7 @@ class OrdersSocketManager {
   }
 
   /**
-   * Async connection logic — called by connect() but runs after connect() returns.
+   * Async connection logic, called by connect() but runs after connect() returns.
    * Separating this from connect() ensures promise identity:
    * - connect() returns synchronously with the promise
    * - Multiple connect() calls see the same in-progress promise
@@ -227,7 +227,7 @@ class OrdersSocketManager {
 
         // Detect token-related auth failure
         if (err.message && /jwt|unauthorized|token expired|invalid token/i.test(err.message)) {
-          console.warn('[OrdersSocket] auth-related connect_error — emitting auth-expired');
+          console.warn('[OrdersSocket] auth-related connect_error, emitting auth-expired');
           syncEvents.emit('auth-expired', { source: 'orders-socket' });
         }
       });
@@ -255,14 +255,14 @@ class OrdersSocketManager {
         this.emit('orderCancelled', payload);
       });
 
-      // Live payment confirmation only — order status doesn't change, so
+      // Live payment confirmation only, order status doesn't change, so
       // there's no version field to reconcile here (see order-events.ts).
       this.socket.on('order:cod_collected', (payload: OrderCodCollectedPayload) => {
         this.emit('orderCodCollected', payload);
       });
 
-      // order:status_updated — customer-targeted live status update from
-      // PATCH /orders/:id/status (PREPARING→OUT_FOR_DELIVERY, OUT_FOR_DELIVERY→DELIVERED).
+      // order:status_updated, customer-targeted live status update from
+      // PATCH /orders/:id/status (PREPARING jadi OUT_FOR_DELIVERY, OUT_FOR_DELIVERY jadi DELIVERED).
       this.socket.on('order:status_updated', (payload: OrderStatusUpdatedPayload) => {
         this.emit('orderStatusUpdated', payload);
       });
@@ -277,7 +277,7 @@ class OrdersSocketManager {
       this.connectPromise = null;
       this.connectResolve = null;
       this.connectReject = null;
-      // Don't re-throw — _doConnectAsync() is called without await from connect(),
+      // Don't re-throw, _doConnectAsync() is called without await from connect(),
       // so throwing would become an unhandled rejection that crashes Node.
       // The promise is already rejected via connectReject, so caller await sees it.
       return;
@@ -286,7 +286,7 @@ class OrdersSocketManager {
 
   /**
    * Disconnect dari WebSocket server secara sengaja.
-   * Panggil ini saat logout/unmount — akan mencegah auto-reconnect.
+   * Panggil ini saat logout/unmount, akan mencegah auto-reconnect.
    *
    * Increment generation untuk invalidate any in-flight _doConnectAsync.
    * Tanpa ini, suspended async work bisa resume dan overwrite this.socket
@@ -341,7 +341,7 @@ class OrdersSocketManager {
 
   /**
    * Subscribe ke order:accepted event (customer-side).
-   * Fire ketika driver accept order customer — tracking screen update
+   * Fire ketika driver accept order customer, tracking screen update
    * status ke PREPARING + set driverId.
    */
   onOrderAccepted(callback: (payload: OrderAcceptedPayload) => void): () => void {
@@ -369,7 +369,7 @@ class OrdersSocketManager {
 
   /**
    * Subscribe ke order:cod_collected event (customer-side).
-   * Fire ketika driver collect COD — order status TIDAK berubah, ini murni
+   * Fire ketika driver collect COD, order status TIDAK berubah, ini murni
    * live confirmation pembayaran (mis. tampilkan toast/receipt di tracking
    * screen), bukan sinyal untuk update status order.
    */
@@ -379,8 +379,8 @@ class OrdersSocketManager {
 
   /**
    * Subscribe ke order:status_updated event (customer-side).
-   * Fire ketika driver update status order — PREPARING→OUT_FOR_DELIVERY
-   * atau OUT_FOR_DELIVERY→DELIVERED.
+   * Fire ketika driver update status order, PREPARING jadi OUT_FOR_DELIVERY
+   * atau OUT_FOR_DELIVERY jadi DELIVERED.
    */
   onOrderStatusUpdated(callback: (payload: OrderStatusUpdatedPayload) => void): () => void {
     return this.on<OrderStatusUpdatedPayload>('orderStatusUpdated', callback);

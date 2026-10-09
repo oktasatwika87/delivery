@@ -1,7 +1,7 @@
 /**
- * Smoke test untuk OrdersScreen — verify component mounts without errors.
+ * Smoke test untuk OrdersScreen, verify component mounts without errors.
  *
- * Full render test dengan async HOC chain (getCurrentUserId → withObservables →
+ * Full render test dengan async HOC chain (getCurrentUserId, withObservables,
  * fetchPool) sulit diisolasi di Jest tanpa integration setup yang kompleks.
  * Test ini cukup memastikan component tidak throw saat mount dengan mock data.
  */
@@ -9,13 +9,13 @@
 import React from 'react';
 import { render, waitFor } from '@testing-library/react-native';
 
-// ─── Mock @nozbe/watermelondb/react SEBELUM import component ──────────────
+// Mock @nozbe/watermelondb/react SEBELUM import component
 jest.mock('@nozbe/watermelondb/react', () => ({
   withDatabase: (C: any) => C,
   withObservables: (_trigger: any, _getObs: any) => (C: any) => C,
 }));
 
-// ─── Mock Alert ────────────────────────────────────────────────────────────────
+// Mock Alert
 jest.mock('react-native', () => {
   const RN = jest.requireActual('react-native');
   return {
@@ -33,17 +33,17 @@ jest.mock('@nozbe/watermelondb', () => ({
   },
 }));
 
-// ─── Mock Config ───────────────────────────────────────────────────────────────
+// Mock Config
 jest.mock('react-native-config', () => ({
   default: { API_BASE_URL: 'http://localhost:3000' },
 }));
 
-// ─── Mock session ────────────────────────────────────────────────────────────
+// Mock session
 jest.mock('../sync/session', () => ({
   getCurrentUserId: () => Promise.resolve('driver-123'),
 }));
 
-// ─── Mock API client ─────────────────────────────────────────────────────────
+// Mock API client
 // Must use require.resolve to ensure correct module path
 jest.mock('../sync/client', () => {
   // Define a minimal error class for the instanceof check in catch block
@@ -57,13 +57,13 @@ jest.mock('../sync/client', () => {
     fetchAvailableOrders: jest.fn().mockResolvedValue({ items: [], hasMore: false }),
     UnauthorizedError,
     acceptOrder: jest.fn(),
-    // Ambil ApiError dari modul asli — dipakai oleh OrdersScreen.tsx
+    // Ambil ApiError dari modul asli, dipakai oleh OrdersScreen.tsx
     // untuk `err instanceof ApiError` di catch handleAccept.
     ApiError: jest.requireActual('../sync/client').ApiError,
   };
 });
 
-// ─── Mock ordersSocket ────────────────────────────────────────────────────────
+// Mock ordersSocket
 // Simpan semua callback yang didaftarkan lewat ordersSocket.on(...) per event,
 // supaya tes bisa memanggilnya sendiri untuk meniru event 'connect' dari socket.
 // Namanya diawali mock karena jest.mock factory hanya boleh memakai variabel
@@ -84,7 +84,7 @@ jest.mock('../sync/ordersSocket', () => ({
   },
 }));
 
-// ─── Mock navigation ───────────────────────────────────────────────────────
+// Mock navigation
 jest.mock('@react-navigation/native', () => ({
   NavigationContainer: ({ children }: { children: React.ReactNode }) => children,
   useNavigation: () => ({
@@ -92,14 +92,14 @@ jest.mock('@react-navigation/native', () => ({
   }),
 }));
 
-// ─── Mock routing provider untuk route pre-compute ───────────────────────────
+// Mock routing provider untuk route pre-compute
 jest.mock('../map/routing', () => ({
   GraphHopperRoutingProvider: jest.fn().mockImplementation(() => ({
     getRoute: jest.fn().mockResolvedValue({ distance: 1000, duration: 300 }),
   })),
 }));
 
-// ─── Mock location service ────────────────────────────────────────────────────
+// Mock location service
 jest.mock('../map/location', () => ({
   locationService: {
     getLastKnown: jest.fn().mockResolvedValue(null),
@@ -107,7 +107,7 @@ jest.mock('../map/location', () => ({
   },
 }));
 
-// ─── Mock network monitor ─────────────────────────────────────────────────────
+// Mock network monitor
 jest.mock('../map/networkMonitor', () => ({
   networkMonitor: {
     getStatus: jest.fn().mockReturnValue('online'),
@@ -115,7 +115,7 @@ jest.mock('../map/networkMonitor', () => ({
   },
 }));
 
-// ─── Mock sync coordinator ─────────────────────────────────────────────────
+// Mock sync coordinator
 jest.mock('../sync', () => ({
   syncCoordinator: {
     start: jest.fn().mockResolvedValue(undefined),
@@ -125,7 +125,7 @@ jest.mock('../sync', () => ({
   },
 }));
 
-// ─── Mock outbox ──────────────────────────────────────────────────────────────
+// Mock outbox
 const mockHasPendingAction = jest.fn();
 const mockHasStalePendingAction = jest.fn();
 jest.mock('../sync/outbox', () => ({
@@ -134,7 +134,7 @@ jest.mock('../sync/outbox', () => ({
   hasStalePendingAction: (...args: unknown[]) => mockHasStalePendingAction(...args),
 }));
 
-// ─── Mock WatermelonDB ──────────────────────────────────────────────────────
+// Mock WatermelonDB
 const mockOrdersCollection = {
   query: jest.fn().mockReturnValue({
     fetch: jest.fn().mockResolvedValue([]),
@@ -158,11 +158,11 @@ const mockDatabase = {
   batch: mockBatch,
 };
 
-// ─── Import after mocks ───────────────────────────────────────────────────────
+// Import after mocks
 import { OrdersScreen, OrdersScreenBase } from './OrdersScreen';
 import { fetchAvailableOrders } from '../sync/client';
 
-// Plain-object order stand-ins for OrdersScreenBase's myOrders prop — the
+// Plain-object order stand-ins for OrdersScreenBase's myOrders prop, the
 // component only reads plain properties (id/status/totalCents/currency) in
 // renderItem, no WatermelonDB model methods, so these don't need to be real
 // OrderModel instances.
@@ -196,7 +196,7 @@ describe('OrdersScreen smoke test', () => {
     let error: Error | null = null;
 
     try {
-      // Render synchronously — async HOC chain causes loading state but doesn't throw
+      // Render synchronously, async HOC chain causes loading state but doesn't throw
       const { UNSAFE_root } = render(<OrdersScreen database={mockDatabase as never} />);
       // Access root to prevent "unused variable" warning
       expect(UNSAFE_root).toBeTruthy();
@@ -209,7 +209,7 @@ describe('OrdersScreen smoke test', () => {
 
   test('fetchPool uses prepareCreateFromDirtyRaw with batch for new orders', async () => {
     // Regression test: verify the CORRECT WatermelonDB pattern for custom ID.
-    // Old buggy pattern: create() with _raw.id override — causes corrupt rows.
+    // Old buggy pattern: create() with _raw.id override, causes corrupt rows.
     // Correct pattern: prepareCreateFromDirtyRaw + database.batch().
     const poolItems = [
       { orderId: 'order-custom-1', totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z', version: 7 },
@@ -281,7 +281,7 @@ describe('OrdersScreen smoke test', () => {
   });
 
   test('fetchPool handles array with only null orderId items gracefully', async () => {
-    // Edge case: all items have null orderId — should not crash
+    // Edge case: all items have null orderId, should not crash
     const allNullOrderId = [
       { orderId: null, totalCents: 25000, currency: 'IDR', itemsCount: 2, createdAt: '2024-01-01T00:00:00Z', version: 7 },
       { orderId: undefined, totalCents: 30000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z', version: 7 },
@@ -336,12 +336,12 @@ describe('OrdersScreen smoke test', () => {
   });
 });
 
-// ─── Pending action badge (Fase 2 outbox wiring) ───────────────────────────
+// Pending action badge (Fase 2 outbox wiring)
 //
 // Rendered via OrdersScreenBase directly (bypassing the withDatabase/
 // withObservables-wrapped OrdersScreen export) because the
 // '@nozbe/watermelondb/react' mock above treats withObservables as an
-// identity HOC that never actually computes myOrders — so myOrders is
+// identity HOC that never actually computes myOrders, so myOrders is
 // always undefined through the wrapped export in this test file. Testing
 // the base component with plain-object props sidesteps that without having
 // to build a more elaborate observable mock just for this.
@@ -388,7 +388,7 @@ describe('pending action badge', () => {
 
   test('never shows in the pool ("Tersedia") section, even if a pool item id would otherwise resolve pending=true', async () => {
     // Pool orders come from poolOrders state (via fetchAvailableOrders), not
-    // myOrders — renderItem gates the badge on section.title === 'Order
+    // myOrders, renderItem gates the badge on section.title === 'Order
     // Saya', so a pool item must never show it, and hasPendingAction should
     // never even be called for a pool item's id.
     mockHasPendingAction.mockResolvedValue(true);
@@ -421,7 +421,7 @@ describe('pending action badge', () => {
   });
 });
 
-// ─── Stale pending action badge ───────────────────────────────────────────────
+// Stale pending action badge
 describe('stale pending action badge', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -507,7 +507,7 @@ describe('stale pending action badge', () => {
   });
 });
 
-// ─── Accept order online gating ──────────────────────────────────────────────
+// Accept order online gating
 describe('Accept order online gating', () => {
   const { networkMonitor } = require('../map/networkMonitor');
 

@@ -22,7 +22,7 @@ jest.mock('./device', () => ({
   getDeviceId: jest.fn().mockResolvedValue('test-device-id'),
 }));
 
-// Mock syncEvents — define mocks OUTSIDE jest.mock so Jest hoisting works
+// Mock syncEvents, define mocks OUTSIDE jest.mock so Jest hoisting works
 const emitMock = jest.fn();
 const onMock = jest.fn();
 const offMock = jest.fn();
@@ -211,7 +211,7 @@ function attachModelMethods(row: MockRow): MockModel {
   return row as MockModel;
 }
 
-// Database mock — support WatermelonDB write pattern
+// Database mock, support WatermelonDB write pattern
 const mockDb = {
   get(name: string) {
     return createCollection(name);
@@ -309,7 +309,7 @@ describe('SyncCoordinator', () => {
 
     test('dengan record baru payment dari server -> row lokal ter-create dengan field payment, _status synced', async () => {
       // Coverage sebelum refactor: HANYA order create-path yang punya test.
-      // Sekarang payment create-path juga punya coverage — verify field mapping
+      // Sekarang payment create-path juga punya coverage, verify field mapping
       // (idempotencyKey, amountCents, kind, dll) + _status synced.
       const pullResponse: SyncPullResponse = {
         nextCursor: 'cursor-3',
@@ -361,7 +361,7 @@ describe('SyncCoordinator', () => {
 
     test('dengan record baru chat_message dari server -> row lokal ter-create dengan field chat, _status synced', async () => {
       // Coverage sebelum refactor: HANYA order create-path yang punya test.
-      // Sekarang chat_message create-path juga punya coverage — verify field
+      // Sekarang chat_message create-path juga punya coverage, verify field
       // mapping (roomId, senderId, body, attachment, timestamp conversion).
       const clientCreatedAtIso = '2026-09-04T10:00:00.000Z';
       const serverCreatedAtIso = '2026-09-04T10:00:01.000Z';
@@ -647,7 +647,7 @@ describe('SyncCoordinator', () => {
       expect(updated!.serverVersion).toBe(1);
       expect(updated!._raw._status).toBe('synced');
       // C3 fix: domain status flip ke SENT setelah accepted
-      // Ini yang fix bug 'mengirim...' stuck — sync path sekarang benar flip status
+      // Ini yang fix bug 'mengirim...' stuck, sync path sekarang benar flip status
       expect((updated as any).status).toBe('SENT');
     });
 
@@ -680,7 +680,7 @@ describe('SyncCoordinator', () => {
       expect(updated).toBeDefined();
       expect(updated!.serverVersion).toBe(2);
       expect(updated!._raw._status).toBe('synced');
-      // Order status tetap seperti sebelum — tidak ada perubahan di accepted path
+      // Order status tetap seperti sebelum, tidak ada perubahan di accepted path
       expect(updated!.status).toBe('CONFIRMED');
     });
 
@@ -819,7 +819,7 @@ describe('SyncCoordinator', () => {
     });
   });
 
-  describe('localRowToSyncRecord — op classification', () => {
+  describe('localRowToSyncRecord, op classification', () => {
     const now = Date.now();
 
     test('record dengan _raw._status="created" menghasilkan op="create" dan baseVersion=null', async () => {
@@ -887,7 +887,7 @@ describe('SyncCoordinator', () => {
     });
   });
 
-  describe('retry cap — resolveAcks rejected handling', () => {
+  describe('retry cap, resolveAcks rejected handling', () => {
     test('rejected ack increment failedSyncAttempts', async () => {
       const pendingRow = createMockRow('chat-retry-1', 'created');
       pendingRow.serverVersion = 0;
@@ -960,7 +960,7 @@ describe('SyncCoordinator', () => {
       row.currency = 'IDR';
       state.records.get('orders')!.set('order-capped', row);
 
-      // collectDirty skip logic: attempts >= 5 → continue (skip).
+      // collectDirty skip logic: attempts >= 5, continue (skip).
       // Verifikasi state: row._raw._status tetap 'created' (tidak berubah),
       // tapi collectDirty akan skip karena failedSyncAttempts >= 5.
       expect(row.failedSyncAttempts).toBe(5);
@@ -974,7 +974,7 @@ describe('SyncCoordinator', () => {
 
     test('record accepted setelah sebelumnya failed tidak di-count ulang (serverVersion naik)', async () => {
       // Record yang accepted akan punya serverVersion > 0, tapi collectDirty
-      // tetap mengirim sebagai 'update' jika _status='updated' — itu benar.
+      // tetap mengirim sebagai 'update' jika _status='updated', itu benar.
       // Yang penting: resolveAcks accepted TIDAK increment failedSyncAttempts.
       const row = createMockRow('chat-recovered', 'updated');
       row.serverVersion = 0;
@@ -1097,7 +1097,7 @@ describe('SyncCoordinator', () => {
     });
   });
 
-  describe('markRecordsFailed — timeout handling', () => {
+  describe('markRecordsFailed, timeout handling', () => {
     test('markRecordsFailed increment counter untuk records yang di-timeout', async () => {
       const row = createMockRow('payment-timeout-1', 'created');
       row.serverVersion = 0;
@@ -1199,7 +1199,7 @@ describe('SyncCoordinator', () => {
       row.failedSyncAttempts = 0;
       row.status = 'CAPTURED';
       row.orderId = 'order-1';
-      row.idempotencyKey = ''; // empty — simulates old data / debug insert
+      row.idempotencyKey = ''; // empty, simulates old data / debug insert
       row.method = 'CASH';
       row.amountCents = 50000;
       row.currency = 'IDR';
@@ -1343,7 +1343,7 @@ describe('SyncCoordinator', () => {
           status: 'accepted',
           serverVersion: 3,
           serverChangedAt: new Date().toISOString(),
-          // No serverData — can't match by idempotencyKey
+          // No serverData, can't match by idempotencyKey
         },
       ];
 
@@ -1357,7 +1357,7 @@ describe('SyncCoordinator', () => {
     });
   });
 
-  describe('resolveAcks — order entity', () => {
+  describe('resolveAcks, order entity', () => {
     beforeEach(() => {
       emitMock.mockClear();
     });
@@ -1417,7 +1417,7 @@ describe('SyncCoordinator', () => {
 
       const updatedRow = state.records.get('orders')!.get('order-rejected-cap')!;
       expect(updatedRow.failedSyncAttempts).toBe(5);
-      // Order tidak punya FAILED domain status — status TIDAK boleh berubah
+      // Order tidak punya FAILED domain status, status TIDAK boleh berubah
       expect(updatedRow.status).toBe('CANCELLED');
     });
 
@@ -1532,7 +1532,7 @@ describe('SyncCoordinator', () => {
       expect(overwritten._raw._status).toBe('synced');
     });
 
-    test('conflict ack — driverId berbeda dari currentUserId → reason accepted-by-other', async () => {
+    test('conflict ack, driverId berbeda dari currentUserId jadi reason accepted-by-other', async () => {
       const orderRow = createMockRow('order-accepted-other', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'ASSIGNED';
@@ -1572,7 +1572,7 @@ describe('SyncCoordinator', () => {
       }));
     });
 
-    test('conflict ack — driverId sama dengan currentUserId → reason order-status-conflict', async () => {
+    test('conflict ack, driverId sama dengan currentUserId jadi reason order-status-conflict', async () => {
       const orderRow = createMockRow('order-same-driver', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'PREPARING';
@@ -1616,7 +1616,7 @@ describe('SyncCoordinator', () => {
     // dipindah ke outbox.spec.ts (handleVersionConflict test suite).
     // resolveAcks tidak lagi menulis lastConflictReason / lastConflictAt.
 
-    test('conflict ack — driverId undefined → reason order-status-conflict', async () => {
+    test('conflict ack, driverId undefined jadi reason order-status-conflict', async () => {
       const orderRow = createMockRow('order-undefined-driver', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'CONFIRMED';
@@ -1656,7 +1656,7 @@ describe('SyncCoordinator', () => {
       }));
     });
 
-    test('conflict ack — isAcceptedByOther true → emit orderRemovedFromView', async () => {
+    test('conflict ack, isAcceptedByOther true jadi emit orderRemovedFromView', async () => {
       const orderRow = createMockRow('order-removed-view', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'ASSIGNED';
@@ -1694,7 +1694,7 @@ describe('SyncCoordinator', () => {
       }));
     });
 
-    test('conflict ack — isAcceptedByOther false → TIDAK emit orderRemovedFromView', async () => {
+    test('conflict ack, isAcceptedByOther false, TIDAK emit orderRemovedFromView', async () => {
       const orderRow = createMockRow('order-keep-view', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'PREPARING';

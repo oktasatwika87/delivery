@@ -19,7 +19,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   }
 
   /**
-   * Return value di sini di-inject ke req.user. Cukup kembalikan payload —
+   * Return value di sini di-inject ke req.user. Cukup kembalikan payload,
    * JwtAuthGuard yang akan handle error.
    */
   validate(payload: JwtPayload): { id: string; role: UserRole } {

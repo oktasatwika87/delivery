@@ -2,20 +2,20 @@
  * E2E tests untuk Orders accept/reject endpoints.
  *
  * Coverage:
- * 1. Driver accept order ASSIGNED → PREPARING
+ * 1. Driver accept order ASSIGNED jadi PREPARING
  * 2. Customer ditolak akses accept (403)
- * 3. Order tidak dalam status ASSIGNED → 409 ORDER_UNAVAILABLE
+ * 3. Order tidak dalam status ASSIGNED jadi 409 ORDER_UNAVAILABLE
  *    (sebelumnya 400, naik jadi 409 agar match dengan ConflictException
  *    body code di OrdersService.acceptOrder)
- * 4. Order sudah di-assign driver lain → 409 ORDER_UNAVAILABLE
- * 5. Driver reject order ASSIGNED → balik ke pool (ASSIGNED + driverId null)
+ * 4. Order sudah di-assign driver lain jadi 409 ORDER_UNAVAILABLE
+ * 5. Driver reject order ASSIGNED jadi balik ke pool (ASSIGNED + driverId null)
  *    (sebelumnya CANCELLED, lalu CONFIRMED; sekarang ASSIGNED)
- * 6. Race condition: 2 driver accept bersamaan → cuma 1 sukses, 1 dapat
+ * 6. Race condition: 2 driver accept bersamaan jadi cuma 1 sukses, 1 dapat
  *    409 (OCC) atau 400 (status check)
- * 7. Driver cancel → balik ke pool (ASSIGNED + driverId null)
+ * 7. Driver cancel jadi balik ke pool (ASSIGNED + driverId null)
  */
 
-// E2E tests boot real AppModule — unmock @nestjs/schedule so ScheduleModule.forRoot()
+// E2E tests boot real AppModule, unmock @nestjs/schedule so ScheduleModule.forRoot()
 // returns the real class, not the string-only mock (which causes WeakMap error in DI).
 jest.unmock('@nestjs/schedule');
 
@@ -33,7 +33,7 @@ describe('Orders (e2e) - accept/reject', () => {
   let driverToken: string;
   let customerToken: string;
   let prisma: PrismaClient;
-  // UUID statis — deterministic, readable, dan valid sebagai @db.Uuid di Prisma.
+  // UUID statis, deterministic, readable, dan valid sebagai @db.Uuid di Prisma.
   // Pola: prefix 'e2e00000-' (8 hex char) + '-0000-0000-' + 12 hex digit suffix.
   // Suffix mnemonic: 'd000' = driver, 'c000' = customer, suffix per-test dari nama test.
   const driverUserId = 'e2e00000-0000-0000-0000-00000000d000';
@@ -66,7 +66,7 @@ describe('Orders (e2e) - accept/reject', () => {
     prisma = new PrismaClient();
     await prisma.$connect();
 
-    // Seed test users — required karena Order.customerId FK ke User.id
+    // Seed test users, required karena Order.customerId FK ke User.id
     const testUsers = [
       { id: driverUserId, role: 'DRIVER' as const, name: 'E2E Driver 1', phone: '+628000000001' },
       { id: customerUserId, role: 'CUSTOMER' as const, name: 'E2E Customer', phone: '+628000000002' },
@@ -88,7 +88,7 @@ describe('Orders (e2e) - accept/reject', () => {
     // Without this, a cold pool causes the first query in each Prisma client
     // to take ~12ms extra (connection establishment), which shifts timing enough
     // that a "race condition" test can see sequential behavior instead of
-    // concurrent behavior — making the losing driver get 400 (status check)
+    // concurrent behavior, making the losing driver get 400 (status check)
     // instead of 409 (OCC conflict). See race-condition-investigation-report.md.
     await prisma.$queryRaw`SELECT 1`;
   });
@@ -217,7 +217,7 @@ describe('Orders (e2e) - accept/reject', () => {
     // comment) dan mengembalikan order ke pool (status ASSIGNED + driverId
     // null), bukan terminal CANCELLED atau CONFIRMED, sehingga pool fetch
     // berikutnya bisa langsung pick-up order ini kembali.
-    test('200: driver reject order ASSIGNED yang di-assign ke dirinya → balik ke pool (ASSIGNED + driverId null)', async () => {
+    test('200: driver reject order ASSIGNED yang di-assign ke dirinya jadi balik ke pool (ASSIGNED + driverId null)', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000b01';
       await createAssignedOrder(orderId, customerUserId, driverUserId);
       try {
@@ -251,7 +251,7 @@ describe('Orders (e2e) - accept/reject', () => {
 
     test('403: driver bukan owner order ini (mencegah reject order pool/orang lain)', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000b03';
-      // Order pool: driverId null — sebelum fix ini, driver mana pun bisa
+      // Order pool: driverId null, sebelum fix ini, driver mana pun bisa
       // reject (dan permanently CANCELLED-kan) order pool orang lain.
       await createAssignedOrder(orderId, customerUserId);
       try {
@@ -285,13 +285,13 @@ describe('Orders (e2e) - accept/reject', () => {
             .send({ version: 1 }),
         ]);
 
-        // A loser driver can get 409 (OCC conflict — version already bumped)
-        // or 400 (status check — order already moved to PREPARING by winner).
+        // A loser driver can get 409 (OCC conflict, version already bumped)
+        // or 400 (status check, order already moved to PREPARING by winner).
         // Both are legitimate "I lost the race" outcomes. The assertion used to
         // only accept 409|423, which caused flakiness because Prisma connection
         // pool cold-start makes the second request arrive AFTER the first one
         // fully commits, hitting the status check instead of the OCC check.
-        // See race-condition-investigation-report.md §Kandidat C.
+        // See race-condition-investigation-report.md Section Kandidat C.
         const statuses = [resp1.status, resp2.status];
         const successCount = statuses.filter((s) => s === 200).length;
         const loserCount = statuses.filter((s) => s === 409 || s === 423 || s === 400).length;
@@ -304,8 +304,8 @@ describe('Orders (e2e) - accept/reject', () => {
     });
   });
 
-  // PATCH /orders/:id/status — hanya driver owner yang boleh transisi
-  // PREPARING→OUT_FOR_DELIVERY atau OUT_FOR_DELIVERY→DELIVERED,
+  // PATCH /orders/:id/status, hanya driver owner yang boleh transisi
+  // PREPARING jadi OUT_FOR_DELIVERY atau OUT_FOR_DELIVERY jadi DELIVERED,
   // dengan DTO + OCC.
   describe('PATCH /orders/:id/status', () => {
     // Helper: bikin order PREPARING dengan driver tertentu.
@@ -331,7 +331,7 @@ describe('Orders (e2e) - accept/reject', () => {
       });
     }
 
-    test('200: driver pemilik PREPARING → OUT_FOR_DELIVERY, version naik', async () => {
+    test('200: driver pemilik PREPARING jadi OUT_FOR_DELIVERY, version naik', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000f01';
       await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
       try {
@@ -348,7 +348,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('200: chain PREPARING → OUT_FOR_DELIVERY → DELIVERED, masing-masing naik satu versi', async () => {
+    test('200: chain PREPARING jadi OUT_FOR_DELIVERY jadi DELIVERED, masing-masing naik satu versi', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000f02';
       await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
       try {
@@ -372,7 +372,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('403: customer pemilik → ditolak untuk semua target', async () => {
+    test('403: customer pemilik jadi ditolak untuk semua target', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000f03';
       await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
       try {
@@ -388,13 +388,13 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('403: driver lain (bukan driverId order) → ditolak', async () => {
+    test('403: driver lain (bukan driverId order) jadi ditolak', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000f04';
       // Order ini dimiliki driverUserId. driver2UserId (driver lain) coba PATCH.
       await createOrderWithDriver(orderId, OrderStatusDb.PREPARING, driverUserId);
       const driver2Token = generateToken(driver2UserId, UserRole.DRIVER);
       try {
-        // driver2Token != driverUserId → 403
+        // driver2Token != driverUserId jadi 403
         await request(app.getHttpServer())
           .patch(`/orders/${orderId}/status`)
           .set('Authorization', `Bearer ${driver2Token}`)
@@ -411,7 +411,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('403: driver pemilik → target ASSIGNED/CANCELLED ditolak', async () => {
+    test('403: driver pemilik jadi target ASSIGNED/CANCELLED ditolak', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000f05';
       await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
       try {
@@ -427,7 +427,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('400: tanpa version di body → 400 validasi', async () => {
+    test('400: tanpa version di body jadi 400 validasi', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000f06';
       await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
       try {
@@ -442,7 +442,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('400: status bukan enum OrderStatus → 400 validasi', async () => {
+    test('400: status bukan enum OrderStatus jadi 400 validasi', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000f07';
       await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
       try {
@@ -487,7 +487,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('404: order tidak ada → 404', async () => {
+    test('404: order tidak ada jadi 404', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000f0a';
       // Tidak membuat order
       await request(app.getHttpServer())
@@ -498,10 +498,10 @@ describe('Orders (e2e) - accept/reject', () => {
     });
 
     test('tidak ada event order:unavailable untuk transition ini', async () => {
-      // Regression guard: dua transisi PREPARING→OUT_FOR_DELIVERY dan
-      // OUT_FOR_DELIVERY→DELIVERED tidak pernah berasal dari pool,
+      // Regression guard: dua transisi PREPARING jadi OUT_FOR_DELIVERY dan
+      // OUT_FOR_DELIVERY jadi DELIVERED tidak pernah berasal dari pool,
       // jadi transitionStatus tidak memanggil emitOrderUnavailable.
-      // Assertion ditegakkan via mock Gateway (lihat unit test) — di e2e
+      // Assertion ditegakkan via mock Gateway (lihat unit test), di e2e
       // cukup verifikasi endpoint sukses untuk transisi yang dulu allowed.
       const orderId = 'e2e00000-0000-0000-0000-000000000f0b';
       await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
@@ -586,7 +586,7 @@ describe('Orders (e2e) - accept/reject', () => {
       });
 
       try {
-        // driver2 coba cancel order driver1 → harus 403
+        // driver2 coba cancel order driver1 jadi harus 403
         await request(app.getHttpServer())
           .post(`/orders/${orderId}/cancel`)
           .set('Authorization', `Bearer ${driver2Token}`)
@@ -798,7 +798,7 @@ describe('Orders (e2e) - accept/reject', () => {
         .expect(403);
     });
 
-    test('400: items array kosong → validasi error', async () => {
+    test('400: items array kosong jadi validasi error', async () => {
       const resp = await request(app.getHttpServer())
         .post('/orders')
         .set('Authorization', `Bearer ${customerToken}`)
@@ -816,7 +816,7 @@ describe('Orders (e2e) - accept/reject', () => {
       expect(resp.body.message).toContain('At least one item is required');
     });
 
-    test('400: quantity = 0 → validasi error', async () => {
+    test('400: quantity = 0 jadi validasi error', async () => {
       const resp = await request(app.getHttpServer())
         .post('/orders')
         .set('Authorization', `Bearer ${customerToken}`)
@@ -836,7 +836,7 @@ describe('Orders (e2e) - accept/reject', () => {
       expect(resp.body.message.some((m: string) => m.toLowerCase().includes('quantity'))).toBe(true);
     });
 
-    test('400: quantity negatif → validasi error', async () => {
+    test('400: quantity negatif jadi validasi error', async () => {
       const resp = await request(app.getHttpServer())
         .post('/orders')
         .set('Authorization', `Bearer ${customerToken}`)
@@ -856,7 +856,7 @@ describe('Orders (e2e) - accept/reject', () => {
       expect(resp.body.message.some((m: string) => m.toLowerCase().includes('quantity'))).toBe(true);
     });
 
-    test('400: unitPriceCents = 0 → validasi error', async () => {
+    test('400: unitPriceCents = 0 jadi validasi error', async () => {
       const resp = await request(app.getHttpServer())
         .post('/orders')
         .set('Authorization', `Bearer ${customerToken}`)
@@ -876,7 +876,7 @@ describe('Orders (e2e) - accept/reject', () => {
       expect(resp.body.message.some((m: string) => m.includes('Unit price'))).toBe(true);
     });
 
-    test('400: missing deliveryAddress → validasi error', async () => {
+    test('400: missing deliveryAddress jadi validasi error', async () => {
       const resp = await request(app.getHttpServer())
         .post('/orders')
         .set('Authorization', `Bearer ${customerToken}`)
@@ -889,7 +889,7 @@ describe('Orders (e2e) - accept/reject', () => {
       expect(resp.body.message).toContain('deliveryAddress must be an object');
     });
 
-    test('400: missing recipientName → validasi error', async () => {
+    test('400: missing recipientName jadi validasi error', async () => {
       const resp = await request(app.getHttpServer())
         .post('/orders')
         .set('Authorization', `Bearer ${customerToken}`)
@@ -909,7 +909,7 @@ describe('Orders (e2e) - accept/reject', () => {
       expect(resp.body.message.some((m: string) => m.includes('Recipient name'))).toBe(true);
     });
 
-    test('400: missing city → validasi error', async () => {
+    test('400: missing city jadi validasi error', async () => {
       const resp = await request(app.getHttpServer())
         .post('/orders')
         .set('Authorization', `Bearer ${customerToken}`)
@@ -1092,7 +1092,7 @@ describe('Orders (e2e) - accept/reject', () => {
   });
 
   // E2E: sync push menolak order/payment; capture endpoint dihapus.
-  describe('sync push — order/payment ditolak', () => {
+  describe('sync push, order/payment ditolak', () => {
     const deviceId = 'e2e-sync-device';
     const orderId = 'e2e00000-0000-0000-0000-00000000e001';
 
@@ -1101,7 +1101,7 @@ describe('Orders (e2e) - accept/reject', () => {
       await prisma.order.deleteMany({ where: { id: orderId } }).catch(() => {});
     }
 
-    test('push order baru → rejected, tidak ada baris order', async () => {
+    test('push order baru jadi rejected, tidak ada baris order', async () => {
       await cleanupOrder();
       try {
         const resp = await request(app.getHttpServer())
@@ -1146,7 +1146,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('push order update (versi cocok) → rejected', async () => {
+    test('push order update (versi cocok) jadi rejected', async () => {
       // Buat order dulu via REST, lalu push update via sync
       await prisma.order.upsert({
         where: { id: orderId },
@@ -1206,7 +1206,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('push order update mengubah driverId (versi cocok) → rejected', async () => {
+    test('push order update mengubah driverId (versi cocok) jadi rejected', async () => {
       await prisma.order.upsert({
         where: { id: orderId },
         create: {
@@ -1263,7 +1263,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('push payment create CAPTURED → rejected, tidak ada baris payment', async () => {
+    test('push payment create CAPTURED jadi rejected, tidak ada baris payment', async () => {
       await cleanupOrder();
       const paymentId = 'e2e00000-0000-0000-0000-00000000e002';
       try {
@@ -1309,7 +1309,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('POST /payments/:orderId/capture → 404 (endpoint dihapus)', async () => {
+    test('POST /payments/:orderId/capture jadi 404 (endpoint dihapus)', async () => {
       // Buat order + payment di DB dulu
       await prisma.order.upsert({
         where: { id: orderId },

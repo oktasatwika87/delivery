@@ -147,7 +147,7 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Emit event ke customer saat driver collect COD (cash on delivery).
    *
    * Beda dari accept/reject/cancel: order status TIDAK berubah saat COD
-   * di-collect, jadi payload ini sengaja tidak punya `status`/`version` —
+   * di-collect, jadi payload ini sengaja tidak punya `status`/`version`,
    * ini murni live confirmation pembayaran, bukan state-sync event. Lihat
    * PaymentsService.collectCod() (dipanggil hanya di successful-create
    * branch, tidak di idempotency-replay branch, supaya retry outbox
@@ -172,7 +172,7 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   /**
    * Broadcast ke semua online driver bahwa ada order baru di pool.
-   * Payload SANGAT minimal — driver tap untuk lihat full detail.
+   * Payload SANGAT minimal, driver tap untuk lihat full detail.
    */
   emitOrderAvailable(order: Order): void {
     const payload: OrderAvailablePayload = {
@@ -203,7 +203,7 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * sempit via PATCH /orders/:id/status.
    *
    * Hanya dua transisi yang dipancarkan:
-   * PREPARING → OUT_FOR_DELIVERY dan OUT_FOR_DELIVERY → DELIVERED.
+   * PREPARING jadi OUT_FOR_DELIVERY dan OUT_FOR_DELIVERY jadi DELIVERED.
    * Dipanggil tepat sekali per PATCH sukses (lihat OrdersService.transitionStatus).
    */
   emitOrderStatusUpdated(customerId: string, payload: OrderStatusUpdatedPayload): void {
