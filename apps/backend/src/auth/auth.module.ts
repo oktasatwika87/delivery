@@ -7,16 +7,20 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { JWT_EXPIRES_IN } from './auth.types';
+import { readJwtSecret } from './jwt-secret';
 
 @Module({
   imports: [
     PassportModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('JWT_SECRET') ?? 'dev-only-do-not-use-in-production',
-        signOptions: { expiresIn: JWT_EXPIRES_IN },
-      }),
+      useFactory: (config: ConfigService) => {
+        const secret = readJwtSecret(config);
+        return {
+          secret,
+          signOptions: { expiresIn: JWT_EXPIRES_IN },
+        };
+      },
     }),
   ],
   controllers: [AuthController],

@@ -35,7 +35,3 @@ export interface JwtPayload {
  * Disimpan di sini sebagai catatan agar mudah di-revisit.
  */
 export const JWT_EXPIRES_IN = '30d';
-
-/** Secret untuk signing JWT — wajib di-set via env. Default hanya untuk dev. */
-export const JWT_SECRET_ENV = 'JWT_SECRET';
-export const JWT_SECRET_DEFAULT = 'dev-only-do-not-use-in-production';

@@ -5,7 +5,8 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 
 import type { UserRole } from '@delivery/shared';
 
-import { JWT_SECRET_DEFAULT, JWT_SECRET_ENV, JwtPayload } from './auth.types';
+import { JwtPayload } from './auth.types';
+import { readJwtSecret } from './jwt-secret';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
@@ -13,7 +14,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: config.get<string>(JWT_SECRET_ENV) ?? JWT_SECRET_DEFAULT,
+      secretOrKey: readJwtSecret(config),
     });
   }
 
