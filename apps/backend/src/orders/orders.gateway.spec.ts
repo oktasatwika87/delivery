@@ -266,10 +266,10 @@ describe('OrdersGateway', () => {
 
   describe('emitOrderRejected', () => {
     test('broadcasts to customerId room with ASSIGNED status (back to pool)', () => {
-      // K9 (2026-09): status sekarang 'ASSIGNED' — single pool state,
-      // lihat order-events.ts OrderRejectedPayload. 'CONFIRMED' dulu
-      // dipakai sebagai transitional state; sekarang tidak ada gunanya
-      // lagi karena releaseToPool kembali ke ASSIGNED + driverId null.
+      // Status 'ASSIGNED' dipakai karena single pool state, lihat
+      // order-events.ts OrderRejectedPayload. 'CONFIRMED' dulu dipakai
+      // sebagai transitional state; sekarang tidak ada gunanya lagi karena
+      // releaseToPool kembali ke ASSIGNED + driverId null.
       gateway.emitOrderRejected('customer-uuid', 'order-123', 2);
 
       expect(mockServer.to).toHaveBeenCalledWith('customer-uuid');
@@ -283,7 +283,7 @@ describe('OrdersGateway', () => {
 
   describe('emitOrderCancelled', () => {
     test('broadcasts to customerId room with reason', () => {
-      // K9: status 'ASSIGNED' — order balik ke pool.
+      // Status 'ASSIGNED' karena order balik ke pool.
       gateway.emitOrderCancelled('customer-uuid', 'order-123', 3, 'Kendaraan mogok');
 
       expect(mockServer.to).toHaveBeenCalledWith('customer-uuid');

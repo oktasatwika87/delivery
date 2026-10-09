@@ -6,11 +6,13 @@
  *   2. Submit → createOrder() → sukses/error
  *   3. Sukses → Alert konfirmasi + tombol "Lihat Status" (panggil onCreateSuccess)
  *
- * Online-only — tidak ada offline queue.
+ * Online-only, tidak ada offline queue.
  *
- * Tier 3: tambah prop onCreateSuccess. CustomerStack pass callback yang
- * navigate ke OrderTrackingScreen pakai navigation.replace — jadi back
- * dari tracking langsung ke home (bukan balik ke form create).
+ * Ada dua mode navigasi setelah sukses. CustomerStack saat ini pass
+ * onCreateSuccess yang menavigasi langsung ke OrderTrackingScreen
+ * (navigation.replace, jadi back dari tracking kembali ke home, bukan
+ * ke form create). Kalau prop tidak diberikan, fallback ke onBack
+ * seperti flow lama.
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
@@ -36,7 +38,7 @@ interface OrderCreateScreenProps {
   /**
    * Dipanggil saat create order sukses dengan order.id yang baru dibuat.
    * CustomerStack pakai ini untuk navigation.replace ke OrderTrackingScreen.
-   * Opsional — kalau tidak disediakan, fallback ke onBack (legacy Tier 2 flow).
+   * Opsional, kalau tidak disediakan, fallback ke onBack (flow lama).
    */
   onCreateSuccess?: (orderId: string) => void;
 }
@@ -234,9 +236,9 @@ export function OrderCreateScreen({ onBack, onCreateSuccess }: OrderCreateScreen
 
       const order = await createOrder(input);
 
-      // Tier 3: kalau onCreateSuccess disediakan, pakai untuk navigate
-      // langsung ke OrderTrackingScreen (auto-navigate, no double-tap).
-      // Fallback ke onBack kalau prop tidak ada — preserve legacy behavior.
+      // Kalau onCreateSuccess disediakan, pakai untuk navigate langsung
+      // ke OrderTrackingScreen (auto-navigate, no double-tap). Fallback ke
+      // onBack kalau prop tidak ada, preserve legacy behavior.
       const primaryAction = onCreateSuccess
         ? { text: 'Lihat Status', onPress: () => onCreateSuccess(order.id) }
         : { text: 'Kembali ke Home', onPress: onBack };

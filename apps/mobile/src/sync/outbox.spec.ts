@@ -28,7 +28,7 @@ function attachMethods(row: any) {
     fn(row);
     return row;
   };
-  // K15 (2026-09): commit "baris lokal driver ditulis dari respons" pakai
+  // Commit "baris lokal driver ditulis dari respons" pakai
   // r._setRaw('column', value) di processReject/processCancel. Mock ini
   // tulis ke r._raw[column] supaya assertions (status, driver_id, dll)
   // bisa baca lewat mockState.orders.get(id)._raw.column. Sama dengan
@@ -566,13 +566,13 @@ describe('outbox', () => {
       expect(mockCollectCodOrder).toHaveBeenCalledWith('order-idempotent', 40000, 'cod:stable-key-123');
     });
 
-    // K15 (2026-09): setelah reject/cancel sukses, server kembalikan
+    // Setelah reject/cancel sukses, server kembalikan
     // response { status:'ASSIGNED', driverId:null, version, ... } dan
     // baris lokal order harus ter-update dari response (single batch
     // dengan delete pending_action). Tanpa ini, pool fetch berikutnya
     // filter status=ASSIGNED + driverId null, jadi order tidak muncul
     // lagi di pool setelah reject offline.
-    test('K15: reject success → tulis baris lokal dari response (status=ASSIGNED, driverId null)', async () => {
+    test('reject success, tulis baris lokal dari response (status=ASSIGNED, driverId null)', async () => {
       // Setup order lokal dengan status ASSIGNED + driverId terisi
       // (driver sudah accept, lalu offline → tap reject)
       const order = {
@@ -592,7 +592,7 @@ describe('outbox', () => {
       mockState.records.set('k15-reject-action', action);
       attachMethods(action);
 
-      // Server response setelah releaseToPool (K9/COMMIT 3): status ASSIGNED,
+      // Server response setelah releaseToPool: status ASSIGNED,
       // driverId null, version incremented
       mockRejectOrder.mockResolvedValue({
         id: 'order-k15-reject',
@@ -623,7 +623,7 @@ describe('outbox', () => {
       );
     });
 
-    test('K15: cancel success → tulis baris lokal (ASSIGNED + cancelledBy/cancelReason dari response)', async () => {
+    test('cancel success, tulis baris lokal (ASSIGNED + cancelledBy/cancelReason dari response)', async () => {
       const order = {
         id: 'order-k15-cancel',
         _raw: { id: 'order-k15-cancel', _status: 'synced' },
@@ -671,7 +671,7 @@ describe('outbox', () => {
       );
     });
 
-    test('K15: reject success tapi order tidak ada lokal → no crash, hanya delete pending_action', async () => {
+    test('reject success tapi order tidak ada lokal, no crash, hanya delete pending_action', async () => {
       // Order TIDAK ada di mockState.orders (kasus langka: server data
       // belum di-pull sebelum sync berikutnya). Pastikan processReject
       // skip update order row tanpa throw.
@@ -1018,14 +1018,14 @@ describe('outbox', () => {
     });
   });
 
-  // Regression K15 (2026-09): processReject/processCancel dulu
-  // hardcoded 'ASSIGNED' — response.status seharusnya tertulis apa adanya.
-  // Juga regresi: cancel network failure tidak tulis baris, 409 konflik tidak lewat sukses path.
-  describe('K15 regression: response.status written as-is, network failure / 409 tidak write baris', () => {
+  // Regression: processReject/processCancel dulu hardcoded 'ASSIGNED',
+  // response.status seharusnya tertulis apa adanya. Juga regresi: cancel
+  // network failure tidak tulis baris, 409 konflik tidak lewat sukses path.
+  describe('regression: response.status written as-is, network failure / 409 tidak write baris', () => {
     // Respons sukses dengan status non-ASSIGNED (mis. backend mengembalikan
-    // status lain seperti 'X') harus tertulis apa adanya — merah di kode
+    // status lain seperti 'X') harus tertulis apa adanya, merah di kode
     // lama yang hardcode 'ASSIGNED'.
-    test('K15 regression: reject success dengan status X → tulis response.status (bukan hardcoded ASSIGNED)', async () => {
+    test('reject success dengan status X, tulis response.status (bukan hardcoded ASSIGNED)', async () => {
       const order = {
         id: 'order-reject-status-x',
         _raw: { id: 'order-reject-status-x', _status: 'synced' },
@@ -1057,7 +1057,7 @@ describe('outbox', () => {
       expect(updatedOrder._raw.status).toBe('X'); // bukan 'ASSIGNED'
     });
 
-    test('K15 regression: cancel success dengan status Y → tulis response.status (bukan hardcoded ASSIGNED)', async () => {
+    test('cancel success dengan status Y, tulis response.status (bukan hardcoded ASSIGNED)', async () => {
       const order = {
         id: 'order-cancel-status-y',
         _raw: { id: 'order-cancel-status-y', _status: 'synced' },

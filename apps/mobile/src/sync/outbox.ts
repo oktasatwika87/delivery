@@ -14,9 +14,9 @@
  *
  * Response handling:
  * - Success (2xx): delete pending_action row + (untuk reject/cancel)
- *   tulis baris lokal order dari response dalam single batch (K15)
- *   supaya pool fetch berikutnya pickup order yang baru
- *   ASSIGNED + driverId null lagi
+ *   tulis baris lokal order dari response dalam single batch supaya
+ *   pool fetch berikutnya pickup order yang baru ASSIGNED + driverId null
+ *   lagi
  * - Conflict (version mismatch): pull fresh order data, delete pending_action,
  *   emit conflict notification to UI
  * - Orphaned COD (special): mark status = 'orphaned_needs_review', don't delete,
@@ -361,14 +361,13 @@ async function processPendingAction(
 /**
  * Process a reject action.
  *
- * K15 (2026-09): setelah server balikin response sukses, tulis baris lokal
- * dari response dalam single batch dengan delete pending_action. Tanpa
- * ini, order row lokal masih punya status lama (mis. PREPARING/ASSIGNED
- * with driverId set) — pool fetch berikutnya filter berdasarkan
- * (status=ASSIGNED + driverId null), jadi order tidak muncul lagi di pool
- * setelah driver reject offline. Setelah commit ini, baris lokal reflect
- * server (status=ASSIGNED + driverId null + version baru) sehingga order
- * muncul kembali di pool fetch berikutnya.
+ * Setelah server balikin response sukses, tulis baris lokal dari response
+ * dalam single batch dengan delete pending_action. Tanpa ini, order row
+ * lokal masih punya status lama (mis. PREPARING/ASSIGNED with driverId set),
+ * pool fetch berikutnya filter berdasarkan (status=ASSIGNED + driverId null),
+ * jadi order tidak muncul lagi di pool setelah driver reject offline. Setelah
+ * perbaikan ini, baris lokal reflect server (status=ASSIGNED + driverId null
+ * + version baru) sehingga order muncul kembali di pool fetch berikutnya.
  */
 async function processReject(action: PendingActionModel, db: Database): Promise<ProcessResult> {
   try {
@@ -449,11 +448,11 @@ async function processReject(action: PendingActionModel, db: Database): Promise<
 /**
  * Process a cancel action.
  *
- * K15 (2026-09): setelah server balikin response sukses, tulis baris lokal
- * dari response dalam single batch dengan delete pending_action. Pola
- * paralel dengan processReject di atas — bedanya cancel menyimpan
- * cancelledBy + cancelReason ke baris lokal supaya UI bisa tampilkan
- * alasan pembatalan di OrderDetailScreen.
+ * Setelah server balikin response sukses, tulis baris lokal dari response
+ * dalam single batch dengan delete pending_action. Pola paralel dengan
+ * processReject di atas, bedanya cancel menyimpan cancelledBy + cancelReason
+ * ke baris lokal supaya UI bisa tampilkan alasan pembatalan di
+ * OrderDetailScreen.
  */
 async function processCancel(action: PendingActionModel, db: Database): Promise<ProcessResult> {
   try {

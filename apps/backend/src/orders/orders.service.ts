@@ -24,8 +24,7 @@ import { OrdersGateway } from './orders.gateway';
  * setelah tap.
  *
  * Shape ini PARALEL dengan WebSocket broadcast `emitOrderAvailable`
- * (orders.gateway.ts) — sehingga REST + WS driver pool konsisten.
- * Lihat catatan desain Tier 6 untuk origin spec.
+ * (orders.gateway.ts), sehingga REST + WS driver pool konsisten.
  */
 export interface AvailableOrderPayload {
   orderId: string;
@@ -63,7 +62,7 @@ export class OrdersService {
       (sum, item) => sum + item.unitPriceCents * item.quantity,
       0,
     );
-    // K9: order langsung masuk pool saat dibuat — born ASSIGNED + driverId null.
+    // Order langsung masuk pool saat dibuat, born ASSIGNED + driverId null.
     // Single pool state (ASSIGNED + driverId null) berlaku untuk semua
     // release-to-pool operations (create, releaseToPool helper).
     // Setelah create kita broadcast ke pool supaya driver yang online
@@ -410,11 +409,11 @@ export class OrdersService {
   /**
    * Lepas order kembali ke pool dengan atomic OCC update.
    *
-   * K9: helper terpusat untuk semua "release-to-pool" operations —
-   * rejectOrder, cancelOrder, dan ReassignmentService.triggerReassignment
-   * (cron reassignment) semua lewat sini. Single pool state = ASSIGNED +
-   * driverId null, jadi semua release berakhir di shape yang sama dan
-   * findAvailable() bisa find mereka semua dengan satu query.
+   * Helper terpusat untuk semua "release-to-pool" operations: rejectOrder,
+   * cancelOrder, dan ReassignmentService.triggerReassignment (cron reassignment)
+   * semua lewat sini. Single pool state = ASSIGNED + driverId null, jadi semua
+   * release berakhir di shape yang sama dan findAvailable() bisa find mereka
+   * semua dengan satu query.
    *
    * Setelah sukses, broadcast ke pool (emitOrderAvailable). Untuk reject
    * dan cancel, customer juga dikabari lewat emitOrderRejected/emitOrderCancelled

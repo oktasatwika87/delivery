@@ -284,7 +284,7 @@ describe('OrderCreateScreen', () => {
     expect(onBack).not.toHaveBeenCalled();
   });
 
-  it('submit sukses tanpa onCreateSuccess → fallback ke tombol "Kembali ke Home" (legacy Tier 2)', async () => {
+  it('submit sukses tanpa onCreateSuccess, fallback ke tombol "Kembali ke Home"', async () => {
     const { createOrder } = require('../sync/client');
     createOrder.mockResolvedValueOnce({
       id: '12345678-0000-0000-0000-000000000000',

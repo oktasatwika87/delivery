@@ -981,7 +981,7 @@ describe('Stale Pending Action Banner', () => {
     });
   });
 
-  // K17: banner hilang sendiri saat pending action dihapus — observe bikin banner reaktif
+  // Banner hilang sendiri saat pending action dihapus, observe bikin banner reaktif
   test('banner hilang setelah pending action dihapus tanpa unmount', async () => {
     Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
     const { getByText, queryByText } = renderScreen();
@@ -1363,7 +1363,7 @@ describe('driver status button behavior', () => {
     expect(recordMock._setRaw).toHaveBeenCalledWith('last_conflict_at', null);
   });
 
-  test('409 VERSION_CONFLICT: pesan K8 muncul dan GET dipanggil', async () => {
+  test('409 VERSION_CONFLICT: pesan muncul dan GET dipanggil', async () => {
     Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
 
     mockUpdateOrderStatus.mockImplementationOnce(() =>
@@ -1412,7 +1412,7 @@ describe('driver status button behavior', () => {
     expect(mockOrder._setRaw).toHaveBeenCalledWith('last_conflict_at', null);
   });
 
-  test('409 INVALID_TRANSITION: pesan K8 muncul dan GET dipanggil', async () => {
+  test('409 INVALID_TRANSITION: pesan muncul dan GET dipanggil', async () => {
     Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
 
     mockUpdateOrderStatus.mockImplementationOnce(() =>

@@ -100,10 +100,10 @@ describe('OrdersController', () => {
     });
 
     /**
-     * Regression guard untuk Tier 6 drift:
-     * Sebelumnya `findAvailable` return `Order[]` (full payload), padahal mobile
-     * expect slim `AvailableOrderPayload[]`. Test ini assert controller pass-through
-     * adalah OBJECT dengan { items, hasMore }, BUKAN array of full Order.
+     * Regression guard supaya `findAvailable` tidak balik lagi ke `Order[]`
+     * (full payload); mobile expect slim `AvailableOrderPayload[]`. Test ini
+     * assert controller pass-through adalah OBJECT dengan { items, hasMore },
+     * BUKAN array of full Order.
      *
      * response shape: { items: AvailableOrderPayload[], hasMore: boolean }
      */

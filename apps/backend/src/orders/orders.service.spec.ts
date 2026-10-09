@@ -376,10 +376,10 @@ describe('OrdersService', () => {
       },
     };
 
-    // K9 (2026-09): order baru lahir ASSIGNED + driverId null (pool state)
-    // — sebelumnya PENDING lalu di-confirm manual. Sekarang create() otomatis
-    // masuk pool, sehingga emitOrderAvailable dipanggil supaya driver yang
-    // online langsung lihat order baru tanpa harus pull REST.
+    // Order baru lahir ASSIGNED + driverId null (pool state). Sebelumnya
+    // PENDING lalu di-confirm manual, sekarang create() otomatis masuk pool,
+    // sehingga emitOrderAvailable dipanggil supaya driver yang online
+    // langsung lihat order baru tanpa harus pull REST.
     const mockCreatedOrder = {
       id: 'new-order-id',
       customerId,
@@ -403,7 +403,7 @@ describe('OrdersService', () => {
       const result = await service.create(validInput, customerId);
 
       expect(result.id).toBe('new-order-id');
-      // K9: status ASSIGNED saat lahir, bukan PENDING
+      // Status ASSIGNED saat lahir, bukan PENDING
       expect(result.status).toBe('ASSIGNED');
       expect(result.driverId).toBeUndefined();
       expect(result.totalCents).toBe(50000);
@@ -490,7 +490,7 @@ describe('OrdersService', () => {
 
       const result = await service.rejectOrder(orderId, version, driverId);
 
-      // K9: balik ke pool = ASSIGNED + driverId null (bukan CONFIRMED).
+      // Balik ke pool = ASSIGNED + driverId null (bukan CONFIRMED).
       expect(result.status).toBe('ASSIGNED');
       expect(result.driverId).toBeUndefined();
       expect(result.version).toBe(version + 1);
@@ -674,7 +674,7 @@ describe('OrdersService', () => {
 
       const result = await service.cancelOrder(orderId, version, driverId);
 
-      // K9: balik ke pool = ASSIGNED + driverId null (bukan CONFIRMED).
+      // Balik ke pool = ASSIGNED + driverId null (bukan CONFIRMED).
       expect(result.status).toBe('ASSIGNED');
       expect(result.driverId).toBeUndefined();
       expect(result.cancelledBy).toBe(driverId);
@@ -715,7 +715,7 @@ describe('OrdersService', () => {
 
       const result = await service.cancelOrder(orderId, version, driverId, 'Kendaraan mogok');
 
-      // K9: balik ke ASSIGNED (pool state) bukan CONFIRMED.
+      // Balik ke ASSIGNED (pool state) bukan CONFIRMED.
       expect(result.status).toBe('ASSIGNED');
       expect(result.driverId).toBeUndefined();
       expect(result.cancelledBy).toBe(driverId);
@@ -738,7 +738,7 @@ describe('OrdersService', () => {
 
       const result = await service.cancelOrder(orderId, version, driverId);
 
-      // K9: status ASSIGNED (pool state), bukan CONFIRMED.
+      // Status ASSIGNED (pool state), bukan CONFIRMED.
       expect(result.status).toBe('ASSIGNED');
     });
 
@@ -890,11 +890,11 @@ describe('OrdersService', () => {
     });
   });
 
-  // ===== releaseToPool tests (K9) =====
+  // ===== releaseToPool tests =====
 
   describe('releaseToPool()', () => {
-    // K9: helper terpusat untuk semua back-to-pool operations (reject,
-    // cancel, reassign). Menjamin shape konsisten: ASSIGNED + driverId null,
+    // Helper terpusat untuk semua back-to-pool operations (reject, cancel,
+    // reassign). Menjamin shape konsisten: ASSIGNED + driverId null,
     // emitOrderAvailable ke pool, VERSION_CONFLICT untuk OCC miss.
 
     const mockAssignedOrder = {

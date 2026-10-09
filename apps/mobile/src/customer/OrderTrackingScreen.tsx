@@ -7,32 +7,32 @@
  *   3. Display status, items, address, notes + connection banner
  *   4. Cleanup: unsubscribe semua listeners saat unmount
  *
- * Online-only — sesuai dengan Tier 2 OrderCreateScreen (online POST, no local DB).
+ * Online-only, sama dengan OrderCreateScreen (online POST, no local DB).
  * Socket sudah connect di App.tsx saat customer login; tracking screen cuma
  * subscribe listener untuk orderId yang lagi dibuka.
  *
  * Status updates live (tanpa refresh manual):
  *   - order:accepted → status PREPARING + driverId + CLEARED cancelReason
- *     (server clear dua-duanya, COMMIT 1). Kita clear juga di client untuk
- *     kasus fetch awal punya cancelReason stale dari order yang melalui
- *     cron reassign sebelum accept.
- *   - order:rejected → status dari payload (sekarang 'ASSIGNED' per K9),
+ *     (server clear dua-duanya, mobile mirror supaya fetch awal yang dapat
+ *     cancelReason stale dari order yang melalui cron reassign sebelum
+ *     accept juga langsung bersih)
+ *   - order:rejected, status dari payload ('ASSIGNED' saat ini),
  *     driverId di-reset
- *   - order:cancelled → status dari payload ('ASSIGNED' per K9) + cancelReason
+ *   - order:cancelled, status dari payload ('ASSIGNED' saat ini) + cancelReason
  *     dari driver
  *   - order:cod_collected → TIDAK mengubah status order (lihat catatan di
- *     PaymentsService.collectCod()/OrdersGateway.emitOrderCodCollected —
+ *     PaymentsService.collectCod()/OrdersGateway.emitOrderCodCollected,
  *     status order memang tidak berubah saat COD di-collect). Ini murni
  *     live receipt: tampilkan banner konfirmasi pembayaran, dismissable,
  *     terpisah dari state `order` itu sendiri.
  *
- * K9 (2026-09): pool state adalah ASSIGNED + driverId null, bukan CONFIRMED
- * lagi. OrderTrackingScreen pakai payload.status langsung supaya kontrak
- * type literal di @delivery/shared jadi penjaga (backend tidak bisa
- * switch status tanpa compile error di sini juga).
+ * Pool state adalah ASSIGNED + driverId null, bukan CONFIRMED lagi.
+ * OrderTrackingScreen pakai payload.status langsung supaya kontrak type
+ * literal di @delivery/shared jadi penjaga: backend tidak bisa switch status
+ * tanpa compile error di sini juga.
  *
  * Connection banner muncul saat socket disconnect (network drop / airplane
- * mode / background). State order TIDAK hilang — banner hanya indikator.
+ * mode / background). State order TIDAK hilang, banner hanya indikator.
  * Pattern paralel dengan OrderConflictBanner di OrderDetailScreen.
  */
 
@@ -140,10 +140,10 @@ export function OrderTrackingScreen({
             status: 'PREPARING' as OrderStatus,
             driverId: payload.driverId,
             version: payload.version,
-            // COMMIT 1: server clear cancelReason saat accept. Kita mirror
-            // di client supaya kalau fetch awal dapat cancelReason stale
-            // (mis. order cron-keluar ASSIGNED dengan system_timeout),
-            // banner "Alasan Pembatalan" hilang begitu driver accept.
+            // Server clear cancelReason saat accept, mobile mirror supaya
+            // kalau fetch awal dapat cancelReason stale (mis. order
+            // cron-keluar ASSIGNED dengan system_timeout), banner
+            // "Alasan Pembatalan" hilang begitu driver accept.
             cancelReason: undefined,
           }) ||
           prev,
@@ -156,8 +156,8 @@ export function OrderTrackingScreen({
         (prev) =>
           (prev && {
             ...prev,
-            // K9: pakai payload.status langsung (sekarang 'ASSIGNED') —
-            // kalau backend emit status lain di masa depan, type literal
+            // Pakai payload.status langsung ('ASSIGNED'); kalau backend
+            // emit status lain di masa depan, type literal
             // OrderRejectedPayload.status akan menolak payload sebelum
             // sampai ke sini, jadi tidak ada silent drift.
             status: payload.status as OrderStatus,
@@ -174,7 +174,7 @@ export function OrderTrackingScreen({
         (prev) =>
           (prev && {
             ...prev,
-            // K9: pakai payload.status langsung ('ASSIGNED').
+            // Pakai payload.status langsung ('ASSIGNED').
             status: payload.status as OrderStatus,
             driverId: undefined,
             cancelReason: payload.reason,

@@ -387,8 +387,8 @@ export class SyncCoordinator implements Coordinator {
           // WatermelonDB API untuk record dengan custom ID (server UUID).
           // Pola lama (collection.prepareCreate + r._raw.id = record.id)
           // tidak didukung resmi WatermelonDB dan bisa bikin row korup.
-          // Pola ini sudah dipakai di OrdersScreen fetchPool (commit 17df140)
-          // dan outbox enqueue* (commit d63c55e) — sekarang applyPull catch up.
+          // Pola ini sudah dipakai di OrdersScreen fetchPool
+          // dan outbox enqueue*, sekarang applyPull catch up.
           //
           // Field mapping parallel dengan applyServerDataToLocalRow (update
           // path). Lihat buildRawRowForCreate JSDoc untuk Decision rationale

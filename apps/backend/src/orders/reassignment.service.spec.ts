@@ -13,10 +13,9 @@
  * 9. checkReassignments - PREPARING order uses preparing timeout (15 min)
  * 10. checkReassignments - no active orders → no reassignments, no errors
  *
- * K9 (2026-09): ReassignmentService sekarang mendelegasikan release ke
- * OrdersService.releaseToPool, bukan langsung prisma.order.update + emit.
- * Mock OrdersService.releaseToPool untuk test — Prisma langsung tidak
- * lagi dipanggil untuk release path.
+ * ReassignmentService mendelegasikan release ke OrdersService.releaseToPool,
+ * bukan langsung prisma.order.update + emit. Mock OrdersService.releaseToPool
+ * untuk test, Prisma langsung tidak lagi dipanggil untuk release path.
  */
 
 import { Test, TestingModule } from '@nestjs/testing';

@@ -1,15 +1,15 @@
 /**
  * E2E tests untuk Orders accept/reject endpoints.
  *
- * Coverage (FIXUP A untuk 2e82436):
+ * Coverage:
  * 1. Driver accept order ASSIGNED → PREPARING
  * 2. Customer ditolak akses accept (403)
  * 3. Order tidak dalam status ASSIGNED → 409 ORDER_UNAVAILABLE
- *    (sebelumnya 400 — naik jadi 409 sejak cafba79 agar match dengan
- *    ConflictException body code di OrdersService.acceptOrder)
+ *    (sebelumnya 400, naik jadi 409 agar match dengan ConflictException
+ *    body code di OrdersService.acceptOrder)
  * 4. Order sudah di-assign driver lain → 409 ORDER_UNAVAILABLE
  * 5. Driver reject order ASSIGNED → balik ke pool (ASSIGNED + driverId null)
- *    (FIX 2026-09: was CANCELLED, lalu CONFIRMED; sekarang ASSIGNED)
+ *    (sebelumnya CANCELLED, lalu CONFIRMED; sekarang ASSIGNED)
  * 6. Race condition: 2 driver accept bersamaan → cuma 1 sukses, 1 dapat
  *    409 (OCC) atau 400 (status check)
  * 7. Driver cancel → balik ke pool (ASSIGNED + driverId null)
@@ -183,9 +183,9 @@ describe('Orders (e2e) - accept/reject', () => {
         update: {},
       });
       try {
-        // K9 (FIXUP A): accept pada status bukan ASSIGNED sekarang
-        // dibalas 409 ORDER_UNAVAILABLE (sebelumnya 400). ConflictException
-        // body code cocok dengan logic isVersionConflict di mobile.
+        // Accept pada status bukan ASSIGNED sekarang dibalas 409
+        // ORDER_UNAVAILABLE (sebelumnya 400). ConflictException body code
+        // cocok dengan logic isVersionConflict di mobile.
         const resp = await request(app.getHttpServer())
           .post(`/orders/${orderId}/accept`)
           .set('Authorization', `Bearer ${driverToken}`)
@@ -213,10 +213,9 @@ describe('Orders (e2e) - accept/reject', () => {
   });
 
   describe('POST /orders/:id/reject', () => {
-    // FIX (2026-09, diperkuat FIXUP A untuk 2e82436): rejectOrder now
-    // requires ownership (lihat orders.service.ts doc comment) dan
-    // mengembalikan order ke pool (status ASSIGNED + driverId null),
-    // bukan terminal CANCELLED atau CONFIRMED — sehingga pool fetch
+    // rejectOrder now requires ownership (lihat orders.service.ts doc
+    // comment) dan mengembalikan order ke pool (status ASSIGNED + driverId
+    // null), bukan terminal CANCELLED atau CONFIRMED, sehingga pool fetch
     // berikutnya bisa langsung pick-up order ini kembali.
     test('200: driver reject order ASSIGNED yang di-assign ke dirinya → balik ke pool (ASSIGNED + driverId null)', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000b01';
@@ -228,7 +227,7 @@ describe('Orders (e2e) - accept/reject', () => {
           .send({ version: 1 })
           .expect(200);
 
-        // K9 (FIXUP A): balik ke pool = ASSIGNED + driverId null.
+        // Balik ke pool = ASSIGNED + driverId null.
         expect(resp.body.status).toBe(OrderStatus.ASSIGNED);
         expect(resp.body.driverId).toBeFalsy();
       } finally {
@@ -550,8 +549,8 @@ describe('Orders (e2e) - accept/reject', () => {
         expect(acceptResp.body.status).toBe('PREPARING');
         expect(acceptResp.body.driverId).toBe(driverUserId);
 
-        // Driver cancel — order balik ke pool (K9 FIXUP A: ASSIGNED +
-        // driverId null, bukan CONFIRMED).
+        // Driver cancel, order balik ke pool (ASSIGNED + driverId null,
+        // bukan CONFIRMED).
         const cancelResp = await request(app.getHttpServer())
           .post(`/orders/${orderId}/cancel`)
           .set('Authorization', `Bearer ${driverToken}`)
@@ -764,9 +763,9 @@ describe('Orders (e2e) - accept/reject', () => {
         })
         .expect(201);
 
-      // K9 (FIXUP A): order baru lahir ASSIGNED + driverId null (pool state)
-      // — bukan PENDING. Broadcast emitOrderAvailable dipanggil supaya
-      // driver yang online langsung lihat order baru tanpa pull REST.
+      // Order baru lahir ASSIGNED + driverId null (pool state), bukan
+      // PENDING. Broadcast emitOrderAvailable dipanggil supaya driver
+      // yang online langsung lihat order baru tanpa pull REST.
       expect(resp.body.status).toBe(OrderStatus.ASSIGNED);
       expect(resp.body.customerId).toBe(customerUserId);
       expect(resp.body.items).toHaveLength(1);

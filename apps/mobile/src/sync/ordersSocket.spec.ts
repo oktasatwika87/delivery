@@ -555,11 +555,11 @@ describe('OrdersSocketManager', () => {
     });
   });
 
-  // ===== Customer-targeted events (Tier 3) =====
+  // ===== Customer-targeted events =====
   //
   // order:accepted, order:rejected, order:cancelled di-emit oleh OrdersGateway
-  // ke room customerId (lihat commit backend sebelumnya). Mobile subscribe
-  // ke sini untuk live-update OrderTrackingScreen.
+  // ke room customerId. Mobile subscribe ke sini untuk live-update
+  // OrderTrackingScreen.
 
   describe('order:accepted event (customer-targeted)', () => {
     test('onOrderAccepted callback invoked with correct payload', async () => {

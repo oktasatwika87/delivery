@@ -3,8 +3,8 @@
  *
  * Navigation stack for customer users. Contains screens for:
  * - CustomerHomeScreen
- * - OrderCreateScreen (Tier 2)
- * - OrderTrackingScreen (Tier 3)
+ * - OrderCreateScreen
+ * - OrderTrackingScreen
  *
  * This stack is rendered when `role === 'CUSTOMER'` in App.tsx.
  */

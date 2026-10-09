@@ -32,7 +32,7 @@ interface PresetRegion {
   bounds: Bounds;
 }
 
-// Default presets — area delivery di Bali (tile server Tier 3 serve Bali bbox).
+// Default presets, area delivery di Bali (tile server saat ini serve Bali bbox).
 // User bisa tambah preset baru dari UI advanced (TODO), atau override via
 // config / API nanti.
 // NOTE: bounds order is NE-first [[neLng, neLat], [swLng, swLat]] per

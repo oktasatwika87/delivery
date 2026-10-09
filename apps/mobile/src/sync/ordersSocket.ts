@@ -56,10 +56,9 @@ const ORDERS_NAMESPACE = '/orders';
  * Payload types di-import dari @delivery/shared (packages/shared/src/order-events.ts)
  * dan di-re-export di sini supaya konsumen existing (import dari './ordersSocket')
  * nggak perlu berubah. Sebelumnya 5 interface ini didefinisikan lokal DAN
- * terpisah di orders.gateway.ts (backend) — duplikasi itu yang bikin literal
+ * terpisah di orders.gateway.ts (backend), duplikasi itu yang bikin literal
  * status pool-state bisa drift tanpa ketahuan compiler, lihat riwayat
- * lengkap di order-events.ts (K9 sekarang pakai 'ASSIGNED' sebagai status
- * pool-state, type literal UnionStringOnly menjaganya dari kedua sisi).
+ * lengkap di order-events.ts.
  */
 export type {
   OrderAvailablePayload,
@@ -241,7 +240,7 @@ class OrdersSocketManager {
         this.emit('orderUnavailable', payload);
       });
 
-      // Customer-targeted events (Tier 3) — delivered ke customer via
+      // Customer-targeted events, delivered ke customer via
       // room = customerId. OrderTrackingScreen subscribe ke ini untuk
       // live-update status tanpa refresh manual.
       this.socket.on('order:accepted', (payload: OrderAcceptedPayload) => {
@@ -351,9 +350,9 @@ class OrdersSocketManager {
 
   /**
    * Subscribe ke order:rejected event (customer-side).
-   * Fire ketika driver reject — order balik ke pool (ASSIGNED + driverId null,
-   * BUKAN CANCELLED/terminal, dan BUKAN CONFIRMED lagi — lihat K9 dan
-   * order-events.ts untuk riwayat lengkap kenapa).
+   * Fire ketika driver reject, order balik ke pool (ASSIGNED + driverId null,
+   * BUKAN CANCELLED/terminal, dan BUKAN CONFIRMED lagi, lihat order-events.ts
+   * untuk riwayat lengkap kenapa).
    */
   onOrderRejected(callback: (payload: OrderRejectedPayload) => void): () => void {
     return this.on<OrderRejectedPayload>('orderRejected', callback);
@@ -361,8 +360,8 @@ class OrdersSocketManager {
 
   /**
    * Subscribe ke order:cancelled event (customer-side).
-   * Fire ketika driver cancel mid-delivery — order balik ke pool (ASSIGNED
-   * + driverId null) untuk di-reassign ke driver lain (K9).
+   * Fire ketika driver cancel mid-delivery, order balik ke pool (ASSIGNED
+   * + driverId null) untuk di-reassign ke driver lain.
    */
   onOrderCancelled(callback: (payload: OrderCancelledPayload) => void): () => void {
     return this.on<OrderCancelledPayload>('orderCancelled', callback);

@@ -27,8 +27,8 @@ const SYSTEM_DRIVER_ID = 'SYSTEM';
  * key `{id, version}` — kalau version berubah antara check dan update, skip silently.
  * Ini aman untuk multi-instance deployment dan race condition dengan acceptOrder().
  *
- * K9 (2026-09): release path didelegasikan ke OrdersService.releaseToPool —
- * single helper untuk semua "back to pool" operations (reject, cancel, reassign).
+ * Release path didelegasikan ke OrdersService.releaseToPool, satu helper
+ * untuk semua "back to pool" operations (reject, cancel, reassign).
  * Kalau helper itu melemparkan ConflictException(VERSION_CONFLICT), cron skip
  * silently seperti biasa (P2025 semantics).
  */

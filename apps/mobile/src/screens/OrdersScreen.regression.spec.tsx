@@ -987,8 +987,8 @@ describe('handleAccept - accept order lewat REST', () => {
     expect(await rowExistsInAdapter(rowId)).toBe(true);
   });
 
-  // Tes 4: 409 ORDER_UNAVAILABLE (cron melepas order ke CONFIRMED) → K2 Alert + pool-refresh
-  it('409 ORDER_UNAVAILABLE → Alert pesan K2 + syncEvents.emit("pool-refresh")', async () => {
+  // Tes 4: 409 ORDER_UNAVAILABLE (cron melepas order ke CONFIRMED), Alert + pool-refresh
+  it('409 ORDER_UNAVAILABLE, Alert muncul + syncEvents.emit("pool-refresh")', async () => {
     const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
     const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
     const syncEventsMod = jest.requireMock('../sync/syncEvents') as { syncEvents: { emit: jest.Mock } };
@@ -1026,7 +1026,7 @@ describe('handleAccept - accept order lewat REST', () => {
     const order = await db.get<OrderModel>('orders').find(rowId);
     await handleAcceptRef.current!(order);
 
-    // Alert pesan K2 dipanggil dengan satu argumen (title-only Alert.alert(message))
+    // Alert dipanggil dengan satu argumen (title-only Alert.alert(message))
     expect(Alert.alert as jest.Mock).toHaveBeenCalledWith(
       'Order sudah berubah atau diambil driver lain. Daftar diperbarui.',
     );
@@ -1034,8 +1034,8 @@ describe('handleAccept - accept order lewat REST', () => {
     expect(syncEventsMod.syncEvents.emit).toHaveBeenCalledWith('pool-refresh', {});
   });
 
-  // Tes 5: 409 VERSION_CONFLICT (OCC version mismatch) → K2 Alert + pool-refresh
-  it('409 VERSION_CONFLICT → Alert pesan K2 + syncEvents.emit("pool-refresh")', async () => {
+  // Tes 5: 409 VERSION_CONFLICT (OCC version mismatch), Alert + pool-refresh
+  it('409 VERSION_CONFLICT, Alert muncul + syncEvents.emit("pool-refresh")', async () => {
     const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
     const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
     const syncEventsMod = jest.requireMock('../sync/syncEvents') as { syncEvents: { emit: jest.Mock } };
