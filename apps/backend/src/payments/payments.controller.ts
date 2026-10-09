@@ -1,29 +1,15 @@
 import { Body, Controller, ForbiddenException, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 
-import type { CreatePaymentInput } from '@delivery/shared';
-
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { PaymentsService } from './payments.service';
 import { UserRole } from '@delivery/shared';
-
-interface CollectCodDto {
-  amountCents: number;
-  idempotencyKey: string;
-}
+import { CollectCodDto, FlagOrphanedDto } from './payments.dto';
 
 @Controller('payments')
 @UseGuards(JwtAuthGuard)
 export class PaymentsController {
   constructor(private readonly service: PaymentsService) {}
-
-  @Post()
-  create(
-    @Body() input: CreatePaymentInput,
-    @CurrentUser('id') userId: string,
-  ) {
-    return this.service.create(input, userId);
-  }
 
   /**
    * Driver collects COD (cash on delivery) for an order.
@@ -39,7 +25,7 @@ export class PaymentsController {
     if (role !== UserRole.DRIVER) {
       throw new ForbiddenException('Only drivers can collect COD');
     }
-    return this.service.collectCod(orderId, userId, body.amountCents, body.idempotencyKey);
+    return this.service.collectCod(orderId, userId, body.idempotencyKey);
   }
 
   /**
@@ -50,13 +36,13 @@ export class PaymentsController {
   @Post(':orderId/flag-orphaned')
   flagOrphaned(
     @Param('orderId', new ParseUUIDPipe()) orderId: string,
-    @Body() body: { amountCents: number; idempotencyKey: string },
+    @Body() body: FlagOrphanedDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: string,
   ) {
     if (role !== UserRole.DRIVER) {
       throw new ForbiddenException('Only drivers can flag orphaned COD');
     }
-    return this.service.flagOrphanedCod(orderId, userId, body.amountCents, body.idempotencyKey);
+    return this.service.flagOrphanedCod(orderId, userId, body.idempotencyKey);
   }
 }

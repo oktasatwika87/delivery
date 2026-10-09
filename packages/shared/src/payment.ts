@@ -66,10 +66,3 @@ export interface Payment {
   version: number;
 }
 
-export interface CreatePaymentInput {
-  orderId: string;
-  idempotencyKey: string;
-  method: PaymentMethod;
-  amountCents: number;
-  currency: string;
-}

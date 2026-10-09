@@ -1,7 +1,7 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
-import type { CreatePaymentInput, Payment } from '@delivery/shared';
+import type { Payment } from '@delivery/shared';
 
 import { OrdersGateway } from '../orders/orders.gateway';
 import { EmailService } from '../email/email.service';
@@ -14,45 +14,28 @@ export class PaymentsService {
     private readonly emailService: EmailService,
   ) {}
 
-  async create(input: CreatePaymentInput, userId: string): Promise<Payment> {
-    // Verify user owns the order
-    const order = await this.prisma.order.findUnique({ where: { id: input.orderId } });
-    if (!order || order.customerId !== userId) {
-      throw new ForbiddenException('Not your order');
-    }
-
-    const row = await this.prisma.payment.create({
-      data: {
-        orderId: input.orderId,
-        idempotencyKey: input.idempotencyKey,
-        method: input.method,
-        amountCents: input.amountCents,
-        currency: input.currency,
-        kind: 'PAYMENT',
-      },
-    });
-    return this.toDomain(row);
-  }
-
   /**
    * Driver collects COD (cash on delivery) for an order.
    * Reuses the existing idempotency key pattern to prevent double-collection.
    * Creates payment with method: CASH and status: CAPTURED directly.
+   * Jumlah dari order.totalCents, amountCents klien diabaikan.
    */
   async collectCod(
     orderId: string,
     driverId: string,
-    amountCents: number,
     idempotencyKey: string,
   ): Promise<Payment> {
     // Verify driver is assigned to this order
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) {
-      throw new NotFoundException(`Order ${orderId} not found`);
+      throw new NotFoundException('Order tidak ditemukan');
     }
     if (order.driverId !== driverId) {
       throw new ForbiddenException('You are not assigned to this order');
     }
+
+    // Gunakan jumlah dari server, bukan dari klien
+    const amountCents = order.totalCents;
 
     // Use upsert with idempotency key to prevent double-collection
     // If idempotencyKey already exists, return the existing record
@@ -95,18 +78,17 @@ export class PaymentsService {
   }
 
   /**
-   * Flag COD as orphaned — driver collected COD offline but order was reassigned
+   * Flag COD as orphaned, driver collected COD offline but order was reassigned
    * before sync. Finds existing pending payment record (by idempotencyKey) and
    * marks it orphaned, then notifies HSIN via email.
    *
-   * This is a server-side record flag only — the mobile app already has the
-   * local `orphaned_needs_review` status. This endpoint syncs that state to server
-   * so HSIN gets notified automatically.
+   * Jika idempotencyKey sudah dipakai di order lain, hasilnya 409 IDEMPOTENCY_KEY_CONFLICT.
+   * Jika order tidak ada, hasilnya 404.
+   * Jumlah dari order.totalCents.
    */
   async flagOrphanedCod(
     orderId: string,
     driverId: string,
-    amountCents: number,
     idempotencyKey: string,
   ): Promise<Payment> {
     // Verify driver exists and has the role
@@ -115,12 +97,27 @@ export class PaymentsService {
       throw new NotFoundException('Driver not found');
     }
 
-    // Find existing payment record by idempotencyKey
+    // Order harus ada, kalau tidak, 404
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) {
+      throw new NotFoundException('Order tidak ditemukan');
+    }
+
+    // Cek apakah idempotencyKey sudah dipakai di order lain
     const existing = await this.prisma.payment.findUnique({
       where: { idempotencyKey },
     });
 
+    if (existing && existing.orderId !== orderId) {
+      throw new ConflictException({
+        code: 'IDEMPOTENCY_KEY_CONFLICT',
+        message: `Idempotency key ${idempotencyKey} sudah dipakai di order lain`,
+      });
+    }
+
     const now = new Date();
+    const amountCents = order.totalCents;
+    const currency = order.currency;
 
     if (existing) {
       // Update existing record with orphanedAt
@@ -133,7 +130,7 @@ export class PaymentsService {
       this.emailService.sendOrphanedCodNotification({
         orderId,
         amountCents,
-        currency: existing.currency,
+        currency,
         driverId,
         driverName: driver.name,
         happenedAt: now,
@@ -144,9 +141,6 @@ export class PaymentsService {
       // No existing payment record — create one marked as orphaned.
       // This handles the case where the outbox detected orphan before any
       // payment record was ever created (e.g., collect-cod never succeeded).
-      const order = await this.prisma.order.findUnique({ where: { id: orderId } });
-      const currency = order?.currency ?? 'IDR';
-
       const row = await this.prisma.payment.create({
         data: {
           orderId,
