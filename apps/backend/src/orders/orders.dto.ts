@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   Min,
+  MaxLength,
   ValidateNested,
   ArrayMinSize,
   ValidatorConstraint,
@@ -66,8 +67,8 @@ export class OrderItemDto {
   @IsNotEmpty()
   name!: string;
 
-  @IsNumber()
-  @Min(1, { message: 'Quantity must be at least 1' })
+  @IsInt({ message: 'quantity harus bilangan bulat' })
+  @Min(1, { message: 'quantity minimal 1' })
   quantity!: number;
 
   @IsNumber()
@@ -147,4 +148,23 @@ export class UpdateOrderStatusDto {
   @IsInt({ message: 'version harus bilangan bulat' })
   @Min(1, { message: 'version minimal 1' })
   version!: number;
+}
+
+/** Request body untuk POST /orders/:id/accept dan /reject. */
+export class OrderAcceptRejectDto {
+  @IsInt({ message: 'version harus bilangan bulat' })
+  @Min(1, { message: 'version minimal 1' })
+  version!: number;
+}
+
+/** Request body untuk POST /orders/:id/cancel. */
+export class CancelOrderDto {
+  @IsInt({ message: 'version harus bilangan bulat' })
+  @Min(1, { message: 'version minimal 1' })
+  version!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500, { message: 'reason maksimal 500 karakter' })
+  reason?: string;
 }

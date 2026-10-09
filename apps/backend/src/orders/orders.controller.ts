@@ -17,12 +17,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { OrdersService } from './orders.service';
 import { UserRole } from '@delivery/shared';
-import { CreateOrderDto, UpdateOrderStatusDto } from './orders.dto';
-
-interface CancelOrderDto {
-  version: number;
-  reason?: string;
-}
+import { CreateOrderDto, UpdateOrderStatusDto, OrderAcceptRejectDto, CancelOrderDto } from './orders.dto';
 
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
@@ -103,7 +98,7 @@ export class OrdersController {
   @HttpCode(HttpStatus.OK)
   acceptOrder(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() body: { version: number },
+    @Body() body: OrderAcceptRejectDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: string,
   ) {
@@ -142,7 +137,7 @@ export class OrdersController {
   @HttpCode(HttpStatus.OK)
   rejectOrder(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() body: { version: number },
+    @Body() body: OrderAcceptRejectDto,
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: string,
   ) {

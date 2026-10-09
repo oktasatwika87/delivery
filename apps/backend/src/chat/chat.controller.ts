@@ -1,11 +1,10 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 
-import type { SendChatMessageInput } from '@delivery/shared';
-
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { ChatGateway } from './chat.gateway';
 import { ChatService } from './chat.service';
+import { SendChatMessageDto } from './chat.dto';
 
 @Controller('chat')
 @UseGuards(JwtAuthGuard)
@@ -26,7 +25,7 @@ export class ChatController {
 
   @Post('messages')
   async send(
-    @Body() input: SendChatMessageInput,
+    @Body() input: SendChatMessageDto,
     @CurrentUser('id') senderId: string,
   ) {
     const { message, created } = await this.service.send(input, senderId);

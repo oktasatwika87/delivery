@@ -1,7 +1,9 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 
-import type { ChatMessage, SendChatMessageInput } from '@delivery/shared';
+import type { ChatMessage } from '@delivery/shared';
+
+import { SendChatMessageDto } from './chat.dto';
 
 /**
  * Chat rooms dalam delivery app adalah order-specific.
@@ -67,7 +69,7 @@ export class ChatService {
    * - created=false: id sudah ada, baris yang ada dikembalikan tanpa diubah
    */
   async send(
-    input: SendChatMessageInput,
+    input: SendChatMessageDto,
     senderId: string,
   ): Promise<{ message: ChatMessage; created: boolean }> {
     await this.validateRoomAccess(input.roomId, senderId);

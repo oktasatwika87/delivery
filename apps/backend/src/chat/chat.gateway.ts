@@ -8,10 +8,13 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import type { ChatAttachment, ChatMessage } from '@delivery/shared';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import type { ChatMessage } from '@delivery/shared';
 import { JwtService } from '@nestjs/jwt';
 
 import { ChatService } from './chat.service';
+import { SendChatMessageDto } from './chat.dto';
 
 /**
  * WebSocket Gateway untuk chat real-time.
@@ -125,7 +128,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   /**
    * Kirim chat message.
    *
-   * Payload: SendChatMessageInput
+   * Payload: SendChatMessageDto
    *
    * Validasi room access dilakukan di ChatService.send().
    * Setelah berhasil, broadcast ke semua socket di room yang sama.
@@ -133,18 +136,23 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('send_message')
   async handleSendMessage(
     @ConnectedSocket() client: Socket,
-    @MessageBody() payload: { id?: string; roomId: string; body: string; attachment?: unknown },
+    @MessageBody() payload: unknown,
   ): Promise<{ success: boolean; error?: string; message?: ChatMessage }> {
     const userId = client.data['userId'] as string | undefined;
     if (!userId) {
       return { success: false, error: 'Not authenticated' };
     }
 
+    const dto = plainToInstance(SendChatMessageDto, payload);
+    const errors = await validate(dto, { whitelist: true, forbidNonWhitelisted: true });
+    if (errors.length > 0) {
+      const first = errors[0];
+      const msg = Object.values(first.constraints ?? {})[0] ?? 'Payload tidak valid';
+      return { success: false, error: msg };
+    }
+
     try {
-      const { message, created } = await this.chatService.send(
-        { id: payload.id, roomId: payload.roomId, body: payload.body, attachment: payload.attachment as ChatAttachment | undefined },
-        userId,
-      );
+      const { message, created } = await this.chatService.send(dto, userId);
 
       if (created) {
         this.emitNewMessage(message);

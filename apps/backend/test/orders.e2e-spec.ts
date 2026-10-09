@@ -631,7 +631,7 @@ describe('Orders (e2e) - accept/reject', () => {
   describe('COD collection', () => {
     test('driver collect COD - payment CASH CAPTURED', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000e01';
-      const idempotencyKey = 'cod-idem-e2e-001';
+      const idempotencyKey = 'cod:00000001-0000-4000-8000-000000000001';
 
       // Buat order PREPARING dengan driver assigned
       await prisma.order.upsert({
@@ -669,7 +669,7 @@ describe('Orders (e2e) - accept/reject', () => {
 
     test('idempotency key replay - no double-create', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000e02';
-      const idempotencyKey = 'cod-idem-e2e-002';
+      const idempotencyKey = 'cod:00000002-0000-4000-8000-000000000002';
 
       await prisma.order.upsert({
         where: { id: orderId },
@@ -735,7 +735,7 @@ describe('Orders (e2e) - accept/reject', () => {
         await request(app.getHttpServer())
           .post(`/payments/${orderId}/collect-cod`)
           .set('Authorization', `Bearer ${driver2Token}`)
-          .send({ amountCents: 50000, idempotencyKey: 'cod-idem-e2e-003' })
+          .send({ amountCents: 50000, idempotencyKey: 'cod:00000003-0000-4000-8000-000000000003' })
           .expect(403);
       } finally {
         await prisma.payment.deleteMany({ where: { orderId } }).catch(() => {});
@@ -834,7 +834,7 @@ describe('Orders (e2e) - accept/reject', () => {
           },
         })
         .expect(400);
-      expect(resp.body.message.some((m: string) => m.includes('Quantity'))).toBe(true);
+      expect(resp.body.message.some((m: string) => m.toLowerCase().includes('quantity'))).toBe(true);
     });
 
     test('400: quantity negatif → validasi error', async () => {
@@ -854,7 +854,7 @@ describe('Orders (e2e) - accept/reject', () => {
           },
         })
         .expect(400);
-      expect(resp.body.message.some((m: string) => m.includes('Quantity'))).toBe(true);
+      expect(resp.body.message.some((m: string) => m.toLowerCase().includes('quantity'))).toBe(true);
     });
 
     test('400: unitPriceCents = 0 → validasi error', async () => {
