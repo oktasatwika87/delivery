@@ -21,6 +21,7 @@ coverage/
 .env
 .env.local
 .env.*.local
+apps/mobile/.env.development
 
 # IDE
 .vscode/*
@@ -51,13 +52,3 @@ apps/mobile/android/local.properties
 
 # Manual / debug scripts (not part of source)
 scripts/*
-
-# catatan kerja lokal, jangan ikut ke repo
-RINGKASAN.md
-METRO-FIX-PLAN.md
-ringkasan-*.md
-skenario-*.md
-tier*-prompt.md
-tier*-ops.md
-offline-order-flow-design.md
-apps/mobile/.env.development
