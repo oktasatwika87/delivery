@@ -36,7 +36,7 @@ export class OrdersController {
     @Query('take') takeStr?: string,
   ) {
     if (role !== UserRole.DRIVER) {
-      throw new ForbiddenException('Only drivers can view available pool');
+      throw new ForbiddenException('Hanya driver yang bisa melihat order tersedia');
     }
     const take = Math.min(Math.max(parseInt(takeStr ?? '50', 10) || 50, 1), 100);
     return this.ordersService.findAvailable(userId, take);
@@ -57,7 +57,7 @@ export class OrdersController {
     @CurrentUser('role') role: string,
   ) {
     if (role !== UserRole.CUSTOMER) {
-      throw new ForbiddenException('Only customers can create orders');
+      throw new ForbiddenException('Hanya customer yang bisa membuat order');
     }
     return this.ordersService.create(dto, userId);
   }
@@ -84,7 +84,7 @@ export class OrdersController {
     @CurrentUser('role') role: string,
   ) {
     if (role !== UserRole.DRIVER) {
-      throw new ForbiddenException('Only drivers can update order status');
+      throw new ForbiddenException('Hanya driver yang bisa mengubah status order');
     }
     return this.ordersService.transitionStatus(id, dto.status, dto.version, userId);
   }
@@ -103,7 +103,7 @@ export class OrdersController {
     @CurrentUser('role') role: string,
   ) {
     if (role !== UserRole.DRIVER) {
-      throw new ForbiddenException('Only drivers can accept orders');
+      throw new ForbiddenException('Hanya driver yang bisa menerima order');
     }
     return this.ordersService.acceptOrder(id, body.version, userId);
   }
@@ -123,7 +123,7 @@ export class OrdersController {
     @CurrentUser('role') role: string,
   ) {
     if (role !== UserRole.DRIVER) {
-      throw new ForbiddenException('Only drivers can cancel orders');
+      throw new ForbiddenException('Hanya driver yang bisa membatalkan order');
     }
     return this.ordersService.cancelOrder(id, body.version, userId, body.reason);
   }
@@ -142,7 +142,7 @@ export class OrdersController {
     @CurrentUser('role') role: string,
   ) {
     if (role !== UserRole.DRIVER) {
-      throw new ForbiddenException('Only drivers can reject orders');
+      throw new ForbiddenException('Hanya driver yang bisa menolak order');
     }
     return this.ordersService.rejectOrder(id, body.version, userId);
   }

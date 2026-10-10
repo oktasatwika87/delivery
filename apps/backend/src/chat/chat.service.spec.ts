@@ -129,7 +129,7 @@ describe('ChatService.send()', () => {
       (prisma.order.findUnique as jest.Mock).mockResolvedValue(mockOrder);
 
       await expect(service.send(chatInput, outsiderId)).rejects.toThrow(ForbiddenException);
-      await expect(service.send(chatInput, outsiderId)).rejects.toThrow('Not your order');
+      await expect(service.send(chatInput, outsiderId)).rejects.toThrow('Order ini bukan milik Anda');
       expect(prisma.chatMessage.create).not.toHaveBeenCalled();
     });
 
@@ -137,7 +137,7 @@ describe('ChatService.send()', () => {
       (prisma.order.findUnique as jest.Mock).mockResolvedValue(null);
 
       await expect(service.send(chatInput, customerId)).rejects.toThrow(ForbiddenException);
-      await expect(service.send(chatInput, customerId)).rejects.toThrow('Order not found');
+      await expect(service.send(chatInput, customerId)).rejects.toThrow('Order tidak ditemukan');
       expect(prisma.chatMessage.create).not.toHaveBeenCalled();
     });
   });

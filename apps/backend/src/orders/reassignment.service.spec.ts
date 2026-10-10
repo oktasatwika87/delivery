@@ -118,7 +118,7 @@ describe('ReassignmentService', () => {
       // releaseToPool melemparkan ConflictException untuk P2025
       const conflict = new ConflictException({
         code: 'VERSION_CONFLICT',
-        message: 'Order was modified by another request. Please refresh and try again.',
+        message: 'Order sudah diubah oleh permintaan lain. Muat ulang lalu coba lagi.',
       });
       mockOrdersService.releaseToPool.mockRejectedValue(conflict);
 

@@ -72,7 +72,7 @@ export class OrderItemDto {
   quantity!: number;
 
   @IsNumber()
-  @Min(1, { message: 'Unit price must be at least 1 cent' })
+  @Min(1, { message: 'Harga satuan harus lebih dari 0' })
   unitPriceCents!: number;
 
   @IsOptional()
@@ -83,23 +83,23 @@ export class OrderItemDto {
 /** Alamat pengiriman. */
 export class DeliveryAddressDto {
   @IsString()
-  @IsNotEmpty({ message: 'Recipient name is required' })
+  @IsNotEmpty({ message: 'Nama penerima wajib diisi' })
   recipientName!: string;
 
   @IsString()
-  @IsNotEmpty({ message: 'Phone number is required' })
+  @IsNotEmpty({ message: 'Nomor HP wajib diisi' })
   phone!: string;
 
   @IsString()
-  @IsNotEmpty({ message: 'Street address is required' })
+  @IsNotEmpty({ message: 'Alamat wajib diisi' })
   street!: string;
 
   @IsString()
-  @IsNotEmpty({ message: 'City is required' })
+  @IsNotEmpty({ message: 'Kota wajib diisi' })
   city!: string;
 
   @IsString()
-  @IsNotEmpty({ message: 'Postal code is required' })
+  @IsNotEmpty({ message: 'Kode pos wajib diisi' })
   postalCode!: string;
 
   /** [lng, lat], konsisten dengan GeoJSON convention. */
@@ -116,7 +116,7 @@ export class CreateOrderDto {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
-  @ArrayMinSize(1, { message: 'At least one item is required' })
+  @ArrayMinSize(1, { message: 'Minimal satu barang' })
   items!: OrderItemDto[];
 
   @IsObject()

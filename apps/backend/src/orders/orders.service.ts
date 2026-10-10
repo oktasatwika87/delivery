@@ -50,9 +50,9 @@ export class OrdersService {
 
   async findById(id: string, userId: string): Promise<Order> {
     const row = await this.prisma.order.findUnique({ where: { id } });
-    if (!row) throw new NotFoundException(`Order ${id} not found`);
+    if (!row) throw new NotFoundException(`Order ${id} tidak ditemukan`);
     if (row.customerId !== userId && row.driverId !== userId) {
-      throw new ForbiddenException('Not your order');
+      throw new ForbiddenException('Order ini bukan milik Anda');
     }
     return this.toDomain(row);
   }
@@ -139,11 +139,11 @@ export class OrdersService {
     userId: string,
   ): Promise<Order> {
     const current = await this.prisma.order.findUnique({ where: { id } });
-    if (!current) throw new NotFoundException(`Order ${id} not found`);
+    if (!current) throw new NotFoundException(`Order ${id} tidak ditemukan`);
 
     // Cek 2: bukan driver order jadi 403
     if (current.driverId !== userId) {
-      throw new ForbiddenException('Not your order');
+      throw new ForbiddenException('Order ini bukan milik Anda');
     }
 
     // Cek 3: target bukan OUT_FOR_DELIVERY atau DELIVERED jadi 403
@@ -188,7 +188,7 @@ export class OrdersService {
       if (error.code === 'P2025') {
         throw new ConflictException({
           code: 'VERSION_CONFLICT',
-          message: 'Order was modified by another request. Please refresh and try again.',
+          message: 'Order sudah diubah oleh permintaan lain. Muat ulang lalu coba lagi.',
         });
       }
       throw err;
@@ -206,7 +206,7 @@ export class OrdersService {
     driverId: string,
   ): Promise<Order> {
     const current = await this.prisma.order.findUnique({ where: { id } });
-    if (!current) throw new NotFoundException(`Order ${id} not found`);
+    if (!current) throw new NotFoundException(`Order ${id} tidak ditemukan`);
 
     // Role check: harus DRIVER (dipastikan di controller via @CurrentUser('role'))
     // Status check: harus ASSIGNED baru bisa di-accept.
@@ -217,7 +217,7 @@ export class OrdersService {
     if (current.status !== OrderStatusDb.ASSIGNED) {
       throw new ConflictException({
         code: 'ORDER_UNAVAILABLE',
-        message: `Cannot accept order in status ${current.status}. Expected ASSIGNED.`,
+        message: `Order berstatus ${current.status} tidak bisa diterima, harus ASSIGNED.`,
       });
     }
 
@@ -226,7 +226,7 @@ export class OrdersService {
     if (current.driverId !== null && current.driverId !== driverId) {
       throw new ConflictException({
         code: 'ORDER_UNAVAILABLE',
-        message: 'Order already accepted by another driver.',
+        message: 'Order sudah diterima driver lain.',
       });
     }
 
@@ -267,7 +267,7 @@ export class OrdersService {
       if (error.code === 'P2025') {
         throw new ConflictException({
           code: 'VERSION_CONFLICT',
-          message: 'Order was modified by another request. Please refresh and try again.',
+          message: 'Order sudah diubah oleh permintaan lain. Muat ulang lalu coba lagi.',
         });
       }
       throw err;
@@ -306,13 +306,13 @@ export class OrdersService {
     driverId: string,
   ): Promise<Order> {
     const current = await this.prisma.order.findUnique({ where: { id } });
-    if (!current) throw new NotFoundException(`Order ${id} not found`);
+    if (!current) throw new NotFoundException(`Order ${id} tidak ditemukan`);
 
     // Status check: harus ASSIGNED baru bisa di-reject
     if (current.status !== OrderStatusDb.ASSIGNED) {
       throw new BadRequestException({
         code: 'ORDER_NOT_CANCELLABLE',
-        message: `Cannot reject order in status ${current.status}. Expected ASSIGNED.`,
+        message: `Order berstatus ${current.status} tidak bisa ditolak, harus ASSIGNED.`,
       });
     }
 
@@ -320,7 +320,7 @@ export class OrdersService {
     if (current.driverId !== driverId) {
       throw new ForbiddenException({
         code: 'ORDER_NOT_ASSIGNED',
-        message: 'You are not assigned to this order',
+        message: 'Order ini tidak ditugaskan ke Anda',
       });
     }
 
@@ -362,13 +362,13 @@ export class OrdersService {
     reason?: string,
   ): Promise<Order> {
     const current = await this.prisma.order.findUnique({ where: { id } });
-    if (!current) throw new NotFoundException(`Order ${id} not found`);
+    if (!current) throw new NotFoundException(`Order ${id} tidak ditemukan`);
 
     // Driver ownership: hanya driver yang sedang assigned yang boleh cancel
     if (current.driverId !== driverId) {
       throw new ForbiddenException({
         code: 'ORDER_NOT_ASSIGNED',
-        message: 'You are not assigned to this order',
+        message: 'Order ini tidak ditugaskan ke Anda',
       });
     }
 
@@ -383,7 +383,7 @@ export class OrdersService {
     if (!isCancellable(current.status)) {
       throw new BadRequestException({
         code: 'ORDER_NOT_CANCELLABLE',
-        message: `Cannot cancel order in status ${current.status}. Must be ASSIGNED, PREPARING, or OUT_FOR_DELIVERY.`,
+        message: `Order berstatus ${current.status} tidak bisa dibatalkan, harus ASSIGNED, PREPARING, atau OUT_FOR_DELIVERY.`,
       });
     }
 
@@ -450,7 +450,7 @@ export class OrdersService {
       if (error.code === 'P2025') {
         throw new ConflictException({
           code: 'VERSION_CONFLICT',
-          message: 'Order was modified by another request. Please refresh and try again.',
+          message: 'Order sudah diubah oleh permintaan lain. Muat ulang lalu coba lagi.',
         });
       }
       throw err;

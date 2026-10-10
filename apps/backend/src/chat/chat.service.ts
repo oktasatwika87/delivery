@@ -41,11 +41,11 @@ export class ChatService {
     });
 
     if (!order) {
-      throw new ForbiddenException('Order not found');
+      throw new ForbiddenException('Order tidak ditemukan');
     }
 
     if (order.customerId !== userId && order.driverId !== userId) {
-      throw new ForbiddenException('Not your order');
+      throw new ForbiddenException('Order ini bukan milik Anda');
     }
   }
 

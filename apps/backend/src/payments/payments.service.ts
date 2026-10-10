@@ -31,7 +31,7 @@ export class PaymentsService {
       throw new NotFoundException('Order tidak ditemukan');
     }
     if (order.driverId !== driverId) {
-      throw new ForbiddenException('You are not assigned to this order');
+      throw new ForbiddenException('Order ini tidak ditugaskan ke Anda');
     }
 
     // Gunakan jumlah dari server, bukan dari klien
@@ -94,7 +94,7 @@ export class PaymentsService {
     // Verify driver exists and has the role
     const driver = await this.prisma.user.findUnique({ where: { id: driverId } });
     if (!driver) {
-      throw new NotFoundException('Driver not found');
+      throw new NotFoundException('Driver tidak ditemukan');
     }
 
     // Order harus ada, kalau tidak, 404

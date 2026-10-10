@@ -57,7 +57,7 @@ describe('ChatGateway', () => {
 
   describe('handleSendMessage', () => {
     test('ack {success: false, error} saat chatService.send throw', async () => {
-      mockSend.mockRejectedValue(new Error('Not your order'));
+      mockSend.mockRejectedValue(new Error('Order ini bukan milik Anda'));
 
       const mockClient = { data: { userId }, join: jest.fn() };
       const r = await gateway.handleSendMessage(mockClient as Parameters<typeof gateway.handleSendMessage>[0], {
@@ -65,7 +65,7 @@ describe('ChatGateway', () => {
       });
 
       expect(r.success).toBe(false);
-      expect(r.error).toBe('Not your order');
+      expect(r.error).toBe('Order ini bukan milik Anda');
     });
 
     test('ack {success: false, error: Not authenticated} bila userId kosong', async () => {

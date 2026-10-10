@@ -190,7 +190,7 @@ describe('PaymentsService', () => {
       ).rejects.toThrow(ForbiddenException);
       await expect(
         service.collectCod(orderId, driverId, idempotencyKey),
-      ).rejects.toThrow('You are not assigned to this order');
+      ).rejects.toThrow('Order ini tidak ditugaskan ke Anda');
       expect(mockPrisma.payment.create).not.toHaveBeenCalled();
     });
 

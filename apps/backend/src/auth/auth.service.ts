@@ -24,7 +24,7 @@ export class AuthService {
   async register(dto: RegisterDto): Promise<{ token: string; user: AuthenticatedUser }> {
     const existing = await this.prisma.user.findUnique({ where: { phone: dto.phone } });
     if (existing) {
-      throw new ConflictException(`Phone ${dto.phone} already registered`);
+      throw new ConflictException(`Nomor ${dto.phone} sudah terdaftar`);
     }
 
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
@@ -45,11 +45,11 @@ export class AuthService {
   async login(dto: LoginDto): Promise<{ token: string; user: AuthenticatedUser }> {
     const row = await this.prisma.user.findUnique({ where: { phone: dto.phone } });
     if (!row || !row.passwordHash) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Nomor HP atau kata sandi salah');
     }
     const ok = await bcrypt.compare(dto.password, row.passwordHash);
     if (!ok) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Nomor HP atau kata sandi salah');
     }
 
     return this.issueToken(row.id, row.role, row.name, row.phone);

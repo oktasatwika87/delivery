@@ -110,7 +110,7 @@ describe('AuthService', () => {
 
       await expect(service.register(registerDto)).rejects.toThrow(ConflictException);
       await expect(service.register(registerDto)).rejects.toThrow(
-        'Phone +6281234567890 already registered',
+        'Nomor +6281234567890 sudah terdaftar',
       );
       // Create tidak boleh dipanggil karena phone sudah ada
       expect(mockPrismaUserCreate).not.toHaveBeenCalled();
@@ -139,14 +139,14 @@ describe('AuthService', () => {
       ).rejects.toThrow(UnauthorizedException);
       await expect(
         service.login({ phone: '+6281234567890', password: 'wrongpassword' }),
-      ).rejects.toThrow('Invalid credentials');
+      ).rejects.toThrow('Nomor HP atau kata sandi salah');
     });
 
     test('gagal -> user tidak ditemukan, UnauthorizedException', async () => {
       mockPrismaUserFindUnique.mockResolvedValue(null);
 
       await expect(service.login(loginDto)).rejects.toThrow(UnauthorizedException);
-      await expect(service.login(loginDto)).rejects.toThrow('Invalid credentials');
+      await expect(service.login(loginDto)).rejects.toThrow('Nomor HP atau kata sandi salah');
     });
   });
 });

@@ -24,7 +24,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
    */
   validate(payload: JwtPayload): { id: string; role: UserRole } {
     if (!payload?.sub) {
-      throw new UnauthorizedException('Invalid token payload');
+      throw new UnauthorizedException('Isi token tidak valid');
     }
     return { id: payload.sub, role: payload.role };
   }

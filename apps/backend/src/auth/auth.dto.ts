@@ -9,7 +9,7 @@ export class RegisterDto {
   phone!: string;
 
   @IsString()
-  @MinLength(8, { message: 'password must be at least 8 characters' })
+  @MinLength(8, { message: 'Kata sandi minimal 8 karakter' })
   password!: string;
 
   @IsString()

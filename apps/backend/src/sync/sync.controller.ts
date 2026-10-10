@@ -17,10 +17,10 @@ export class SyncController {
     @CurrentUser('id') userId: string,
   ): Promise<SyncPushResponse> {
     if (!payload.deviceId?.trim()) {
-      throw new BadRequestException('deviceId is required and cannot be empty');
+      throw new BadRequestException('deviceId wajib diisi dan tidak boleh kosong');
     }
     if (payload.userId !== userId) {
-      throw new ForbiddenException('userId mismatch');
+      throw new ForbiddenException('userId tidak sama dengan akun yang login');
     }
     return this.service.applyPush(payload, userId);
   }
@@ -32,7 +32,7 @@ export class SyncController {
     @Query('since') since?: string,
   ): Promise<SyncPullResponse> {
     if (!deviceId?.trim()) {
-      throw new BadRequestException('deviceId query parameter is required and cannot be empty');
+      throw new BadRequestException('Parameter query deviceId wajib diisi dan tidak boleh kosong');
     }
     return this.service.pullSince(deviceId, userId, since ?? null);
   }

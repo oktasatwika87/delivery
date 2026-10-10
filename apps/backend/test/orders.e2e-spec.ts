@@ -813,7 +813,7 @@ describe('Orders (e2e) - accept/reject', () => {
           },
         })
         .expect(400);
-      expect(resp.body.message).toContain('At least one item is required');
+      expect(resp.body.message).toContain('Minimal satu barang');
     });
 
     test('400: quantity = 0 jadi validasi error', async () => {
@@ -873,7 +873,7 @@ describe('Orders (e2e) - accept/reject', () => {
           },
         })
         .expect(400);
-      expect(resp.body.message.some((m: string) => m.includes('Unit price'))).toBe(true);
+      expect(resp.body.message.some((m: string) => m.includes('Harga satuan'))).toBe(true);
     });
 
     test('400: missing deliveryAddress jadi validasi error', async () => {
@@ -906,7 +906,7 @@ describe('Orders (e2e) - accept/reject', () => {
           },
         })
         .expect(400);
-      expect(resp.body.message.some((m: string) => m.includes('Recipient name'))).toBe(true);
+      expect(resp.body.message.some((m: string) => m.includes('Nama penerima'))).toBe(true);
     });
 
     test('400: missing city jadi validasi error', async () => {
@@ -926,7 +926,7 @@ describe('Orders (e2e) - accept/reject', () => {
           },
         })
         .expect(400);
-      expect(resp.body.message.some((m: string) => m.includes('City'))).toBe(true);
+      expect(resp.body.message.some((m: string) => m.includes('Kota'))).toBe(true);
     });
 
     // Validasi coordinates. Order tanpa coordinates sudah dicakup tes

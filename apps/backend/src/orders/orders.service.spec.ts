@@ -189,7 +189,7 @@ describe('OrdersService', () => {
       const response = (caught as ConflictException).getResponse();
       expect(response).toMatchObject({
         code: 'ORDER_UNAVAILABLE',
-        message: expect.stringContaining('already accepted by another driver'),
+        message: expect.stringContaining('Order sudah diterima driver lain'),
       });
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
@@ -213,7 +213,7 @@ describe('OrdersService', () => {
       const response = (caught as ConflictException).getResponse();
       expect(response).toMatchObject({
         code: 'ORDER_UNAVAILABLE',
-        message: expect.stringContaining('Cannot accept order in status PENDING'),
+        message: expect.stringContaining('Order berstatus PENDING tidak bisa diterima, harus ASSIGNED.'),
       });
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
@@ -237,7 +237,7 @@ describe('OrdersService', () => {
       const response = (caught as ConflictException).getResponse();
       expect(response).toMatchObject({
         code: 'ORDER_UNAVAILABLE',
-        message: expect.stringContaining('Cannot accept order in status CONFIRMED'),
+        message: expect.stringContaining('Order berstatus CONFIRMED tidak bisa diterima, harus ASSIGNED.'),
       });
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
@@ -261,7 +261,7 @@ describe('OrdersService', () => {
       const response = (caught as ConflictException).getResponse();
       expect(response).toMatchObject({
         code: 'ORDER_UNAVAILABLE',
-        message: expect.stringContaining('Cannot accept order in status PREPARING'),
+        message: expect.stringContaining('Order berstatus PREPARING tidak bisa diterima, harus ASSIGNED.'),
       });
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
@@ -274,7 +274,7 @@ describe('OrdersService', () => {
       );
       await expect(
         service.acceptOrder(orderId, version, driverId),
-      ).rejects.toThrow(`Order ${orderId} not found`);
+      ).rejects.toThrow(`Order ${orderId} tidak ditemukan`);
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
@@ -293,7 +293,7 @@ describe('OrdersService', () => {
       );
       await expect(
         service.acceptOrder(orderId, version, driverId),
-      ).rejects.toThrow('Order was modified by another request');
+      ).rejects.toThrow('Order sudah diubah oleh permintaan lain');
     });
 
     test('OCC conflict: response body memuat code VERSION_CONFLICT', async () => {
@@ -315,7 +315,7 @@ describe('OrdersService', () => {
       const response = (caught as ConflictException).getResponse();
       expect(response).toMatchObject({
         code: 'VERSION_CONFLICT',
-        message: expect.stringContaining('Order was modified by another request'),
+        message: expect.stringContaining('Order sudah diubah oleh permintaan lain'),
       });
     });
 
@@ -527,7 +527,7 @@ describe('OrdersService', () => {
       ).rejects.toThrow(ForbiddenException);
       await expect(
         service.rejectOrder(orderId, version, driverId),
-      ).rejects.toThrow('You are not assigned to this order');
+      ).rejects.toThrow('Order ini tidak ditugaskan ke Anda');
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
@@ -558,7 +558,7 @@ describe('OrdersService', () => {
       );
       await expect(
         service.rejectOrder(orderId, version, driverId),
-      ).rejects.toThrow('Cannot reject order in status PENDING');
+      ).rejects.toThrow('Order berstatus PENDING tidak bisa ditolak, harus ASSIGNED.');
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
@@ -570,7 +570,7 @@ describe('OrdersService', () => {
       );
       await expect(
         service.rejectOrder(orderId, version, driverId),
-      ).rejects.toThrow(`Order ${orderId} not found`);
+      ).rejects.toThrow(`Order ${orderId} tidak ditemukan`);
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
@@ -587,7 +587,7 @@ describe('OrdersService', () => {
       );
       await expect(
         service.rejectOrder(orderId, version, driverId),
-      ).rejects.toThrow('Order was modified by another request');
+      ).rejects.toThrow('Order sudah diubah oleh permintaan lain');
     });
 
     test('OCC conflict: response body memuat code VERSION_CONFLICT', async () => {
@@ -609,7 +609,7 @@ describe('OrdersService', () => {
       const response = caught.getResponse();
       expect(response).toMatchObject({
         code: 'VERSION_CONFLICT',
-        message: expect.stringContaining('Order was modified by another request'),
+        message: expect.stringContaining('Order sudah diubah oleh permintaan lain'),
       });
     });
 
@@ -757,7 +757,7 @@ describe('OrdersService', () => {
       ).rejects.toThrow(ForbiddenException);
       await expect(
         service.cancelOrder(orderId, version, driverId),
-      ).rejects.toThrow('You are not assigned to this order');
+      ).rejects.toThrow('Order ini tidak ditugaskan ke Anda');
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
@@ -771,7 +771,7 @@ describe('OrdersService', () => {
       ).rejects.toThrow(BadRequestException);
       await expect(
         service.cancelOrder(orderId, version, driverId),
-      ).rejects.toThrow('Cannot cancel order in status PENDING');
+      ).rejects.toThrow('Order berstatus PENDING tidak bisa dibatalkan');
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
@@ -785,7 +785,7 @@ describe('OrdersService', () => {
       ).rejects.toThrow(BadRequestException);
       await expect(
         service.cancelOrder(orderId, version, driverId),
-      ).rejects.toThrow('Cannot cancel order in status DELIVERED');
+      ).rejects.toThrow('Order berstatus DELIVERED tidak bisa dibatalkan');
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
@@ -797,7 +797,7 @@ describe('OrdersService', () => {
       ).rejects.toThrow(NotFoundException);
       await expect(
         service.cancelOrder(orderId, version, driverId),
-      ).rejects.toThrow(`Order ${orderId} not found`);
+      ).rejects.toThrow(`Order ${orderId} tidak ditemukan`);
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
@@ -817,7 +817,7 @@ describe('OrdersService', () => {
       ).rejects.toThrow(ConflictException);
       await expect(
         service.cancelOrder(orderId, version, driverId),
-      ).rejects.toThrow('Order was modified by another request');
+      ).rejects.toThrow('Order sudah diubah oleh permintaan lain');
     });
 
     // Skenario A (Temuan 1): body response harus berisi machine-readable
@@ -845,7 +845,7 @@ describe('OrdersService', () => {
       const response = caught.getResponse();
       expect(response).toMatchObject({
         code: 'VERSION_CONFLICT',
-        message: expect.stringContaining('Order was modified by another request'),
+        message: expect.stringContaining('Order sudah diubah oleh permintaan lain'),
       });
     });
 
@@ -1187,7 +1187,7 @@ describe('OrdersService', () => {
       ).rejects.toThrow(NotFoundException);
       await expect(
         service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId),
-      ).rejects.toThrow(`Order ${orderId} not found`);
+      ).rejects.toThrow(`Order ${orderId} tidak ditemukan`);
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 

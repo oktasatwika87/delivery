@@ -63,7 +63,7 @@ describe('OrdersController', () => {
       ).rejects.toThrow(ForbiddenException);
       await expect(
         controller.findAvailable(customerId, UserRole.CUSTOMER, '50'),
-      ).rejects.toThrow('Only drivers can view available pool');
+      ).rejects.toThrow('Hanya driver yang bisa melihat order tersedia');
       expect(mockService.findAvailable).not.toHaveBeenCalled();
     });
 

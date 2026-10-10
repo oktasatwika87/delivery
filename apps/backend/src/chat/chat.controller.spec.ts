@@ -129,7 +129,7 @@ describe('ChatController', () => {
 
     test('melemparkan ForbiddenException dan tidak memanggil listByRoom bila bukan peserta', async () => {
       chatService.validateRoomAccess.mockRejectedValue(
-        new ForbiddenException('Not your order'),
+        new ForbiddenException('Order ini bukan milik Anda'),
       );
 
       await expect(controller.list(orderId, userId)).rejects.toThrow(ForbiddenException);

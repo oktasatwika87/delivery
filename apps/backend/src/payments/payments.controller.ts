@@ -23,7 +23,7 @@ export class PaymentsController {
     @CurrentUser('role') role: string,
   ) {
     if (role !== UserRole.DRIVER) {
-      throw new ForbiddenException('Only drivers can collect COD');
+      throw new ForbiddenException('Hanya driver yang bisa mencatat COD');
     }
     return this.service.collectCod(orderId, userId, body.idempotencyKey);
   }
@@ -41,7 +41,7 @@ export class PaymentsController {
     @CurrentUser('role') role: string,
   ) {
     if (role !== UserRole.DRIVER) {
-      throw new ForbiddenException('Only drivers can flag orphaned COD');
+      throw new ForbiddenException('Hanya driver yang bisa melaporkan COD yatim');
     }
     return this.service.flagOrphanedCod(orderId, userId, body.idempotencyKey);
   }

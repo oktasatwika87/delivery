@@ -515,7 +515,7 @@ describe('SyncService.applyOne chat_message', () => {
       };
 
       chatService.send.mockImplementation(() =>
-        Promise.reject(new ForbiddenException('Order not found')),
+        Promise.reject(new ForbiddenException('Order tidak ditemukan')),
       );
 
       const ack = await service.applyOne('chat_message', chatRecord, userId);
