@@ -15,28 +15,25 @@
  */
 
 // mock-prefix wajib karena diakses dari jest.mock factory (hoisting).
-const mockScreenComponents: Record<string, unknown> = {};
+const mockScreenComponents: Record<string, (ComponentType<object> & { __marker?: string }) | null | undefined> = {};
 
 // Simpan referensi ke React untuk dipakai di dalam factory jest.mock
 // (yang di-hoist ke atas modul). Nama berawalan `mock` agar boleh diakses.
-const mockReact = jest.requireActual('react') as typeof import('react');
+const mockReact = jest.requireActual<typeof import('react')>('react');
 
 jest.mock('@react-navigation/native-stack', () => ({
   createNativeStackNavigator: () => ({
-    Navigator: ({ children }: { children: unknown }): JSX.Element => {
-      // Render children supaya Stack.Screen dipanggil dan component
-      // untuk tiap route terekam.
-      const fragmentChildren = children as unknown;
+    Navigator: ({ children }: { children: ReactNode }): React.ReactElement => {
       return mockReact.createElement(
         mockReact.Fragment,
         null,
-        fragmentChildren as JSX.Element | JSX.Element[],
+        children,
       );
     },
     Screen: ({
       name: routeName,
       component,
-    }: { name: string; component?: unknown }): null => {
+    }: { name: string; component?: ComponentType<object> }): null => {
       if (component !== undefined) {
         mockScreenComponents[routeName] = component;
       }
@@ -46,7 +43,7 @@ jest.mock('@react-navigation/native-stack', () => ({
 }));
 
 jest.mock('@react-navigation/native', () => ({
-  NavigationContainer: ({ children }: { children: unknown }): null => {
+  NavigationContainer: ({ children }: { children: ReactNode }): null => {
     void children;
     return null;
   },
@@ -67,36 +64,37 @@ jest.mock('react-native-config', () => ({
 // variabel top-level, supaya tidak kena TDZ saat jest.mock di-hoist ke atas
 // modul oleh transform jest.
 jest.mock('../screens/ChatScreen', () => {
-  const marker: ComponentType<unknown> & { __marker: string } = Object.assign(
-    (): null => null,
-    { __marker: 'CHATSCREEN_FROM_SCREENS_FOLDER' },
-  );
-  return { ChatScreen: marker };
+  function createMarker(): ComponentType<object> & { __marker: string } {
+    const marker = (): null => null;
+    marker.__marker = 'CHATSCREEN_FROM_SCREENS_FOLDER';
+    return marker;
+  }
+  return { ChatScreen: createMarker() };
 });
 
 // Impor identitas marker yang sebenarnya, lewat require agar referensi
 // sama dengan yang dipakai factory. Pakai helper untuk komparasi.
-const mockChatScreenMarkerModule = jest.requireMock('../screens/ChatScreen') as {
-  ChatScreen: ComponentType<unknown> & { __marker: string };
-};
+const mockChatScreenMarkerModule = jest.requireMock<{
+  ChatScreen: (props: object) => null & { __marker: string };
+}>('../screens/ChatScreen');
 const mockChatScreenMarker = mockChatScreenMarkerModule.ChatScreen;
 
 // Stub App.tsx dependencies: kalau navigator salah import dari App.tsx
 // (kode lama), ini mencegah module load meledak. Setelah fix, App.tsx
 // tidak lagi di-import dari CustomerStack, jadi stub ini tidak relevan.
 jest.mock('react-native-safe-area-context', () => ({
-  SafeAreaProvider: ({ children }: { children: unknown }): null => {
+  SafeAreaProvider: ({ children }: { children: ReactNode }): null => {
     void children;
     return null;
   },
-  SafeAreaView: ({ children }: { children: unknown }): null => {
+  SafeAreaView: ({ children }: { children: ReactNode }): null => {
     void children;
     return null;
   },
 }));
 
 jest.mock('@nozbe/watermelondb/react', () => ({
-  DatabaseProvider: ({ children }: { children: unknown }): null => {
+  DatabaseProvider: ({ children }: { children: ReactNode }): null => {
     void children;
     return null;
   },
@@ -175,7 +173,7 @@ jest.mock('../map/networkMonitor', () => ({
   },
 }));
 
-import type { ComponentType, JSX } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import { render } from '@testing-library/react-native';
 import { CustomerStack } from './CustomerStack';
 
@@ -189,9 +187,7 @@ describe('CustomerStack Chat route', () => {
   it('route Chat di customer stack memakai ChatScreen dari src/screens, bukan App', () => {
     render(<CustomerStack onLogout={jest.fn()} />);
 
-    const chatComponent = mockScreenComponents.Chat as
-      | (ComponentType<unknown> & { __marker?: string })
-      | undefined;
+    const chatComponent = mockScreenComponents.Chat;
     expect(chatComponent).toBeDefined();
     // Komponen untuk 'Chat' haruslah mockChatScreenMarker yang kita mock
     // untuk '../screens/ChatScreen', bukan default-export App.tsx.

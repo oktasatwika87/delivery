@@ -15,23 +15,29 @@
  */
 
 import React from 'react';
+import type { ReactNode } from 'react';
 import { Linking } from 'react-native';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import { MapScreen } from './MapScreen';
-import { RouteService } from '../map/routeService';
 import { networkMonitor } from '../map/networkMonitor';
 import { locationService } from '../map/location';
 import { offlineStorage } from '../map/offlineStorage';
 import type { RouteResult } from '../map/routeService';
 import type { RouteRequest } from '../map/routing';
+import type { PackInfo } from '../map/offlineStorage';
 import { MATCH_RADIUS_METERS, haversineDistance } from '../map/routeSnapshot';
 
 // Mock setup
 
 // Tipe untuk mocks yang diekspor lewat jest.requireMock.
+interface CameraPropsSeen {
+  centerCoordinate?: [number, number];
+  defaultSettings?: { centerCoordinate?: [number, number]; zoomLevel?: number };
+}
+
 type MapLibreMockExports = {
-  __cameraProps: jest.Mock;
+  __cameraProps: jest.Mock<void, [CameraPropsSeen]>;
   __cameraRef: {
     setCamera: jest.Mock;
     fitBounds: jest.Mock;
@@ -41,9 +47,9 @@ type MapLibreMockExports = {
   };
 };
 
-const mapLibreMock = jest.requireMock(
+const mapLibreMock = jest.requireMock<MapLibreMockExports>(
   '@maplibre/maplibre-react-native',
-) as MapLibreMockExports;
+);
 const cameraMock = mapLibreMock.__cameraProps;
 const mockCameraRef = mapLibreMock.__cameraRef;
 
@@ -63,8 +69,8 @@ jest.mock('@react-navigation/native', () => ({
 jest.mock('@maplibre/maplibre-react-native', () => {
   // require di dalam factory supaya tidak kena babel-plugin-jest-hoist
   // (variabel React yang di-import di top file dianggap out-of-scope).
-  const mockReact = require('react');
-  const mockCameraProps = jest.fn();
+  const React = require('react');
+  const mockCameraProps = jest.fn<void, [CameraPropsSeen]>();
   const mockCameraRef = {
     setCamera: jest.fn(),
     fitBounds: jest.fn(),
@@ -73,17 +79,17 @@ jest.mock('@maplibre/maplibre-react-native', () => {
     zoomTo: jest.fn(),
   };
 
-  const Camera = mockReact.forwardRef((props: object, ref: { update: (next: typeof mockCameraRef) => void }) => {
+  const Camera = React.forwardRef((props: CameraPropsSeen, ref: { update: (next: typeof mockCameraRef) => void }) => {
     mockCameraProps(props);
-    mockReact.useImperativeHandle(ref, () => mockCameraRef);
+    React.useImperativeHandle(ref, () => mockCameraRef);
     return null;
   });
   Camera.displayName = 'Camera';
 
-  const MapView = ({ children }: { children: unknown }) => children;
-  const ShapeSource = ({ children }: { children: unknown }) => children;
-  const LineLayer = () => null;
-  const MarkerView = ({ children }: { children: unknown }) => children;
+  const MapView = ({ children }: { children: ReactNode }): ReactNode => children;
+  const ShapeSource = ({ children }: { children: ReactNode }): ReactNode => children;
+  const LineLayer = (): null => null;
+  const MarkerView = ({ children }: { children: ReactNode }): ReactNode => children;
 
   return {
     __esModule: true,
@@ -109,8 +115,9 @@ jest.mock('@nozbe/watermelondb', () => ({
 }));
 
 // Mock dependencies
+const mockGetRoute = jest.fn<Promise<RouteResult>, [RouteRequest]>();
 jest.mock('../map/routeService', () => ({
-  RouteService: jest.fn(),
+  RouteService: jest.fn().mockImplementation(() => ({ getRoute: mockGetRoute })),
 }));
 
 jest.mock('../map/routing', () => ({
@@ -135,7 +142,7 @@ jest.mock('../map/location', () => ({
 
 jest.mock('../map/offlineStorage', () => ({
   offlineStorage: {
-    listPacks: jest.fn(),
+    listPacks: jest.fn<Promise<PackInfo[]>, []>(),
   },
 }));
 
@@ -151,6 +158,19 @@ function createMockRouteResult(geometry: Array<[number, number]>, isFromCache = 
       geometry,
     },
     isFromCache,
+  };
+}
+
+function createMockPackInfo(overrides: Partial<PackInfo> = {}): PackInfo {
+  return {
+    name: 'mock-pack',
+    bounds: [[106.8, -6.2], [106.9, -6.1]],
+    state: 'complete',
+    percentage: 100,
+    completedTileCount: 100,
+    completedTileSize: 1000,
+    requiredResourceCount: 100,
+    ...overrides,
   };
 }
 
@@ -172,7 +192,6 @@ function renderMapScreen() {
   return render(
     <MapScreen
       database={{ get: mockGet }}
-      navigation={{}}
       route={{ params: { orderId: 'order-123' } }}
     />,
   );
@@ -183,6 +202,7 @@ function renderMapScreen() {
 describe('MapScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockGetRoute.mockReset();
     cameraMock.mockClear();
     mockCameraRef.setCamera.mockClear();
     mockCameraRef.fitBounds.mockClear();
@@ -191,14 +211,14 @@ describe('MapScreen', () => {
     mockCameraRef.zoomTo.mockClear();
 
     // Default: network online, GPS location available
-    (networkMonitor.getStatus as jest.Mock).mockReturnValue('online');
-    (networkMonitor.subscribe as jest.Mock).mockReturnValue(() => {});
-    (networkMonitor.check as jest.Mock).mockResolvedValue('online');
+    jest.mocked(networkMonitor.getStatus).mockReturnValue('online');
+    jest.mocked(networkMonitor.subscribe).mockReturnValue(() => {});
+    jest.mocked(networkMonitor.check).mockResolvedValue('online');
 
-    (locationService.subscribe as jest.Mock).mockResolvedValue(() => {});
+    jest.mocked(locationService.subscribe).mockResolvedValue(() => {});
 
     // Default: offline packs available
-    (offlineStorage.listPacks as jest.Mock).mockResolvedValue([{ state: 'complete' }]);
+    jest.mocked(offlineStorage.listPacks).mockResolvedValue([createMockPackInfo()]);
 
     // Reset database mock
     mockGet.mockReturnValue({ find: mockFind });
@@ -213,14 +233,10 @@ describe('MapScreen', () => {
         },
       });
 
-      // Create mock RouteService
-      const mockGetRoute = jest.fn().mockResolvedValue(createMockRouteResult([[106.827, -6.175], [106.85, -6.2]]));
-      (RouteService as unknown as jest.Mock).mockImplementation(() => ({
-        getRoute: mockGetRoute,
-      }));
+      mockGetRoute.mockResolvedValue(createMockRouteResult([[106.827, -6.175], [106.85, -6.2]]));
 
       // Render component
-      render(<MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />);
+      await renderMapScreen();
 
       // Wait for effects to run
       await waitFor(() => {
@@ -237,14 +253,7 @@ describe('MapScreen', () => {
         },
       });
 
-      const mockGetRoute = jest.fn();
-      (RouteService as unknown as jest.Mock).mockImplementation(() => ({
-        getRoute: mockGetRoute,
-      }));
-
-      const { getByText } = render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      const { getByText } = await renderMapScreen();
 
       await waitFor(() => {
         expect(getByText(/Alamat pengiriman tidak memiliki koordinat yang valid/)).toBeTruthy();
@@ -254,14 +263,7 @@ describe('MapScreen', () => {
     test('handles order not found gracefully', async () => {
       mockFind.mockRejectedValue(new Error('Order not found'));
 
-      const mockGetRoute = jest.fn();
-      (RouteService as unknown as jest.Mock).mockImplementation(() => ({
-        getRoute: mockGetRoute,
-      }));
-
-      const { getByText } = render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'invalid-id' } } as any} />,
-      );
+      const { getByText } = await renderMapScreen();
 
       await waitFor(() => {
         expect(getByText(/order tidak ditemukan/i)).toBeTruthy();
@@ -272,7 +274,7 @@ describe('MapScreen', () => {
   describe('getRoute() invocation', () => {
     test('calls getRoute with correct origin/destination format', async () => {
       // GPS location: { lat, lng } format
-      (locationService.subscribe as jest.Mock).mockImplementation((callback) => {
+      jest.mocked(locationService.subscribe).mockImplementation((callback) => {
         // Simulate GPS update
         setTimeout(() => {
           callback({
@@ -291,18 +293,12 @@ describe('MapScreen', () => {
 
       // Track what getRoute receives
       let capturedRequest: RouteRequest | null = null;
-      const mockGetRoute = jest.fn().mockImplementation(async (req: RouteRequest) => {
+      mockGetRoute.mockImplementation(async (req: RouteRequest) => {
         capturedRequest = req;
         return createMockRouteResult([[106.827, -6.175], [106.85, -6.2]]);
       });
 
-      (RouteService as unknown as jest.Mock).mockImplementation(() => ({
-        getRoute: mockGetRoute,
-      }));
-
-      render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      await renderMapScreen();
 
       await waitFor(() => {
         expect(mockGetRoute).toHaveBeenCalled();
@@ -320,7 +316,7 @@ describe('MapScreen', () => {
 
     test('does not call getRoute before both origin and destination are available', async () => {
       // GPS location available
-      (locationService.subscribe as jest.Mock).mockImplementation((callback) => {
+      jest.mocked(locationService.subscribe).mockImplementation((callback) => {
         setTimeout(() => {
           callback({
             coords: { latitude: -6.175, longitude: 106.827 },
@@ -332,14 +328,7 @@ describe('MapScreen', () => {
       // Order lookup pending (don't resolve yet)
       mockFind.mockImplementation(() => new Promise(() => {}));
 
-      const mockGetRoute = jest.fn();
-      (RouteService as unknown as jest.Mock).mockImplementation(() => ({
-        getRoute: mockGetRoute,
-      }));
-
-      render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      await renderMapScreen();
 
       // Give some time for effects to run
       await new Promise((resolve) => globalThis.setTimeout(() => resolve(undefined), 50));
@@ -350,7 +339,7 @@ describe('MapScreen', () => {
 
   describe('routing states', () => {
     test('displays loading indicator while fetching route', async () => {
-      (locationService.subscribe as jest.Mock).mockImplementation((callback) => {
+      jest.mocked(locationService.subscribe).mockImplementation((callback) => {
         setTimeout(() => {
           callback({
             coords: { latitude: -6.175, longitude: 106.827 },
@@ -364,16 +353,11 @@ describe('MapScreen', () => {
       });
 
       // Mock slow getRoute
-      const mockGetRoute = jest.fn().mockImplementation(
+      mockGetRoute.mockImplementation(
         () => new Promise((resolve) => setTimeout(() => resolve(createMockRouteResult([[106.827, -6.175], [106.85, -6.2]])), 100)),
       );
-      (RouteService as unknown as jest.Mock).mockImplementation(() => ({
-        getRoute: mockGetRoute,
-      }));
 
-      const { getByText } = render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      const { getByText } = await renderMapScreen();
 
       await waitFor(() => {
         expect(getByText(/memuat rute/i)).toBeTruthy();
@@ -381,7 +365,7 @@ describe('MapScreen', () => {
     });
 
     test('displays cache indicator when route is from snapshot', async () => {
-      (locationService.subscribe as jest.Mock).mockImplementation((callback) => {
+      jest.mocked(locationService.subscribe).mockImplementation((callback) => {
         setTimeout(() => {
           callback({
             coords: { latitude: -6.175, longitude: 106.827 },
@@ -395,14 +379,9 @@ describe('MapScreen', () => {
       });
 
       // Route from cache
-      const mockGetRoute = jest.fn().mockResolvedValue(createMockRouteResult([[106.827, -6.175], [106.85, -6.2]], true));
-      (RouteService as unknown as jest.Mock).mockImplementation(() => ({
-        getRoute: mockGetRoute,
-      }));
+      mockGetRoute.mockResolvedValue(createMockRouteResult([[106.827, -6.175], [106.85, -6.2]], true));
 
-      const { getByText } = render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      const { getByText } = await renderMapScreen();
 
       await waitFor(() => {
         expect(getByText(/dari cache/i)).toBeTruthy();
@@ -410,7 +389,7 @@ describe('MapScreen', () => {
     });
 
     test('displays error message when getRoute throws', async () => {
-      (locationService.subscribe as jest.Mock).mockImplementation((callback) => {
+      jest.mocked(locationService.subscribe).mockImplementation((callback) => {
         setTimeout(() => {
           callback({
             coords: { latitude: -6.175, longitude: 106.827 },
@@ -423,14 +402,9 @@ describe('MapScreen', () => {
         addressJson: { coordinates: [106.85, -6.2] },
       });
 
-      const mockGetRoute = jest.fn().mockRejectedValue(new Error('Network error, cek koneksi internet.'));
-      (RouteService as unknown as jest.Mock).mockImplementation(() => ({
-        getRoute: mockGetRoute,
-      }));
+      mockGetRoute.mockRejectedValue(new Error('Network error, cek koneksi internet.'));
 
-      const { getByText } = render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      const { getByText } = await renderMapScreen();
 
       await waitFor(() => {
         expect(getByText(/Network error/i)).toBeTruthy();
@@ -441,19 +415,15 @@ describe('MapScreen', () => {
   describe('atribusi dan pusat cadangan', () => {
     test('tampilkan atribusi OpenStreetMap saat ada offline region', async () => {
       // default mock: offlineStorage.listPacks return [{ state: 'complete' }]
-      const { getByText } = render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      const { getByText } = await renderMapScreen();
       await waitFor(() => {
         expect(getByText('© OpenMapTiles © OpenStreetMap contributors')).toBeTruthy();
       });
     });
 
     test('tidak tampil atribusi saat belum ada offline region', async () => {
-      (offlineStorage.listPacks as jest.Mock).mockResolvedValue([]);
-      const { queryByText } = render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      jest.mocked(offlineStorage.listPacks).mockResolvedValue([]);
+      const { queryByText } = await renderMapScreen();
       await waitFor(() => {
         expect(queryByText('© OpenMapTiles © OpenStreetMap contributors')).toBeNull();
       });
@@ -462,9 +432,7 @@ describe('MapScreen', () => {
     test('tap atribusi membuka halaman hak cipta OpenStreetMap', async () => {
       const spy = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
       try {
-        const { getByText } = render(
-          <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-        );
+        const { getByText } = await renderMapScreen();
         await waitFor(() => {
           expect(getByText('© OpenMapTiles © OpenStreetMap contributors')).toBeTruthy();
         });
@@ -478,16 +446,11 @@ describe('MapScreen', () => {
     test('pusat cadangan Denpasar saat currentLocation null dan MapView tampil', async () => {
       // default mock: locationService.getLastKnown return null, currentLocation null
       // default mock: offlineStorage.listPacks return [{ state: 'complete' }], hasOfflineRegion true
-      render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      await renderMapScreen();
       await waitFor(() => {
         expect(cameraMock).toHaveBeenCalled();
       });
-      const props = cameraMock.mock.calls[0][0] as {
-        centerCoordinate?: [number, number];
-        defaultSettings?: { centerCoordinate?: [number, number]; zoomLevel?: number };
-      };
+      const props = jest.mocked(cameraMock).mock.calls[0][0];
       // Center fallback Denpasar lewat defaultSettings, bukan prop live.
       expect(props.defaultSettings?.centerCoordinate).toEqual(DEFAULT_FALLBACK_CENTER);
       // Tidak ada prop live centerCoordinate yang mengikat kamera ke GPS.
@@ -508,7 +471,7 @@ describe('MapScreen', () => {
     emit: (lat: number, lng: number) => void;
   } {
     let captured: ((loc: { coords: { latitude: number; longitude: number } }) => void) | null = null;
-    (locationService.subscribe as jest.Mock).mockImplementation((cb) => {
+    jest.mocked(locationService.subscribe).mockImplementation((cb) => {
       captured = cb;
       return Promise.resolve(() => {});
     });
@@ -520,11 +483,8 @@ describe('MapScreen', () => {
     };
   }
 
-  function setupRouteServiceResolve(getRouteImpl: (req: RouteRequest) => Promise<RouteResult>): jest.Mock {
-    const mockGetRoute = jest.fn().mockImplementation(getRouteImpl);
-    (RouteService as unknown as jest.Mock).mockImplementation(() => ({
-      getRoute: mockGetRoute,
-    }));
+  function setupRouteServiceResolve(getRouteImpl: (req: RouteRequest) => Promise<RouteResult>): jest.Mock<Promise<RouteResult>, [RouteRequest]> {
+    mockGetRoute.mockImplementation(getRouteImpl);
     return mockGetRoute;
   }
 
@@ -536,9 +496,7 @@ describe('MapScreen', () => {
       );
       const gps = setupGpsCapture();
 
-      render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      await renderMapScreen();
 
       act(() => {
         gps.emit(-6.175, 106.8);
@@ -573,9 +531,7 @@ describe('MapScreen', () => {
       );
       const gps = setupGpsCapture();
 
-      render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      await renderMapScreen();
 
       act(() => {
         gps.emit(-6.175, 106.8);
@@ -602,9 +558,7 @@ describe('MapScreen', () => {
       );
       const gps = setupGpsCapture();
 
-      render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      await renderMapScreen();
 
       act(() => {
         gps.emit(-6.175, 106.8);
@@ -629,9 +583,7 @@ describe('MapScreen', () => {
       );
       const gps = setupGpsCapture();
 
-      render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      await renderMapScreen();
 
       act(() => {
         gps.emit(-6.175, 106.8);
@@ -639,10 +591,7 @@ describe('MapScreen', () => {
       await waitFor(() => expect(cameraMock).toHaveBeenCalled());
 
       // Snapshot baseline prop di pemanggilan pertama.
-      const firstProps = cameraMock.mock.calls[0][0] as {
-        centerCoordinate?: [number, number];
-        defaultSettings?: { centerCoordinate?: [number, number] };
-      };
+      const firstProps = jest.mocked(cameraMock).mock.calls[0][0];
 
       // Update GPS.
       act(() => {
@@ -655,7 +604,7 @@ describe('MapScreen', () => {
       const subsequentCalls = cameraMock.mock.calls.slice(1);
       expect(subsequentCalls.length).toBeGreaterThan(0);
       for (const call of subsequentCalls) {
-        const props = call[0] as { centerCoordinate?: [number, number] };
+        const props = call[0];
         // centerCoordinate live harus undefined; fallback Denpasar hanya di defaultSettings.
         expect(props.centerCoordinate).toBeUndefined();
       }
@@ -672,9 +621,7 @@ describe('MapScreen', () => {
       );
       const gps = setupGpsCapture();
 
-      render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      await renderMapScreen();
 
       // Tunggu order lookup + listPacks selesai agar orderDestination dan
       // hasOfflineRegion sudah di-commit sebelum GPS di-emit.
@@ -696,8 +643,8 @@ describe('MapScreen', () => {
     test('listPacks resolve setelah getRoute: fitBounds 1x, setCamera 0x', async () => {
       // listPacks sengaja resolve belakangan supaya kamera baru ter-mount
       // setelah rute sudah siap.
-      (offlineStorage.listPacks as jest.Mock).mockImplementation(
-        () => new Promise((resolve) => globalThis.setTimeout(() => resolve([{ state: 'complete' }]), 80)),
+      jest.mocked(offlineStorage.listPacks).mockImplementation(
+        () => new Promise((resolve) => globalThis.setTimeout(() => resolve([createMockPackInfo()]), 80)),
       );
       mockFind.mockResolvedValue({ addressJson: { coordinates: [106.85, -6.2] } });
       setupRouteServiceResolve(async () =>
@@ -705,9 +652,7 @@ describe('MapScreen', () => {
       );
       const gps = setupGpsCapture();
 
-      render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      await renderMapScreen();
 
       // GPS datang duluan, saat listPacks belum resolve.
       act(() => {
@@ -726,9 +671,9 @@ describe('MapScreen', () => {
 
   describe('pemulihan online', () => {
     test('online pulih memicu satu getRoute tambahan walau GPS < 300 m', async () => {
-      (networkMonitor.getStatus as jest.Mock).mockReturnValue('offline');
+      jest.mocked(networkMonitor.getStatus).mockReturnValue('offline');
       let networkCallback: ((status: 'online' | 'offline') => void) | null = null;
-      (networkMonitor.subscribe as jest.Mock).mockImplementation((cb) => {
+      jest.mocked(networkMonitor.subscribe).mockImplementation((cb) => {
         networkCallback = cb;
         return () => {};
       });
@@ -738,9 +683,7 @@ describe('MapScreen', () => {
       );
       const gps = setupGpsCapture();
 
-      render(
-        <MapScreen database={{ get: mockGet } as any} navigation={{} as any} route={{ params: { orderId: 'order-123' } } as any} />,
-      );
+      await renderMapScreen();
 
       // Offline + GPS pertama, getRoute pertama (snapshot path).
       act(() => {
@@ -783,7 +726,7 @@ describe('MapScreen', () => {
       );
       const gps = setupGpsCapture();
 
-      const { queryByText } = renderMapScreen();
+      const { queryByText } = await renderMapScreen();
 
       // Posisi A memicu permintaan rute pertama.
       act(() => {
@@ -826,7 +769,7 @@ describe('MapScreen', () => {
       );
       const gps = setupGpsCapture();
 
-      const { queryByText, getByText } = renderMapScreen();
+      const { queryByText, getByText } = await renderMapScreen();
 
       act(() => {
         gps.emit(-6.175, 106.8);
@@ -870,7 +813,7 @@ describe('MapScreen', () => {
       );
       const gps = setupGpsCapture();
 
-      const { queryByText } = renderMapScreen();
+      const { queryByText } = await renderMapScreen();
 
       // Posisi A: permintaan 1 dimulai dan ditahan.
       act(() => {
