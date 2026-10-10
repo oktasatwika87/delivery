@@ -60,3 +60,4 @@ skenario-*.md
 tier*-prompt.md
 tier*-ops.md
 offline-order-flow-design.md
+apps/mobile/.env.development
