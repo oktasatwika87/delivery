@@ -1,5 +1,5 @@
 // Babel config untuk RN + WatermelonDB.
-// WatermelonDB models pakai @decorator (legacy) — plugin WAJIB di sini.
+// WatermelonDB models pakai @decorator (legacy) - plugin WAJIB di sini.
 module.exports = {
   presets: ['module:@react-native/babel-preset'],
   plugins: [

@@ -1,4 +1,4 @@
-// Flat config — ESLint 9. Setiap workspace extend dari ini via extends array.
+// Flat config - ESLint 9. Setiap workspace extend dari ini via extends array.
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(

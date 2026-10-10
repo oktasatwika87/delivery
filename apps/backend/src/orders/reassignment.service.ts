@@ -77,7 +77,7 @@ export class ReassignmentService {
       });
 
       this.logger.log(
-        `[reassign] Order ${orderId} timeout jadi reassigned to pool (v${expectedVersion} jadi ${updated.version})`,
+        `[reassign] Order ${orderId} timed out, released to pool (v${expectedVersion} -> v${updated.version})`,
       );
 
       // releaseToPool sudah broadcast ke pool (emitOrderAvailable),

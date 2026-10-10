@@ -1,7 +1,7 @@
 # Auto-detect text files and normalize line endings
 * text=auto
 
-# Shell scripts must always use LF — bash chokes on \r
+# Shell scripts must always use LF - bash chokes on \r
 *.sh text eol=lf
 
 # Keep these binary

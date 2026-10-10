@@ -1,10 +1,10 @@
 /**
- * Jest setup file — load sebelum semua test dijalankan.
+ * Jest setup file - load sebelum semua test dijalankan.
  *
  * Tujuan: menyediakan polyfill minimum yang dibutuhkan oleh component test
  * React Native (View, Text, hooks, dll.) tanpa harus load `react-native/jest/setup`
  * secara langsung. Alasannya: `setupFiles` di-Jest dieksekusi oleh Node runtime
- * SEBELUM transformer (babel-jest) berjalan — jadi kalau kita require file
+ * SEBELUM transformer (babel-jest) berjalan - jadi kalau kita require file
  * di `node_modules/react-native/jest/setup.js` dari sini, file-file Flow-typed
  * di transitive deps (e.g. `@react-native/js-polyfills/error-guard.js`) tidak
  * akan di-strip type annotationsnya dan parsing gagal.
@@ -20,7 +20,7 @@
  * TypeScript / Flow syntax di sini.
  *
  * NativeModules (UIManager, dll.) sudah di-mock di moduleNameMapper / jest.mock
- * per test file — tidak perlu mock global di sini.
+ * per test file - tidak perlu mock global di sini.
  */
 
 global.IS_REACT_ACT_ENVIRONMENT = true;

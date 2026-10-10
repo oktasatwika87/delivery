@@ -1,11 +1,11 @@
 /**
- * App entry — set up WatermelonDB, sync coordinator, dan navigation.
+ * App entry - set up WatermelonDB, sync coordinator, dan navigation.
  *
  * Auth flow:
- *   - App mulai → cek token di keychain
- *   - Ada token → langsung ke Orders (user sudah login sebelumnya)
- *   - Tidak ada token → tampilkan LoginScreen
- *   - Setelah login → handleLoginSuccess() set authenticated=true
+ *   - App mulai -> cek token di keychain
+ *   - Ada token -> langsung ke Orders (user sudah login sebelumnya)
+ *   - Tidak ada token -> tampilkan LoginScreen
+ *   - Setelah login -> handleLoginSuccess() set authenticated=true
  *     DAN trigger syncCoordinator.pullNow() supaya data server langsung
  *     muncul, tidak perlu menunggu tick periodik berikutnya (~30s).
  *
@@ -58,7 +58,7 @@ function App(): React.JSX.Element {
   const [showRegister, setShowRegister] = useState(false);
 
   // Track previous network status so we only kick flushNow on
-  // offline → online transition (not initial 'online' or every probe).
+  // offline -> online transition (not initial 'online' or every probe).
   const prevNetworkStatusRef = useRef<NetworkStatus>('unknown');
 
   useEffect(() => {
@@ -66,7 +66,7 @@ function App(): React.JSX.Element {
 
     // Fire-and-forget: syncCoordinator.start() jalan di background,
     // tidak blocking auth-check atau render UI.
-    // collectDirty() akan throw kalau belum login → ditangkep di catch,
+    // collectDirty() akan throw kalau belum login -> ditangkep di catch,
     // aman untuk fresh install / offline-first.
     syncCoordinator.start(database).catch((err) => {
       if (!cancelled) {
@@ -74,9 +74,9 @@ function App(): React.JSX.Element {
       }
     });
 
-    // Route snapshot retention cleanup — sekali per boot per session
-    // (lihat keputusan #8). LRU max 20 snapshot — lihat routeSnapshot.ts.
-    // Tidak dipicu interval — hemat baterai.
+    // Route snapshot retention cleanup - sekali per boot per session
+    // (lihat keputusan #8). LRU max 20 snapshot - lihat routeSnapshot.ts.
+    // Tidak dipicu interval - hemat baterai.
     routeSnapshotService
       .runRetentionCleanup(database)
       .catch((err) => {
@@ -85,15 +85,15 @@ function App(): React.JSX.Element {
         }
       });
 
-    // Network monitor — start periodic ping ke backend supaya UI map
-    // bisa tampil indikator online/offline real-time. Tidak blocking —
+    // Network monitor - start periodic ping ke backend supaya UI map
+    // bisa tampil indikator online/offline real-time. Tidak blocking -
     // optimistic default 'online' sampai ada bukti sebaliknya.
     networkMonitor.start();
 
-    // ─── AppState listener: pause/resume sync + sockets on background/foreground ──
+    // --- AppState listener: pause/resume sync + sockets on background/foreground ---
     // Fix C6 dari offline-audit-findings.md.
-    // background/inactive → stop sync + disconnect sockets (hemat battery/resource)
-    // active → restart periodic sync + resume sockets.
+    // background/inactive -> stop sync + disconnect sockets (hemat battery/resource)
+    // active -> restart periodic sync + resume sockets.
     //
     // stop() clear interval dan set stopped=true, jadi kalau app masuk background
     // lalu aktif lagi, periodic sync TIDAK akan jalan tanpa start() yang dipanggil ulang.
@@ -102,7 +102,7 @@ function App(): React.JSX.Element {
     // jadi aman dipanggil di sini tanpa "Cannot update a record with pending changes".
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
-        console.log('[App] AppState active — restarting sync + resuming sockets');
+        console.log('[App] AppState active, restarting sync + resuming sockets');
         // start() idempotent: guard di isStarting + syncInterval memastikan
         // tidak ada duplicate initial pull atau duplicate interval.
         syncCoordinator.start(database).catch((err) => {
@@ -115,17 +115,17 @@ function App(): React.JSX.Element {
           console.warn('[App] ordersSocket resume failed:', err);
         });
       } else {
-        // 'background' atau 'inactive' — sama treat-nya untuk MVP
-        console.log('[App] AppState background/inactive — pausing sync + sockets');
+        // 'background' atau 'inactive' - sama treat-nya untuk MVP
+        console.log('[App] AppState background/inactive, pausing sync + sockets');
         syncCoordinator.stop();
         chatSocket.disconnect();
         ordersSocket.disconnect();
       }
     });
 
-    // ─── Auth-expired listener: force logout saat session expired detected ───
+    // --- Auth-expired listener: force logout saat session expired detected ---
     const onAuthExpired = (event: { source: string }) => {
-      console.warn('[App] auth-expired event from:', event.source, '— forcing logout');
+      console.warn(`[App] auth-expired event from: ${event.source}, forcing logout`);
       setLogoutReason('auth-expired');
       // 1. Stop sync coordinator
       syncCoordinator.stop();
@@ -136,29 +136,29 @@ function App(): React.JSX.Element {
       clearToken().catch((err) => {
         console.error('[App] clearToken failed:', err);
       });
-      // 4. Reset auth state — trigger re-render ke LoginScreen
+      // 4. Reset auth state - trigger re-render ke LoginScreen
       setAuthenticated(false);
       setRole(null);
     };
     syncEvents.on('auth-expired', onAuthExpired);
 
-    // Auth-check jalan PARALEL dengan sync — tidak saling tunggu.
+    // Auth-check jalan PARALEL dengan sync - tidak saling tunggu.
     (async () => {
       try {
         const token = await getToken();
         console.log('[App] Auth token check done:', token ? `Found` : 'NULL');
 
         if (!token) {
-          // No token → not authenticated
+          // No token -> not authenticated
           setAuthenticated(false);
           setRole(null);
         } else {
-          // Token found → validate role
+          // Token found -> validate role
           const userRole = await getRole();
 
           if (!userRole) {
-            // Token invalid or role missing (legacy token) → trigger logout
-            console.warn('[App] Token has invalid or missing role — triggering logout');
+            // Token invalid or role missing (legacy token) -> trigger logout
+            console.warn('[App] Token has invalid or missing role - triggering logout');
             setLogoutReason('auth-expired');
             syncCoordinator.stop();
             chatSocket.disconnect();
@@ -167,13 +167,13 @@ function App(): React.JSX.Element {
             setAuthenticated(false);
             setRole(null);
           } else {
-            // Valid token and role → authenticated
+            // Valid token and role -> authenticated
             setAuthenticated(true);
             setRole(userRole);
             console.log('[App] User role:', userRole);
 
             // Restore session: connect ordersSocket (driver only for now)
-            // connect() idempotent — aman dipanggil berkali-kali
+            // connect() idempotent - aman dipanggil berkali-kali
             ordersSocket.connect().catch((err) => {
               if (!cancelled) {
                 console.warn('[App] ordersSocket connect failed (will retry):', err);
@@ -200,9 +200,9 @@ function App(): React.JSX.Element {
     };
   }, []);
 
-  // ─── Kick sync on back-online transition ────────────────────────────────────
+  // --- Kick sync on back-online transition -------------------------------------------
   // networkMonitor fires on every status change. Only trigger flushNow when
-  // we transition offline → online (not initial 'online', not every probe).
+  // we transition offline -> online (not initial 'online', not every probe).
   useEffect(() => {
     let cancelled = false;
 
@@ -211,7 +211,7 @@ function App(): React.JSX.Element {
       prevNetworkStatusRef.current = status;
 
       if (prev !== 'online' && status === 'online' && !cancelled) {
-        console.log('[App] Network status known online (was ' + prev + ') — triggering flush');
+        console.log('[App] Network status known online (was ' + prev + '), triggering flush');
         syncCoordinator.flushNow().catch((err) => {
           if (!cancelled) {
             console.warn(
@@ -245,8 +245,8 @@ function App(): React.JSX.Element {
    * Setelah token tersimpan di keychain (oleh LoginScreen SEBELUM callback ini
    * dipanggil), kita:
    *  1. Decode role dari token
-   *  2. Set authenticated=true + role state → App re-render dengan nav stack sesuai role
-   *  3. Trigger pullNow() secara manual — jangan tunggu 30s tick berikutnya.
+   *  2. Set authenticated=true + role state -> App re-render dengan nav stack sesuai role
+   *  3. Trigger pullNow() secara manual - jangan tunggu 30s tick berikutnya.
    */
   const handleLoginSuccess = async (): Promise<void> => {
     setLogoutReason(undefined);
@@ -264,8 +264,8 @@ function App(): React.JSX.Element {
     setRole(userRole);
     console.log('[App] Login success, user role:', userRole);
 
-    // ordersSocket — connect setelah login sukses. Tidak di-mount (Opsi A lazy
-    // per-screen) karena value proposition WebSocket push (§ 2.2.a) butuh socket
+    // ordersSocket - connect setelah login sukses. Tidak di-mount (Opsi A lazy
+    // per-screen) karena value proposition WebSocket push (2.2.a) butuh socket
     // nyala di semua screen (OrderDetail, Map, dll) bukan cuma OrdersScreen.
     ordersSocket.connect().catch((err) => {
       console.warn('[App] ordersSocket connect failed (will retry):', err);

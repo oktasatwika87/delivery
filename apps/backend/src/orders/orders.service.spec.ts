@@ -424,7 +424,7 @@ describe('OrdersService', () => {
       );
     });
 
-    test('totalCents dihitung dari quantity × unitPriceCents', async () => {
+    test('totalCents dihitung dari quantity * unitPriceCents', async () => {
       mockPrisma.order.create.mockResolvedValue({
         ...mockCreatedOrder,
         totalCents: 150000,

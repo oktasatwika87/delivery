@@ -1,4 +1,4 @@
-# tileserver-gl — melayani vector tile Bali ke app mobile.
+# tileserver-gl - melayani vector tile Bali ke app mobile.
 #
 # Penggunaan lokal (Docker):
 #   docker compose up

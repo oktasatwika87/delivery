@@ -12,18 +12,18 @@ module.exports = {
     '^react-native-keychain$': '<rootDir>/src/__mocks__/react-native-keychain.ts',
     '^@react-native-async-storage/async-storage$': '<rootDir>/src/__mocks__/@react-native-async-storage/async-storage.ts',
     '^@maplibre/maplibre-react-native$': '<rootDir>/src/__mocks__/@maplibre/maplibre-react-native.ts',
-    // Stub minimal react-native — package asli Flow-typed & platform-specific
+    // Stub minimal react-native - package asli Flow-typed & platform-specific
     // (./Utilities/Platform.android.js, dll) gagal resolve di jest runtime.
     // Untuk component test cukup StyleSheet + View/Text/TouchableOpacity/
-    // ActivityIndicator/Linking/Platform — semuanya dipakai MapScreen.tsx.
+    // ActivityIndicator/Linking/Platform - semuanya dipakai MapScreen.tsx.
     '^react-native$': '<rootDir>/src/__mocks__/react-native.ts',
   },
-  // Transformer setup — urutan penting karena preset ts-jest inject
-  // '^.+\\.tsx?$' → ts-jest, yang akan override tanpa kita urus.
+  // Transformer setup - urutan penting karena preset ts-jest inject
+  // '^.+\\.tsx?$' -> ts-jest, yang akan override tanpa kita urus.
   // Kita pakai pattern SPESIFIK (.tsx, .ts, .js) supaya tidak konflik.
-  // - .tsx → babel-jest + @react-native/babel-preset (butuh JSX + Flow stripping)
-  // - .ts  → ts-jest (unit test murni, no JSX)
-  // - .js  → babel-jest + @react-native/babel-preset (untuk RN libs Flow-typed
+  // - .tsx -> babel-jest + @react-native/babel-preset (butuh JSX + Flow stripping)
+  // - .ts  -> ts-jest (unit test murni, no JSX)
+  // - .js  -> babel-jest + @react-native/babel-preset (untuk RN libs Flow-typed
   //          yang lolos moduleNameMapper, e.g. transitive deps)
   transform: {
     '^.+\\.tsx$': [
@@ -59,6 +59,6 @@ module.exports = {
   transformIgnorePatterns: [
     'node_modules/(?!(?:.pnpm/)?(?:jest-)?@?react-native|@react-native-community|@react-navigation|@testing-library)',
   ],
-  // Setup file — lihat jest.setup.js untuk detail.
+  // Setup file - lihat jest.setup.js untuk detail.
   setupFiles: ['<rootDir>/jest.setup.js'],
 };

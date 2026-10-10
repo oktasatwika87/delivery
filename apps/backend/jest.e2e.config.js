@@ -4,7 +4,7 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src', '<rootDir>/test'],
   testMatch: ['**/*.e2e-spec.ts'],
-  // NO moduleNameMapper — e2e tests use real modules
+  // NO moduleNameMapper - e2e tests use real modules
   transform: {
     '^.+\\.tsx?$': [
       'ts-jest',

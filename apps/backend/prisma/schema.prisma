@@ -1,6 +1,6 @@
 // Prisma schema untuk backend delivery.
 //
-// CATATAN: Field type menggunakan string/Int — salah satunya karena Prisma
+// CATATAN: Field type menggunakan string/Int - salah satunya karena Prisma
 // belum punya direct mapping ke semua union literal dari @delivery/shared.
 // Mapping runtime dilakukan di service layer (lihat src/orders/orders.mapper.ts).
 
@@ -25,7 +25,7 @@ model User {
   role      UserRole
   name      String
   phone     String   @unique
-  // bcrypt hash — null saat register pre-migrasi atau akun lama. Endpoint login
+  // bcrypt hash - null saat register pre-migrasi atau akun lama. Endpoint login
   // treat null hash sebagai invalid (otomatis reject), jadi aman set optional.
   passwordHash String? @map("password_hash")
   // Di-update setiap kali device driver berhasil sync ke server.
@@ -59,7 +59,7 @@ model Order {
   driverId   String? @map("driver_id") @db.Uuid
 
   status      OrderStatusDb @default(PENDING)
-  // Items & address disimpan sebagai JSONB — schema fleksibel, validated di service.
+  // Items & address disimpan sebagai JSONB - schema fleksibel, validated di service.
   itemsJson   Json          @map("items_json")
   addressJson Json          @map("address_json")
 
@@ -72,7 +72,7 @@ model Order {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  // Cancel tracking — filled when driver cancels (not customer cancellation via PATCH /status)
+  // Cancel tracking - filled when driver cancels (not customer cancellation via PATCH /status)
   cancelledBy  String?  @map("cancelled_by")
   cancelReason String?  @map("cancel_reason")
 
@@ -110,7 +110,7 @@ model Payment {
   id      String @id @default(uuid()) @db.Uuid
   orderId String @map("order_id") @db.Uuid
 
-  // Idempotency key — client wajib kirim saat create. Prevents double-charge on retry.
+  // Idempotency key - client wajib kirim saat create. Prevents double-charge on retry.
   idempotencyKey String          @unique @map("idempotency_key")
   method         PaymentMethodDb
   status         PaymentStatusDb @default(PENDING)

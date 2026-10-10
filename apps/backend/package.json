@@ -2,7 +2,7 @@
   "name": "@delivery/backend",
   "version": "0.0.0",
   "private": true,
-  "description": "Delivery backend — NestJS + Prisma + PostgreSQL",
+  "description": "Delivery backend - NestJS + Prisma + PostgreSQL",
   "scripts": {
     "prebuild": "pnpm --filter @delivery/shared build",
     "build": "nest build",

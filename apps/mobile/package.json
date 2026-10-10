@@ -2,7 +2,7 @@
   "name": "@delivery/mobile",
   "version": "0.0.0",
   "private": true,
-  "description": "Delivery mobile app — React Native + WatermelonDB (offline-first)",
+  "description": "Delivery mobile app - React Native + WatermelonDB (offline-first)",
   "main": "index.js",
   "scripts": {
     "android": "react-native run-android",

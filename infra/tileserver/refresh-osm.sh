@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# refresh-osm.sh — unduh PBF Geofabrik dan hasilkan mbtiles Bali via planetiler Docker.
+# refresh-osm.sh - unduh PBF Geofabrik dan hasilkan mbtiles Bali via planetiler Docker.
 #
 # Prasyarat: Docker.
 #

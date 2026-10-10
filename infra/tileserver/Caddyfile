@@ -1,4 +1,4 @@
-# Caddyfile — HTTPS reverse proxy for tileserver-gl
+# Caddyfile - HTTPS reverse proxy for tileserver-gl
 #
 # Deploy to VPS:
 #   scp infra/tileserver/Caddyfile user@vps:/etc/caddy/Caddyfile
@@ -10,7 +10,7 @@
 #   - tileserver-gl container running on port 8080
 #   - DNS A record pointing to VPS IP (e.g., tiles.example.com -> 1.2.3.4)
 #
-# Caddy auto-provisions Let's Encrypt certificates — no manual cert management.
+# Caddy auto-provisions Let's Encrypt certificates - no manual cert management.
 # The wildcard cert is sufficient for a single subdomain.
 
 tiles.example.com {

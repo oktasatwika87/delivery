@@ -37,7 +37,7 @@ import { networkMonitor } from '../map/networkMonitor';
  * domain status field; otherwise stops silently). Prevents infinite
  * silent retry storms when the server consistently rejects a record.
  *
- * Sync tick adalah 30 detik, jadi 5 attempts ≈ 2.5 menit. Cukup untuk
+ * Sync tick adalah 30 detik, jadi 5 attempts sekitar 2.5 menit. Cukup untuk
  * ride out window offline pendek, cukup pendek agar kegagalan
  * permanen surfaced ke user.
  */
