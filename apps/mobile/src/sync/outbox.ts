@@ -20,7 +20,7 @@
  * - Conflict (version mismatch): pull fresh order data, delete pending_action,
  *   emit conflict notification to UI
  * - Orphaned COD (special): mark status = 'orphaned_needs_review', don't delete,
- *   don't auto-retry (requires manual business decision per HSIN)
+ *   don't auto-retry (requires manual business decision per support)
  */
 
 import { Model, Q } from '@nozbe/watermelondb';
@@ -552,7 +552,7 @@ async function processCollectCod(action: PendingActionModel, db: Database): Prom
       console.warn(`[outbox] Orphaned COD detected for order ${action.targetOrderId}`);
       await markActionOrphaned(action, db);
 
-      // Fire-and-forget: notify server so HSIN gets email
+      // Fire-and-forget: notify server so support gets email
       // If this also fails, local orphan status is the fallback
       if (payload) {
         flagOrphanedCod(action.targetOrderId, payload.amountCents, action.idempotencyKey)
@@ -567,7 +567,7 @@ async function processCollectCod(action: PendingActionModel, db: Database): Prom
       console.warn(`[outbox] Version conflict for COD on order ${action.targetOrderId}, treating as orphaned`);
       await markActionOrphaned(action, db);
 
-      // Fire-and-forget: notify server so HSIN gets email
+      // Fire-and-forget: notify server so support gets email
       if (payload) {
         flagOrphanedCod(action.targetOrderId, payload.amountCents, action.idempotencyKey)
           .catch((e) => console.warn('[outbox] flagOrphanedCod non-fatal error:', e.message));
@@ -705,7 +705,7 @@ async function markActionOrphaned(action: PendingActionModel, db: Database): Pro
     pendingActionId: action.id,
     orderId: action.targetOrderId,
     actionType: action.actionType,
-    message: 'COD yang sudah dikumpulkan tapi order sudah berubah. Hubungi HSIN untuk resolusi.',
+    message: 'COD yang sudah dikumpulkan tapi order sudah berubah. Hubungi support untuk penyelesaian.',
   });
 }
 

@@ -80,7 +80,7 @@ export class PaymentsService {
   /**
    * Flag COD as orphaned, driver collected COD offline but order was reassigned
    * before sync. Finds existing pending payment record (by idempotencyKey) and
-   * marks it orphaned, then notifies HSIN via email.
+   * marks it orphaned, then notifies support via email.
    *
    * Jika idempotencyKey sudah dipakai di order lain, hasilnya 409 IDEMPOTENCY_KEY_CONFLICT.
    * Jika order tidak ada, hasilnya 404.
@@ -126,7 +126,7 @@ export class PaymentsService {
         data: { orphanedAt: now, version: { increment: 1 } },
       });
 
-      // Fire-and-forget email notification to HSIN
+      // Fire-and-forget email notification to support
       this.emailService.sendOrphanedCodNotification({
         orderId,
         amountCents,
@@ -154,7 +154,7 @@ export class PaymentsService {
         },
       });
 
-      // Fire-and-forget email notification to HSIN
+      // Fire-and-forget email notification to support
       this.emailService.sendOrphanedCodNotification({
         orderId,
         amountCents,

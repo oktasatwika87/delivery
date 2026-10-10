@@ -48,7 +48,7 @@ export class EmailService {
   }
 
   /**
-   * Kirim notifikasi orphan COD ke HSIN.
+   * Kirim notifikasi orphan COD ke tim support.
    * Fire-and-forget, gagal kirim email tidak boleh block endpoint.
    */
   async sendOrphanedCodNotification(data: OrphanedCodEmailData): Promise<void> {

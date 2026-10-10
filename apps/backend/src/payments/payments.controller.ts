@@ -30,7 +30,7 @@ export class PaymentsController {
 
   /**
    * Flag COD as orphaned, driver collected COD offline but order was reassigned
-   * before sync. Server marks the payment as orphaned and notifies HSIN.
+   * before sync. Server marks the payment as orphaned and notifies support.
    * HANYA bisa diakses oleh user dengan role DRIVER.
    */
   @Post(':orderId/flag-orphaned')

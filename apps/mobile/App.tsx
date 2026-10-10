@@ -91,7 +91,6 @@ function App(): React.JSX.Element {
     networkMonitor.start();
 
     // --- AppState listener: pause/resume sync + sockets on background/foreground ---
-    // Fix C6 dari offline-audit-findings.md.
     // background/inactive -> stop sync + disconnect sockets (hemat battery/resource)
     // active -> restart periodic sync + resume sockets.
     //
