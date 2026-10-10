@@ -2,7 +2,7 @@
  * Order Tracking Screen.
  *
  * Customer-side real-time order tracking. Lifecycle:
- *   1. Mount jadi fetch order state via GET /orders/:id (initial state)
+ *   1. Mount -> fetch order state via GET /orders/:id (initial state)
  *   2. Subscribe OrdersSocketManager untuk event order:accepted/rejected/cancelled
  *   3. Display status, items, address, notes + connection banner
  *   4. Cleanup: unsubscribe semua listeners saat unmount
@@ -12,7 +12,7 @@
  * subscribe listener untuk orderId yang lagi dibuka.
  *
  * Status updates live (tanpa refresh manual):
- *   - order:accepted jadi status PREPARING + driverId + CLEARED cancelReason
+ *   - order:accepted -> status PREPARING + driverId + CLEARED cancelReason
  *     (server clear dua-duanya, mobile mirror supaya fetch awal yang dapat
  *     cancelReason stale dari order yang melalui cron reassign sebelum
  *     accept juga langsung bersih)
@@ -20,7 +20,7 @@
  *     driverId di-reset
  *   - order:cancelled, status dari payload ('ASSIGNED' saat ini) + cancelReason
  *     dari driver
- *   - order:cod_collected jadi TIDAK mengubah status order (lihat catatan di
+ *   - order:cod_collected -> TIDAK mengubah status order (lihat catatan di
  *     PaymentsService.collectCod()/OrdersGateway.emitOrderCodCollected,
  *     status order memang tidak berubah saat COD di-collect). Ini murni
  *     live receipt: tampilkan banner konfirmasi pembayaran, dismissable,
@@ -115,7 +115,7 @@ export function OrderTrackingScreen({
       } catch (err) {
         if (cancelled) return;
         if (err instanceof UnauthorizedError) {
-          // Session expired jadi trigger logout flow di App.tsx
+          // Session expired -> trigger logout flow di App.tsx
           syncEvents.emit('auth-expired', { source: 'tracking-fetch' });
           return;
         }

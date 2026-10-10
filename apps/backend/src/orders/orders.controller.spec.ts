@@ -2,13 +2,13 @@
  * Unit tests untuk OrdersController.findAvailable()
  *
  * Coverage:
- * 1. findAvailable - DRIVER role jadi calls service.findAvailable with correct take
- * 2. findAvailable - non-DRIVER role jadi 403 Forbidden
- * 3. findAvailable - take omitted jadi defaults to 50
- * 4. findAvailable - take > 100 jadi clamped to 100
- * 5. findAvailable - take = 0 jadi uses default 50 (0 is falsy, || 50 kicks in)
- * 6. findAvailable - take negative jadi Math.max clamps to 1, then || 50, then Math.min clamps
- * 7. findAvailable - take non-numeric jadi parseInt returns NaN, NaN || 50 = 50
+ * 1. findAvailable - DRIVER role -> calls service.findAvailable with correct take
+ * 2. findAvailable - non-DRIVER role -> 403 Forbidden
+ * 3. findAvailable - take omitted -> defaults to 50
+ * 4. findAvailable - take > 100 -> clamped to 100
+ * 5. findAvailable - take = 0 -> uses default 50 (0 is falsy, || 50 kicks in)
+ * 6. findAvailable - take negative -> Math.max clamps to 1, then || 50, then Math.min clamps
+ * 7. findAvailable - take non-numeric -> parseInt returns NaN, NaN || 50 = 50
  * 8. findAvailable - response shape: controller delegates slim AvailableOrderPayload
  *    unchanged (regression guard, sebelumnya return type salah bocor full Order)
  */
@@ -50,14 +50,14 @@ describe('OrdersController', () => {
   });
 
   describe('findAvailable()', () => {
-    test('DRIVER role jadi calls service.findAvailable with correct take', async () => {
+    test('DRIVER role -> calls service.findAvailable with correct take', async () => {
       const result = await controller.findAvailable(driverId, UserRole.DRIVER, '25');
 
       expect(mockService.findAvailable).toHaveBeenCalledWith(driverId, 25);
       expect(result).toEqual({ items: [], hasMore: false });
     });
 
-    test('non-DRIVER role jadi 403 Forbidden', async () => {
+    test('non-DRIVER role -> 403 Forbidden', async () => {
       await expect(
         controller.findAvailable(customerId, UserRole.CUSTOMER, '50'),
       ).rejects.toThrow(ForbiddenException);
@@ -67,33 +67,33 @@ describe('OrdersController', () => {
       expect(mockService.findAvailable).not.toHaveBeenCalled();
     });
 
-    test('take omitted jadi defaults to 50', async () => {
+    test('take omitted -> defaults to 50', async () => {
       await controller.findAvailable(driverId, UserRole.DRIVER, undefined);
 
       expect(mockService.findAvailable).toHaveBeenCalledWith(driverId, 50);
     });
 
-    test('take > 100 jadiclamped to 100', async () => {
+    test('take > 100 -> clamped to 100', async () => {
       await controller.findAvailable(driverId, UserRole.DRIVER, '200');
 
       expect(mockService.findAvailable).toHaveBeenCalledWith(driverId, 100);
     });
 
-    test('take = 0 jadi uses default 50 (0 is falsy)', async () => {
+    test('take = 0 -> uses default 50 (0 is falsy)', async () => {
       // parseInt('0') = 0, 0 || 50 = 50
       await controller.findAvailable(driverId, UserRole.DRIVER, '0');
 
       expect(mockService.findAvailable).toHaveBeenCalledWith(driverId, 50);
     });
 
-    test('take negative jadi Math.max(-5, 1) = 1, then Math.min(1, 100) = 1', async () => {
+    test('take negative -> Math.max(-5, 1) = 1, then Math.min(1, 100) = 1', async () => {
       // parseInt('-5') = -5, -5 || 50 = -5 (truthy), Math.max(-5, 1) = 1, Math.min(1, 100) = 1
       await controller.findAvailable(driverId, UserRole.DRIVER, '-5');
 
       expect(mockService.findAvailable).toHaveBeenCalledWith(driverId, 1);
     });
 
-    test('take non-numeric jadi parseInt returns NaN, NaN || 50 = 50', async () => {
+    test('take non-numeric -> parseInt returns NaN, NaN || 50 = 50', async () => {
       await controller.findAvailable(driverId, UserRole.DRIVER, 'abc');
 
       expect(mockService.findAvailable).toHaveBeenCalledWith(driverId, 50);

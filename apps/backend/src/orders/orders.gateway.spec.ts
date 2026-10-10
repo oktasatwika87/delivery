@@ -2,12 +2,12 @@
  * Unit tests untuk OrdersGateway
  *
  * Coverage:
- * 1. handleConnection - valid JWT + DRIVER role jadi join drivers:available room
- * 2. handleConnection - valid JWT + CUSTOMER role jadi TIDAK join drivers:available
- * 3. handleConnection - missing token jadi disconnect
- * 4. handleConnection - invalid token jadi disconnect
+ * 1. handleConnection - valid JWT + DRIVER role -> join drivers:available room
+ * 2. handleConnection - valid JWT + CUSTOMER role -> does NOT join drivers:available
+ * 3. handleConnection - missing token -> disconnect
+ * 4. handleConnection - invalid token -> disconnect
  * 5. handleDisconnect - cleanup userSockets map
- * 6. handleDisconnect - last socket deleted jadi remove map entry
+ * 6. handleDisconnect - last socket deleted -> remove map entry
  * 7. emitOrderAvailable - broadcasts to room with minimal payload
  * 8. emitOrderUnavailable - broadcasts with correct reason enum
  * 9. emitOrderCodCollected - broadcasts to customer, no status/version field
@@ -58,7 +58,7 @@ describe('OrdersGateway', () => {
   // ===== handleConnection tests =====
 
   describe('handleConnection', () => {
-    test('valid JWT + DRIVER role jadi join drivers:available room', async () => {
+    test('valid JWT + DRIVER role -> join drivers:available room', async () => {
       const socket = makeMockSocket({
         handshake: { auth: { token: 'valid-token' } } as any,
       });
@@ -73,7 +73,7 @@ describe('OrdersGateway', () => {
       expect(socket.disconnect).not.toHaveBeenCalled();
     });
 
-    test('valid JWT + CUSTOMER role jadi join own userId room, TIDAK join drivers:available', async () => {
+    test('valid JWT + CUSTOMER role -> join own userId room, does NOT join drivers:available', async () => {
       const socket = makeMockSocket({
         handshake: { auth: { token: 'valid-token' } } as any,
       });
@@ -89,7 +89,7 @@ describe('OrdersGateway', () => {
       expect(socket.disconnect).not.toHaveBeenCalled();
     });
 
-    test('missing token jadi disconnect', async () => {
+    test('missing token -> disconnect', async () => {
       const socket = makeMockSocket({
         handshake: { auth: {} } as any,
       });
@@ -100,7 +100,7 @@ describe('OrdersGateway', () => {
       expect(socket.disconnect).toHaveBeenCalled();
     });
 
-    test('invalid token jadi disconnect', async () => {
+    test('invalid token -> disconnect', async () => {
       const socket = makeMockSocket({
         handshake: { auth: { token: 'invalid-token' } } as any,
       });
@@ -114,7 +114,7 @@ describe('OrdersGateway', () => {
       expect(socket.disconnect).toHaveBeenCalled();
     });
 
-    test('valid token but missing sub jadi disconnect', async () => {
+    test('valid token but missing sub -> disconnect', async () => {
       const socket = makeMockSocket({
         handshake: { auth: { token: 'valid-token' } } as any,
       });
@@ -143,7 +143,7 @@ describe('OrdersGateway', () => {
       expect(sockets?.has('socket-999')).toBe(true);
     });
 
-    test('last socket deleted jadi remove map entry', async () => {
+    test('last socket deleted -> remove map entry', async () => {
       const socket = makeMockSocket();
       socket.data['userId'] = 'driver-uuid';
 

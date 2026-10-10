@@ -3,15 +3,15 @@
  *
  * Coverage:
  * 1. triggerReassignment - OCC success via releaseToPool (order berhasil di-reassign)
- * 2. triggerReassignment - ConflictException VERSION_CONFLICT jadi return false (skip silently)
- * 3. triggerReassignment - non-ConflictException error jadi rethrow
- * 4. checkReassignments - ASSIGNED order timeout (lastSeenAt > 15 min) jadi reassign
- * 5. checkReassignments - ASSIGNED order with recent lastSeenAt jadi NOT reassign
- * 6. checkReassignments - OUT_FOR_DELIVERY order timeout (lastSeenAt > 50 min) jadi reassign
- * 7. checkReassignments - OUT_FOR_DELIVERY with recent lastSeenAt jadi NOT reassign
- * 8. checkReassignments - null lastSeenAt (driver never synced) jadi reassign
+ * 2. triggerReassignment - ConflictException VERSION_CONFLICT -> return false (skip silently)
+ * 3. triggerReassignment - non-ConflictException error -> rethrow
+ * 4. checkReassignments - ASSIGNED order timeout (lastSeenAt > 15 min) -> reassign
+ * 5. checkReassignments - ASSIGNED order with recent lastSeenAt -> NOT reassign
+ * 6. checkReassignments - OUT_FOR_DELIVERY order timeout (lastSeenAt > 50 min) -> reassign
+ * 7. checkReassignments - OUT_FOR_DELIVERY with recent lastSeenAt -> NOT reassign
+ * 8. checkReassignments - null lastSeenAt (driver never synced) -> reassign
  * 9. checkReassignments - PREPARING order uses preparing timeout (15 min)
- * 10. checkReassignments - no active orders jadi no reassignments, no errors
+ * 10. checkReassignments - no active orders -> no reassignments, no errors
  *
  * ReassignmentService mendelegasikan release ke OrdersService.releaseToPool,
  * bukan langsung prisma.order.update + emit. Mock OrdersService.releaseToPool
@@ -114,7 +114,7 @@ describe('ReassignmentService', () => {
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
-    test('ConflictException VERSION_CONFLICT jadi return false, skip silently', async () => {
+    test('ConflictException VERSION_CONFLICT -> return false, skip silently', async () => {
       // releaseToPool melemparkan ConflictException untuk P2025
       const conflict = new ConflictException({
         code: 'VERSION_CONFLICT',
@@ -127,7 +127,7 @@ describe('ReassignmentService', () => {
       expect(result).toBe(false);
     });
 
-    test('non-ConflictException error jadi rethrow', async () => {
+    test('non-ConflictException error -> rethrow', async () => {
       const dbError = new Error('Database connection failed');
       mockOrdersService.releaseToPool.mockRejectedValue(dbError);
 
@@ -169,7 +169,7 @@ describe('ReassignmentService', () => {
     }
 
     test(
-      'ASSIGNED order timeout (lastSeenAt > 15 min) jadi reassign via releaseToPool',
+      'ASSIGNED order timeout (lastSeenAt > 15 min) -> reassign via releaseToPool',
       async () => {
         const oldLastSeen = minutesAgo(20); // lebih dari 15 menit
         mockPrisma.order.findMany.mockResolvedValue([
@@ -192,7 +192,7 @@ describe('ReassignmentService', () => {
     );
 
     test(
-      'ASSIGNED order with recent lastSeenAt jadi NOT reassign',
+      'ASSIGNED order with recent lastSeenAt -> NOT reassign',
       async () => {
         const recentLastSeen = minutesAgo(5); // baru 5 menit yang lalu
         mockPrisma.order.findMany.mockResolvedValue([
@@ -206,7 +206,7 @@ describe('ReassignmentService', () => {
     );
 
     test(
-      'OUT_FOR_DELIVERY order timeout (lastSeenAt > 50 min) jadi reassign',
+      'OUT_FOR_DELIVERY order timeout (lastSeenAt > 50 min) -> reassign',
       async () => {
         const oldLastSeen = minutesAgo(55); // lebih dari 50 menit
         mockPrisma.order.findMany.mockResolvedValue([
@@ -224,7 +224,7 @@ describe('ReassignmentService', () => {
     );
 
     test(
-      'OUT_FOR_DELIVERY with recent lastSeenAt (5 min) jadi NOT reassign',
+      'OUT_FOR_DELIVERY with recent lastSeenAt (5 min) -> NOT reassign',
       async () => {
         const recentLastSeen = minutesAgo(5);
         mockPrisma.order.findMany.mockResolvedValue([
@@ -238,7 +238,7 @@ describe('ReassignmentService', () => {
     );
 
     test(
-      'null lastSeenAt (driver never synced) jadi reassign',
+      'null lastSeenAt (driver never synced) -> reassign',
       async () => {
         mockPrisma.order.findMany.mockResolvedValue([
           makeActiveOrder(OrderStatusDb.ASSIGNED, null),
@@ -275,7 +275,7 @@ describe('ReassignmentService', () => {
       },
     );
 
-    test('no active orders jadi no reassignments, no errors', async () => {
+    test('no active orders -> no reassignments, no errors', async () => {
       mockPrisma.order.findMany.mockResolvedValue([]);
 
       // Tidak throw
@@ -284,7 +284,7 @@ describe('ReassignmentService', () => {
       expect(mockOrdersService.releaseToPool).not.toHaveBeenCalled();
     });
 
-    test('ASSIGNED at exactly 15 min boundary jadi NOT reassign', async () => {
+    test('ASSIGNED at exactly 15 min boundary -> NOT reassign', async () => {
       // exactly 15 menit yang lalu, boundary case
       const exactly15MinAgo = minutesAgo(15);
       mockPrisma.order.findMany.mockResolvedValue([
@@ -297,7 +297,7 @@ describe('ReassignmentService', () => {
       expect(mockOrdersService.releaseToPool).not.toHaveBeenCalled();
     });
 
-    test('OUT_FOR_DELIVERY at exactly 50 min boundary jadi NOT reassign', async () => {
+    test('OUT_FOR_DELIVERY at exactly 50 min boundary -> NOT reassign', async () => {
       const exactly50MinAgo = minutesAgo(50);
       mockPrisma.order.findMany.mockResolvedValue([
         makeActiveOrder(OrderStatusDb.OUT_FOR_DELIVERY, exactly50MinAgo),
@@ -308,7 +308,7 @@ describe('ReassignmentService', () => {
       expect(mockOrdersService.releaseToPool).not.toHaveBeenCalled();
     });
 
-    test('mixed orders: one timed out, one not jadi only reassign timed out', async () => {
+    test('mixed orders: one timed out, one not -> only reassign timed out', async () => {
       const recentDriver = { id: 'driver-recent', name: 'Recent', lastSeenAt: minutesAgo(5) };
       const oldDriver = { id: 'driver-old', name: 'Old', lastSeenAt: minutesAgo(30) };
 

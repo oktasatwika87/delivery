@@ -40,15 +40,15 @@ describe('offlineStorage', () => {
   });
 
   describe('stateFromNumber mapping', () => {
-    test('maps 0 jadi inactive', () => {
+    test('maps 0 -> inactive', () => {
       expect(stateFromNumber(0)).toBe('inactive');
     });
 
-    test('maps 1 jadi active', () => {
+    test('maps 1 -> active', () => {
       expect(stateFromNumber(1)).toBe('active');
     });
 
-    test('maps 2 jadi complete', () => {
+    test('maps 2 -> complete', () => {
       expect(stateFromNumber(2)).toBe('complete');
     });
 

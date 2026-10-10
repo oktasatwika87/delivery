@@ -4,23 +4,23 @@
  * Coverage:
  * 1. acceptOrder - driver berhasil accept order ASSIGNED
  * 2. acceptOrder - retry accept oleh driver yang sama (OCC handle)
- * 3. acceptOrder - gagal: order sudah di-accept driver lain jadi 409 ORDER_UNAVAILABLE
- * 4. acceptOrder - gagal: order tidak dalam status ASSIGNED (PENDING) jadi 409 ORDER_UNAVAILABLE
- * 5. acceptOrder - gagal: order tidak dalam status ASSIGNED (CONFIRMED) jadi 409 ORDER_UNAVAILABLE
- * 6. acceptOrder - gagal: order tidak dalam status ASSIGNED (PREPARING) jadi 409 ORDER_UNAVAILABLE
- * 7. acceptOrder - OCC conflict (version mismatch) jadi 409 VERSION_CONFLICT
- * 8. acceptOrder - order tidak ditemukan jadi 404 NotFound
+ * 3. acceptOrder - gagal: order sudah di-accept driver lain -> 409 ORDER_UNAVAILABLE
+ * 4. acceptOrder - gagal: order tidak dalam status ASSIGNED (PENDING) -> 409 ORDER_UNAVAILABLE
+ * 5. acceptOrder - gagal: order tidak dalam status ASSIGNED (CONFIRMED) -> 409 ORDER_UNAVAILABLE
+ * 6. acceptOrder - gagal: order tidak dalam status ASSIGNED (PREPARING) -> 409 ORDER_UNAVAILABLE
+ * 7. acceptOrder - OCC conflict (version mismatch) -> 409 VERSION_CONFLICT
+ * 8. acceptOrder - order tidak ditemukan -> 404 NotFound
  * 9. rejectOrder - driver berhasil reject order ASSIGNED
  * 10. rejectOrder - gagal: order tidak dalam status ASSIGNED
- * 11. rejectOrder - OCC conflict jadi 409 Conflict
- * 12. rejectOrder - order tidak ditemukan jadi 404 NotFound
+ * 11. rejectOrder - OCC conflict -> 409 Conflict
+ * 12. rejectOrder - order tidak ditemukan -> 404 NotFound
  * 13. cancelOrder - berhasil cancel dari ASSIGNED (status CONFIRMED, driverId null, cancelledBy set)
  * 14. cancelOrder - berhasil cancel dari PREPARING
  * 15. cancelOrder - berhasil cancel dari OUT_FOR_DELIVERY
  * 16. cancelOrder - gagal: driver bukan owner (403 Forbidden)
  * 17. cancelOrder - gagal: order tidak dalam status cancellable
- * 18. cancelOrder - OCC conflict jadi 409 Conflict
- * 19. cancelOrder - order tidak ditemukan jadi 404 NotFound
+ * 18. cancelOrder - OCC conflict -> 409 Conflict
+ * 19. cancelOrder - order tidak ditemukan -> 404 NotFound
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
@@ -170,7 +170,7 @@ describe('OrdersService', () => {
       expect(result.driverId).toBe(driverId);
     });
 
-    test('gagal: order sudah di-accept driver lain jadi 409 ORDER_UNAVAILABLE', async () => {
+    test('gagal: order sudah di-accept driver lain -> 409 ORDER_UNAVAILABLE', async () => {
       const orderAssignedToAnotherDriver = {
         ...mockOrderAssigned,
         driverId: anotherDriverId,
@@ -194,7 +194,7 @@ describe('OrdersService', () => {
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
-    test('gagal: order tidak dalam status ASSIGNED (PENDING) jadi 409 ORDER_UNAVAILABLE', async () => {
+    test('gagal: order tidak dalam status ASSIGNED (PENDING) -> 409 ORDER_UNAVAILABLE', async () => {
       const orderPending = {
         ...mockOrderAssigned,
         status: OrderStatusDb.PENDING,
@@ -218,7 +218,7 @@ describe('OrdersService', () => {
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
-    test('gagal: order tidak dalam status ASSIGNED (CONFIRMED) jadi 409 ORDER_UNAVAILABLE', async () => {
+    test('gagal: order tidak dalam status ASSIGNED (CONFIRMED) -> 409 ORDER_UNAVAILABLE', async () => {
       const orderConfirmed = {
         ...mockOrderAssigned,
         status: OrderStatusDb.CONFIRMED,
@@ -242,7 +242,7 @@ describe('OrdersService', () => {
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
-    test('gagal: order tidak dalam status ASSIGNED (PREPARING) jadi 409 ORDER_UNAVAILABLE', async () => {
+    test('gagal: order tidak dalam status ASSIGNED (PREPARING) -> 409 ORDER_UNAVAILABLE', async () => {
       const orderPreparing = {
         ...mockOrderAssigned,
         status: OrderStatusDb.PREPARING,
@@ -278,7 +278,7 @@ describe('OrdersService', () => {
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
-    test('OCC conflict: version mismatch jadi 409 Conflict', async () => {
+    test('OCC conflict: version mismatch -> 409 Conflict', async () => {
       mockPrisma.order.findUnique.mockResolvedValue(mockOrderAssigned);
       // Prisma P2025 = record not found (0 rows affected karena version mismatch)
       // Simulate PrismaClientKnownRequestError with code P2025
@@ -475,7 +475,7 @@ describe('OrdersService', () => {
       updatedAt: new Date(),
     };
 
-    test('berhasil reject order ASSIGNED yang di-assign ke driver ybs jadi balik ke pool (ASSIGNED + driverId null)', async () => {
+    test('berhasil reject order ASSIGNED yang di-assign ke driver ybs -> balik ke pool (ASSIGNED + driverId null)', async () => {
       const updatedOrder = {
         ...mockOrderAssigned,
         status: OrderStatusDb.ASSIGNED,
@@ -574,7 +574,7 @@ describe('OrdersService', () => {
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
-    test('OCC conflict: version mismatch jadi 409 Conflict', async () => {
+    test('OCC conflict: version mismatch -> 409 Conflict', async () => {
       mockPrisma.order.findUnique.mockResolvedValue(mockOrderAssigned);
       const prismaError = Object.assign(
         new Error('Record to update not found.'),
@@ -613,7 +613,7 @@ describe('OrdersService', () => {
       });
     });
 
-    test('reject bukan owner jadi response body memuat code ORDER_NOT_ASSIGNED', async () => {
+    test('reject bukan owner -> response body memuat code ORDER_NOT_ASSIGNED', async () => {
       const orderAssignedToOther = {
         ...mockOrderAssigned,
         driverId: anotherDriverId,
@@ -801,7 +801,7 @@ describe('OrdersService', () => {
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
-    test('OCC conflict: version mismatch jadi 409 Conflict', async () => {
+    test('OCC conflict: version mismatch -> 409 Conflict', async () => {
       const mockOrder = makeOrderWithDriver(OrderStatusDb.ASSIGNED);
       mockPrisma.order.findUnique.mockResolvedValue(mockOrder);
 
@@ -867,7 +867,7 @@ describe('OrdersService', () => {
       });
     });
 
-    test('cancel bukan owner jadi response body memuat code ORDER_NOT_ASSIGNED', async () => {
+    test('cancel bukan owner -> response body memuat code ORDER_NOT_ASSIGNED', async () => {
       const mockOrder = makeOrderWithDriver(OrderStatusDb.ASSIGNED);
       const orderAssignedToOther = {
         ...mockOrder,
@@ -987,7 +987,7 @@ describe('OrdersService', () => {
       expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
     });
 
-    test('non-P2025 error jadi rethrow apa adanya', async () => {
+    test('non-P2025 error -> rethrow apa adanya', async () => {
       const dbError = new Error('Database connection failed');
       mockPrisma.order.update.mockRejectedValue(dbError);
 

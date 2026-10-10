@@ -417,7 +417,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
 
   /**
    * Check if driver status button should be shown.
-   * Shows for PREPARING jadi OUT_FOR_DELIVERY or OUT_FOR_DELIVERY jadi DELIVERED
+   * Shows for PREPARING -> OUT_FOR_DELIVERY or OUT_FOR_DELIVERY -> DELIVERED
    * transitions, assigned to current driver, with no pending action.
    */
   const canUpdateStatus = (order: OrderModel): boolean => {
@@ -430,7 +430,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   };
 
   /**
-   * Handle driver status update (PREPARING jadi OUT_FOR_DELIVERY, OUT_FOR_DELIVERY jadi DELIVERED).
+   * Handle driver status update (PREPARING -> OUT_FOR_DELIVERY, OUT_FOR_DELIVERY -> DELIVERED).
    * Online-only, direct API call with OCC.
    */
   const handleUpdateStatus = async (orderToUpdate: OrderModel) => {
@@ -804,7 +804,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         </TouchableOpacity>
       )}
 
-      {/* Driver Status Button, PREPARING jadi OUT_FOR_DELIVERY or OUT_FOR_DELIVERY jadi DELIVERED.
+      {/* Driver Status Button, PREPARING -> OUT_FOR_DELIVERY or OUT_FOR_DELIVERY -> DELIVERED.
           PREPARING: always shown (no pending).
           OUT_FOR_DELIVERY: shown only if ada payment CASH yang BUKAN FAILED,
           DAN tidak ada pending action. */}

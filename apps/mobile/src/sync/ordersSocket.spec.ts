@@ -792,10 +792,10 @@ describe('OrdersSocketManager', () => {
   });
 });
 
-// File ini script (no top-level imports/exports) secara default ke TS2393
+// File ini script (no top-level imports/exports) secara default -> TS2393
 // duplicate function implementation bakal fire waktu ada file script
 // lain di project yang declare function dengan nama sama (e.g.
 // socket.spec.ts juga punya `function trigger`). export {} di bawah
-// ini bikin file jadi module ke function jadi module-scoped, gak
+// ini bikin file -> module -> function -> module-scoped, gak
 // collision lagi. Test body gak berubah.
 export {};

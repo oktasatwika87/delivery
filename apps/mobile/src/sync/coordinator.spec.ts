@@ -1532,7 +1532,7 @@ describe('SyncCoordinator', () => {
       expect(overwritten._raw._status).toBe('synced');
     });
 
-    test('conflict ack, driverId berbeda dari currentUserId jadi reason accepted-by-other', async () => {
+    test('conflict ack, driverId berbeda dari currentUserId -> reason accepted-by-other', async () => {
       const orderRow = createMockRow('order-accepted-other', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'ASSIGNED';
@@ -1572,7 +1572,7 @@ describe('SyncCoordinator', () => {
       }));
     });
 
-    test('conflict ack, driverId sama dengan currentUserId jadi reason order-status-conflict', async () => {
+    test('conflict ack, driverId sama dengan currentUserId -> reason order-status-conflict', async () => {
       const orderRow = createMockRow('order-same-driver', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'PREPARING';
@@ -1616,7 +1616,7 @@ describe('SyncCoordinator', () => {
     // dipindah ke outbox.spec.ts (handleVersionConflict test suite).
     // resolveAcks tidak lagi menulis lastConflictReason / lastConflictAt.
 
-    test('conflict ack, driverId undefined jadi reason order-status-conflict', async () => {
+    test('conflict ack, driverId undefined -> reason order-status-conflict', async () => {
       const orderRow = createMockRow('order-undefined-driver', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'CONFIRMED';
@@ -1656,7 +1656,7 @@ describe('SyncCoordinator', () => {
       }));
     });
 
-    test('conflict ack, isAcceptedByOther true jadi emit orderRemovedFromView', async () => {
+    test('conflict ack, isAcceptedByOther true -> emit orderRemovedFromView', async () => {
       const orderRow = createMockRow('order-removed-view', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'ASSIGNED';

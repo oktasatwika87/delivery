@@ -246,7 +246,7 @@ describe('RouteService', () => {
     });
 
     describe('InvalidConfigError handling', () => {
-      test('InvalidConfigError + ada snapshot jadi fallback + console.error logged', async () => {
+      test('InvalidConfigError + ada snapshot -> fallback + console.error logged', async () => {
         // Arrange: network online
         jest.spyOn(networkMonitor, 'getStatus').mockReturnValue('online');
 

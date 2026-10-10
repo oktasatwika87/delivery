@@ -53,7 +53,7 @@ export class PaymentsService {
         },
       });
     } catch (err) {
-      // Unique constraint violation on idempotencyKey jadi record already exists.
+      // Unique constraint violation on idempotencyKey -> record already exists.
       // Deliberately NOT emitting order:cod_collected here, this branch is
       // reached by an outbox retry replaying the same collection, and the
       // customer was already notified on the original successful create.

@@ -2,16 +2,16 @@
  * Unit tests untuk OrderTrackingScreen.
  *
  * Coverage:
- * 1. Render jadi loading spinner awal
- * 2. Fetch sukses jadi render order detail
- * 3. Fetch gagal jadi render error UI dengan tombol Coba Lagi
- * 4. order:accepted event jadi update status PREPARING + driverId + clear cancelReason (filter by orderId)
+ * 1. Render -> loading spinner awal
+ * 2. Fetch sukses -> render order detail
+ * 3. Fetch gagal -> render error UI dengan tombol Coba Lagi
+ * 4. order:accepted event -> update status PREPARING + driverId + clear cancelReason (filter by orderId)
  * 5. order:rejected event, pakai payload.status ('ASSIGNED' pool state)
- * 6. order:cancelled event jadi pakai payload.status + cancelReason
- * 7. Disconnect jadi tampil banner; Connect jadi hilang
+ * 6. order:cancelled event -> pakai payload.status + cancelReason
+ * 7. Disconnect -> tampil banner; Connect -> hilang
  * 8. Event untuk orderId lain di-ignore (filter)
  * 9. Cleanup: subscribers di-remove saat unmount
- * 10. order:cod_collected event jadi tampil banner receipt dengan jumlah benar
+ * 10. order:cod_collected event -> tampil banner receipt dengan jumlah benar
  * 11. order:cod_collected untuk orderId lain di-ignore
  * 12. Tombol "Tutup" pada cod banner dismiss banner
  * 13. order:cod_collected TIDAK mengubah status order (bukan state-sync event)
@@ -168,7 +168,7 @@ describe('OrderTrackingScreen', () => {
     resetSubscribers();
   });
 
-  it('initial render jadi loading spinner', () => {
+  it('initial render -> loading spinner', () => {
     mockGetOrderById.mockResolvedValue(MOCK_ORDER);
 
     const { getByText } = render(
@@ -178,7 +178,7 @@ describe('OrderTrackingScreen', () => {
     expect(getByText('Memuat order...')).toBeTruthy();
   });
 
-  it('fetch sukses jadi render order details + status badge', async () => {
+  it('fetch sukses -> render order details + status badge', async () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText, queryByText } = render(
@@ -204,7 +204,7 @@ describe('OrderTrackingScreen', () => {
     expect(queryByText('Memuat order...')).toBeNull();
   });
 
-  it('fetch gagal jadi render error UI dengan tombol Coba Lagi', async () => {
+  it('fetch gagal -> render error UI dengan tombol Coba Lagi', async () => {
     mockGetOrderById.mockRejectedValueOnce(new Error('Network error'));
 
     const { getByText } = render(
@@ -226,7 +226,7 @@ describe('OrderTrackingScreen', () => {
     });
   });
 
-  it('fetch UnauthorizedError jadi emit auth-expired (no error UI)', async () => {
+  it('fetch UnauthorizedError -> emit auth-expired (no error UI)', async () => {
     mockGetOrderById.mockRejectedValueOnce(new UnauthorizedError());
 
     render(
@@ -241,7 +241,7 @@ describe('OrderTrackingScreen', () => {
     });
   });
 
-  it('order:accepted event jadi update status PREPARING + driverId + clear cancelReason (matching orderId)', async () => {
+  it('order:accepted event -> update status PREPARING + driverId + clear cancelReason (matching orderId)', async () => {
     // Server clear cancelReason saat accept, mobile mirror. Start dengan
     // order yang punya cancelReason stale (mis. cron-keluar ASSIGNED dengan
     // system_timeout, customer buka tracking, lalu driver accept).
@@ -305,7 +305,7 @@ describe('OrderTrackingScreen', () => {
     });
   });
 
-  it('order:cancelled event jadi pakai payload.status ASSIGNED + cancelReason', async () => {
+  it('order:cancelled event -> pakai payload.status ASSIGNED + cancelReason', async () => {
     // Status 'ASSIGNED' di payload, mobile pakai langsung dari payload.
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
@@ -358,7 +358,7 @@ describe('OrderTrackingScreen', () => {
     expect(queryByText('Driver sedang menyiapkan')).toBeNull();
   });
 
-  it('order:cod_collected event jadi tampil banner receipt dengan jumlah benar', async () => {
+  it('order:cod_collected event -> tampil banner receipt dengan jumlah benar', async () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { getByText, queryByTestId, getByTestId } = render(
@@ -441,7 +441,7 @@ describe('OrderTrackingScreen', () => {
     expect(queryByTestId('cod-collected-banner')).toBeNull();
   });
 
-  it('disconnect jadi tampil banner; connect jadi hilang', async () => {
+  it('disconnect -> tampil banner; connect -> hilang', async () => {
     mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
 
     const { queryByText, getByText } = render(
@@ -504,7 +504,7 @@ describe('OrderTrackingScreen', () => {
     expect(mockDisconnectSubscribers.length).toBe(disconnectBefore - 1);
   });
 
-  it('order:status_updated untuk order ini jadi update label status', async () => {
+  it('order:status_updated untuk order ini -> update label status', async () => {
     // Payload OUT_FOR_DELIVERY: PREPARING jadi OUT_FOR_DELIVERY
     const preparingOrder = { ...MOCK_ORDER, status: 'PREPARING' as const };
     mockGetOrderById.mockResolvedValueOnce(preparingOrder);

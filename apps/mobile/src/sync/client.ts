@@ -589,7 +589,7 @@ export async function flagOrphanedCod(
 
 /**
  * Driver updates order status.
- * Transitions: PREPARING jadi OUT_FOR_DELIVERY, OUT_FOR_DELIVERY jadi DELIVERED.
+ * Transitions: PREPARING -> OUT_FOR_DELIVERY, OUT_FOR_DELIVERY -> DELIVERED.
  */
 export async function updateOrderStatus(
   orderId: string,
