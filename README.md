@@ -1,8 +1,9 @@
 # delivery
 
-App kurir buat Bali. Customer dan driver pakai app yang sama, perannya dipilih pas daftar.
+Aplikasi delivery di Bali. Customer dan driver pakai app yang sama, perannya dipilih pas daftar.
 Yang paling saya kejar: app tetap bisa dipakai driver walau sinyal hilang di jalan. Order, peta,
-rute, dan chat tetap ada, dan aksi yang aman diantre terkirim sendiri begitu sinyal balik.
+rute, dan chat tetap ada. Batalin order, catat COD, atau kirim chat juga tetap bisa, nanti terkirim
+sendiri begitu sinyal balik.
 
 React Native (Android), NestJS, PostgreSQL + Prisma, WatermelonDB, socket.io, MapLibre.
 
