@@ -396,6 +396,11 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
       }
 
       // Sukses: tulis baris lokal dari respons server via WatermelonDB batch.
+      // Respons POST /orders/:id/accept adalah Order lengkap, jadi tulis
+      // semua kolom order (alamat, item, total, dsb) supaya baris siap
+      // untuk detail dan pre-compute rute tanpa fetch ulang. Pola
+      // JSON.stringify sama dengan buildRawRowForCreate di coordinator.ts
+      // supaya serialisasi address_json/items_json konsisten.
       try {
         await database.write(async () => {
           await database.batch(
@@ -403,6 +408,16 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
               r._setRaw('status', response.status);
               r._setRaw('driver_id', response.driverId ?? userId);
               r._setRaw('server_version', response.version);
+              r._setRaw('customer_id', response.customerId);
+              r._setRaw('items_json', JSON.stringify(response.items));
+              r._setRaw('address_json', JSON.stringify(response.deliveryAddress));
+              r._setRaw('total_cents', response.totalCents);
+              r._setRaw('currency', response.currency);
+              r._setRaw('notes', response.notes ?? null);
+              r._setRaw('cancelled_by', response.cancelledBy ?? null);
+              r._setRaw('cancel_reason', response.cancelReason ?? null);
+              r._setRaw('updated_at', Date.parse(response.updatedAt));
+              // created_at tidak diubah
               r._raw._status = 'synced';
               r._raw._changed = '';
             }),
@@ -416,11 +431,16 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
       // Remove from pool (local state)
       setPoolOrders((prev) => prev.filter((o) => o.id !== order.id));
 
-      // Pre-compute route for offline-ready
+      // Pre-compute route for offline-ready. Pakai koordinat dari respons
+      // (bukan dari model baris), karena baris pool awalnya tidak punya
+      // address_json. Asal dari GPS terakhir, syarat status 'online' dan
+      // GPS tersedia. Tidak di-await (Terima tidak menunggu rute); gagal
+      // hanya dicatat di log.
       if (networkMonitor.getStatus() === 'online' && currentLocation) {
-        const addressJson = order.addressJson as { coordinates?: [number, number] } | null;
-        if (addressJson?.coordinates && addressJson.coordinates.length === 2) {
-          const [lng, lat] = addressJson.coordinates;
+        const addressJson = response.deliveryAddress;
+        const coordinates = addressJson.coordinates;
+        if (coordinates && coordinates.length === 2) {
+          const [lng, lat] = coordinates;
           const destination = { lng, lat };
           const origin = { lng: currentLocation.lng, lat: currentLocation.lat };
           routeService.getRoute({ origin, destination }).catch((err) => {

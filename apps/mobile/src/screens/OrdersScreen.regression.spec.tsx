@@ -918,11 +918,31 @@ describe('handleAccept - accept order lewat REST', () => {
   it('acceptOrder dipanggil dengan order.id dan serverVersion; baris lokal ditulis dari respons server', async () => {
     const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
     const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
+    // Respons penuh dari backend (toDomain Order).
     client.acceptOrder = jest.fn().mockResolvedValue({
       id: 'pool-accept-1',
-      status: 'PREPARING',
-      version: 4,
+      customerId: 'customer-AC21',
       driverId: 'driver-AC21',
+      status: 'PREPARING',
+      items: [
+        { id: 'item-AC21', productId: 'prod-AC21', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 23000 },
+      ],
+      deliveryAddress: {
+        recipientName: 'Citra',
+        phone: '081234567890',
+        street: 'Jl. Sudirman No. 1',
+        city: 'Jakarta',
+        postalCode: '10110',
+        coordinates: [106.85, -6.2],
+      },
+      totalCents: 23000,
+      currency: 'IDR',
+      notes: null,
+      createdAt: '2026-01-15T03:04:05.678Z',
+      updatedAt: '2026-01-15T03:05:00.000Z',
+      version: 4,
+      cancelledBy: null,
+      cancelReason: null,
     });
     session.getCurrentUserId.mockResolvedValue('driver-AC21');
 

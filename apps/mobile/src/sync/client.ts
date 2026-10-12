@@ -475,8 +475,9 @@ export async function cancelOrder(
 /**
  * Driver accepts a pool order.
  * Order must be in status ASSIGNED with no driver assigned.
+ * Returns the full order.
  */
-export async function acceptOrder(orderId: string, version: number): Promise<DriverActionResponse> {
+export async function acceptOrder(orderId: string, version: number): Promise<Order> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8_000);
 
@@ -496,7 +497,7 @@ export async function acceptOrder(orderId: string, version: number): Promise<Dri
       throw await buildApiError('acceptOrder', res);
     }
 
-    return res.json() as Promise<DriverActionResponse>;
+    return res.json() as Promise<Order>;
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {

@@ -7,7 +7,7 @@
  */
 
 import React from 'react';
-import { render, waitFor } from '@testing-library/react-native';
+import { act, render, waitFor } from '@testing-library/react-native';
 
 // Mock @nozbe/watermelondb/react SEBELUM import component
 jest.mock('@nozbe/watermelondb/react', () => ({
@@ -689,5 +689,212 @@ describe('ambil ulang pool saat ordersSocket connect', () => {
 
     // Setelah unmount: unsubscribe untuk listener connect terpanggil
     expect(mockOrdersSocketUnsubscribes).toHaveBeenCalled();
+  });
+});
+
+// Terima order menulis data lengkap dari respons
+// handleAccept harus menuliskan kolom order dari respons POST /orders/:id/accept
+// (bukan cuma status, driver_id, server_version) supaya baris siap dipakai
+// rute dan OrderDetail tanpa fetch ulang.
+describe('Terima order menulis data lengkap dari respons', () => {
+  const { networkMonitor } = require('../map/networkMonitor');
+  const { GraphHopperRoutingProvider } = require('../map/routing');
+  const { locationService } = require('../map/location');
+  const { acceptOrder } = require('../sync/client');
+
+  // Respons POST /orders/:id/accept yang lengkap, koordinat tujuan [lng, lat].
+  // Nilai lng dan lat sengaja jauh berbeda supaya urutan tertukar ketahuan.
+  const fullOrderResponse = {
+    id: 'pool-accept-gps',
+    customerId: 'customer-9',
+    driverId: 'driver-AC21',
+    status: 'PREPARING',
+    items: [
+      { id: 'item-1', productId: 'prod-1', name: 'Nasi Goreng', quantity: 2, unitPriceCents: 12500 },
+    ],
+    deliveryAddress: {
+      recipientName: 'Citra',
+      phone: '081234567890',
+      street: 'Jl. Sudirman No. 1',
+      city: 'Jakarta',
+      postalCode: '10110',
+      coordinates: [106.85, -6.2],
+    },
+    totalCents: 25000,
+    currency: 'IDR',
+    notes: 'Pedesin',
+    createdAt: '2026-01-15T03:04:05.678Z',
+    updatedAt: '2026-01-15T03:05:00.000Z',
+    version: 4,
+    cancelledBy: null,
+    cancelReason: null,
+  };
+
+  // Buat mock baris pool dengan _getRaw, _setRaw, prepareUpdate yang bisa
+  // diverifikasi. _setRaw merekam semua panggilan supaya tes bisa
+  // memastikan kolom respons tertulis di _raw.
+  function makeAcceptablePoolOrder(id: string, serverVersion: number) {
+    const setRawCalls: Array<[string, unknown]> = [];
+    const rowForUpdate = {
+      _setRaw: jest.fn((key: string, value: unknown) => {
+        setRawCalls.push([key, value]);
+      }),
+      _raw: { _status: '', _changed: 'sentinel' },
+    };
+    const order = {
+      ...makeOrder({ id, status: 'ASSIGNED', driverId: null }),
+      _raw: { id, driver_id: null, _status: 'synced' },
+      _getRaw: jest.fn((key: string) => {
+        if (key === 'server_version') return serverVersion;
+        if (key === 'address_json') return null;
+        return undefined;
+      }),
+      prepareUpdate: jest.fn((cb: (r: typeof rowForUpdate) => void) => {
+        cb(rowForUpdate);
+        return { _preparedState: 'update', _row: rowForUpdate };
+      }),
+      prepareDestroyPermanently: jest.fn().mockReturnValue({ _preparedState: 'destroy' }),
+      __rowForUpdate: rowForUpdate,
+      __setRawCalls: setRawCalls,
+    };
+    return order;
+  }
+
+  // Versi GraphHopperRoutingProvider yang dipakai layar, supaya kita bisa
+  // inspeksi getRoute yang dipanggil.
+  function getLastProviderGetRoute(): jest.Mock {
+    const mocked = jest.mocked(GraphHopperRoutingProvider);
+    const lastResult = mocked.mock.results[mocked.mock.results.length - 1];
+    const instance = lastResult?.value;
+    if (!instance) {
+      throw new Error('GraphHopperRoutingProvider belum pernah dibuat');
+    }
+    return instance.getRoute;
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    networkMonitor.getStatus.mockReturnValue('online');
+    networkMonitor.subscribe.mockReturnValue(jest.fn());
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    mockOrdersCollection.query = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue([]),
+      observe: jest.fn().mockReturnValue({
+        subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
+      }),
+    });
+  });
+
+  test('Terima sukses dengan GPS ada: baris berisi address_json, items_json, customer_id dari respons, getRoute dipanggil dengan asal = GPS dan tujuan = koordinat respons', async () => {
+    // GPS tersedia lewat getLastKnown
+    (locationService.getLastKnown as jest.Mock).mockResolvedValue({
+      coords: { latitude: -6.175, longitude: 106.827 },
+    });
+    (acceptOrder as jest.Mock).mockResolvedValue(fullOrderResponse);
+
+    const poolOrder = makeAcceptablePoolOrder('pool-accept-gps', 3);
+    mockOrdersCollection.query = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue([poolOrder]),
+      observe: jest.fn().mockReturnValue({
+        subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
+      }),
+    });
+
+    const { getByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    const acceptButton = getByText('Terima Order').parent?.parent;
+    await act(async () => {
+      await acceptButton?.props.onPress();
+    });
+
+    // acceptOrder dipanggil dengan id dan version
+    expect(acceptOrder).toHaveBeenCalledWith('pool-accept-gps', 3);
+
+    // Kolom respons tertulis di _raw baris
+    const calls: Array<[string, unknown]> = poolOrder.__setRawCalls;
+    const find = (key: string) => calls.find(([k]) => k === key)?.[1];
+
+    expect(find('status')).toBe('PREPARING');
+    expect(find('driver_id')).toBe('driver-AC21');
+    expect(find('server_version')).toBe(4);
+    expect(find('customer_id')).toBe('customer-9');
+    expect(find('total_cents')).toBe(25000);
+    expect(find('currency')).toBe('IDR');
+    expect(find('notes')).toBe('Pedesin');
+    expect(find('cancelled_by')).toBeNull();
+    expect(find('cancel_reason')).toBeNull();
+    expect(find('updated_at')).toBe(Date.parse('2026-01-15T03:05:00.000Z'));
+
+    // items_json dan address_json adalah string JSON hasil serialisasi
+    const itemsJsonRaw = find('items_json');
+    expect(typeof itemsJsonRaw).toBe('string');
+    expect(JSON.parse(String(itemsJsonRaw))).toEqual(fullOrderResponse.items);
+
+    const addressJsonRaw = find('address_json');
+    expect(typeof addressJsonRaw).toBe('string');
+    expect(JSON.parse(String(addressJsonRaw))).toEqual(fullOrderResponse.deliveryAddress);
+
+    // created_at TIDAK diubah
+    expect(calls.find(([k]) => k === 'created_at')).toBeUndefined();
+
+    // _status 'synced' dan _changed ''
+    expect(poolOrder.__rowForUpdate._raw._status).toBe('synced');
+    expect(poolOrder.__rowForUpdate._raw._changed).toBe('');
+
+    // getRoute dipanggil dengan asal = GPS dan tujuan = koordinat RESPONS
+    // (bukan dari model baris yang masih pool)
+    const providerGetRoute = getLastProviderGetRoute();
+    expect(providerGetRoute).toHaveBeenCalledTimes(1);
+    expect(providerGetRoute).toHaveBeenCalledWith({
+      origin: { lng: 106.827, lat: -6.175 },
+      destination: { lng: 106.85, lat: -6.2 },
+    });
+  });
+
+  test('Terima sukses tanpa GPS: baris tetap lengkap, getRoute tidak dipanggil', async () => {
+    // GPS tidak tersedia
+    (locationService.getLastKnown as jest.Mock).mockResolvedValue(null);
+    (locationService.subscribe as jest.Mock).mockResolvedValue(jest.fn());
+    (acceptOrder as jest.Mock).mockResolvedValue(fullOrderResponse);
+
+    const poolOrder = makeAcceptablePoolOrder('pool-accept-no-gps', 3);
+    mockOrdersCollection.query = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue([poolOrder]),
+      observe: jest.fn().mockReturnValue({
+        subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
+      }),
+    });
+
+    const { getByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    const acceptButton = getByText('Terima Order').parent?.parent;
+    await act(async () => {
+      await acceptButton?.props.onPress();
+    });
+
+    // Kolom tetap lengkap meski tanpa GPS
+    const calls: Array<[string, unknown]> = poolOrder.__setRawCalls;
+    const find = (key: string) => calls.find(([k]) => k === key)?.[1];
+    expect(find('status')).toBe('PREPARING');
+    expect(find('customer_id')).toBe('customer-9');
+    const addressJsonRaw = find('address_json');
+    expect(typeof addressJsonRaw).toBe('string');
+    expect(JSON.parse(String(addressJsonRaw))).toEqual(fullOrderResponse.deliveryAddress);
+
+    // getRoute TIDAK dipanggil karena tidak ada GPS
+    const providerGetRoute = getLastProviderGetRoute();
+    expect(providerGetRoute).not.toHaveBeenCalled();
   });
 });
