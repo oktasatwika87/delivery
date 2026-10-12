@@ -24,14 +24,14 @@ afterEach(() => {
 
 describe('networkMonitor', () => {
   describe('initial state', () => {
-    test('initial status is online (optimistic default)', () => {
-      expect(networkMonitor.getStatus()).toBe('online');
+    test('initial status is unknown', () => {
+      expect(networkMonitor.getStatus()).toBe('unknown');
     });
   });
 
   describe('getStatus()', () => {
     test('returns current status', () => {
-      expect(networkMonitor.getStatus()).toBe('online');
+      expect(networkMonitor.getStatus()).toBe('unknown');
     });
   });
 
@@ -106,6 +106,36 @@ describe('networkMonitor', () => {
 
     test('check() does not throw on timeout', async () => {
       await expect(networkMonitor.check()).resolves.toBeDefined();
+    });
+  });
+
+  describe('recheck()', () => {
+    test('recheck emits unknown first, then the check result', async () => {
+      // Pakai fetch tiruan supaya hasil check deterministik ('online').
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = jest.fn().mockResolvedValue({ ok: true });
+      try {
+        // Set status dulu ke 'online' lewat check() tiruan, supaya
+        // recheck benar-benar memancarkan transisi ke 'unknown' dulu.
+        await networkMonitor.check();
+        expect(networkMonitor.getStatus()).toBe('online');
+
+        const statuses: NetworkStatus[] = [];
+        const unsubscribe = networkMonitor.subscribe((status) => {
+          statuses.push(status);
+        });
+
+        await networkMonitor.recheck();
+
+        // Emit pertama harus 'unknown', emit terakhir harus hasil check ('online')
+        expect(statuses.length).toBeGreaterThanOrEqual(2);
+        expect(statuses[0]).toBe('unknown');
+        expect(statuses[statuses.length - 1]).toBe('online');
+
+        unsubscribe();
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 

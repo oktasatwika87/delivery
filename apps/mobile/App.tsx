@@ -57,8 +57,7 @@ function App(): React.JSX.Element {
   const [logoutReason, setLogoutReason] = useState<'auth-expired' | 'manual' | undefined>(undefined);
   const [showRegister, setShowRegister] = useState(false);
 
-  // Track previous network status so we only kick flushNow on
-  // offline -> online transition (not initial 'online' or every probe).
+  // Status terakhir, supaya flushNow hanya dipicu perpindahan 'offline' -> 'online'.
   const prevNetworkStatusRef = useRef<NetworkStatus>('unknown');
 
   useEffect(() => {
@@ -85,9 +84,9 @@ function App(): React.JSX.Element {
         }
       });
 
-    // Network monitor - start periodic ping ke backend supaya UI map
-    // bisa tampil indikator online/offline real-time. Tidak blocking -
-    // optimistic default 'online' sampai ada bukti sebaliknya.
+    // Network monitor ping periodik supaya UI map punya indikator
+    // online/offline. Tidak blocking; status awal 'unknown' sampai
+    // cek pertama selesai.
     networkMonitor.start();
 
     // --- AppState listener: pause/resume sync + sockets on background/foreground ---
@@ -102,6 +101,10 @@ function App(): React.JSX.Element {
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         console.log('[App] AppState active, restarting sync + resuming sockets');
+        // Status jadi 'unknown' dulu lalu dicek ulang; hasilnya tidak ditunggu.
+        networkMonitor.recheck().catch(() => {
+          // Error sudah di-handle di check().
+        });
         // start() idempotent: guard di isStarting + syncInterval memastikan
         // tidak ada duplicate initial pull atau duplicate interval.
         syncCoordinator.start(database).catch((err) => {
@@ -199,9 +202,9 @@ function App(): React.JSX.Element {
     };
   }, []);
 
-  // --- Kick sync on back-online transition -------------------------------------------
-  // networkMonitor fires on every status change. Only trigger flushNow when
-  // we transition offline -> online (not initial 'online', not every probe).
+  // --- Kick flush dari transisi offline -> online ---
+  // Hanya perpindahan 'offline' -> 'online' yang memicu flushNow;
+  // transisi 'unknown' -> 'online' diurus di tempat lain.
   useEffect(() => {
     let cancelled = false;
 
@@ -209,8 +212,8 @@ function App(): React.JSX.Element {
       const prev = prevNetworkStatusRef.current;
       prevNetworkStatusRef.current = status;
 
-      if (prev !== 'online' && status === 'online' && !cancelled) {
-        console.log('[App] Network status known online (was ' + prev + '), triggering flush');
+      if (prev === 'offline' && status === 'online' && !cancelled) {
+        console.log('[App] Network offline -> online, triggering flush');
         syncCoordinator.flushNow().catch((err) => {
           if (!cancelled) {
             console.warn(

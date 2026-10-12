@@ -36,10 +36,10 @@ import type { RootStackParamList } from '../../App';
 import { TILE_STYLE } from '../map/assets/style';
 import { offlineStorage } from '../map/offlineStorage';
 import { locationService } from '../map/location';
-import { networkMonitor } from '../map/networkMonitor';
+import { networkMonitor, type NetworkStatus } from '../map/networkMonitor';
 import { RouteService } from '../map/routeService';
 import { GraphHopperRoutingProvider } from '../map/routing';
-import { haversineDistance, MATCH_RADIUS_METERS } from '../map/routeSnapshot';
+import { haversineDistance } from '../map/routeSnapshot';
 import { OrderModel } from '../db/models/OrderModel';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Map'> & {
@@ -47,6 +47,9 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Map'> & {
 };
 
 type LngLat = { lng: number; lat: number };
+
+/** Jarak minimum GPS bergeser (meter) supaya getRoute dipanggil ulang. */
+export const ROUTE_RECALC_DISTANCE_METERS = 300;
 
 function MapScreenBase({ database }: Props): React.JSX.Element {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -56,9 +59,8 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
   // Refs
   const cameraRef = useRef<MapLibreGL.CameraRef | null>(null);
 
-  // Titik asal rute yang dipakai panggilan getRoute terakhir, supaya update
-  // GPS kecil tidak memicu hitung ulang rute. Radius sama dengan
-  // MATCH_RADIUS_METERS (300 m) di routeSnapshot.
+  // Titik asal rute yang dipakai panggilan getRoute terakhir, supaya
+  // update GPS kecil tidak memicu hitung ulang rute.
   const lastRouteOriginRef = useRef<LngLat | null>(null);
 
   // Sudah pernah fitBounds untuk order ini, supaya kamera tidak di-zoom
@@ -103,7 +105,8 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
   }, [database]);
 
   // Network state
-  const [isOnline, setIsOnline] = useState<boolean>(networkMonitor.getStatus() === 'online');
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatus>(networkMonitor.getStatus());
+  const isOnline = networkStatus === 'online';
 
   // Offline region state
   const [hasOfflineRegion, setHasOfflineRegion] = useState<boolean>(false);
@@ -125,7 +128,7 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
 
   useEffect(() => {
     const unsubscribe = networkMonitor.subscribe((status) => {
-      setIsOnline(status === 'online');
+      setNetworkStatus(status);
     });
     networkMonitor.check().catch(() => {});
     return unsubscribe;
@@ -229,12 +232,11 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
     const origin: LngLat = { lng: currentLocation.lng, lat: currentLocation.lat };
     const destination: LngLat = orderDestination;
 
-    // Throttle: kalau kurir belum bergeser > 300 m dari titik asal rute
-    // terakhir, tidak perlu hitung ulang. Radius sama dengan MATCH_RADIUS_METERS
-    // di routeSnapshot supaya konsisten dengan logika fallback snapshot.
+    // Throttle: kalau kurir belum bergeser > ROUTE_RECALC_DISTANCE_METERS
+    // dari titik asal rute terakhir, tidak perlu hitung ulang.
     if (lastRouteOriginRef.current) {
       const distance = haversineDistance(lastRouteOriginRef.current, origin);
-      if (distance <= MATCH_RADIUS_METERS) {
+      if (distance <= ROUTE_RECALC_DISTANCE_METERS) {
         return;
       }
     }
@@ -423,10 +425,23 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
         <View
           style={[
             styles.statusDot,
-            { backgroundColor: isOnline ? '#10b981' : '#f59e0b' },
+            {
+              backgroundColor:
+                networkStatus === 'online'
+                  ? '#10b981'
+                  : networkStatus === 'offline'
+                  ? '#f59e0b'
+                  : '#9ca3af',
+            },
           ]}
         />
-        <Text style={styles.statusText}>{isOnline ? 'Online' : 'Offline'}</Text>
+        <Text style={styles.statusText}>
+          {networkStatus === 'online'
+            ? 'Online'
+            : networkStatus === 'offline'
+            ? 'Offline'
+            : 'Memeriksa koneksi'}
+        </Text>
       </View>
 
       {/* GPS indicator */}

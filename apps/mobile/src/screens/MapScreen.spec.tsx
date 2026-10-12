@@ -19,14 +19,14 @@ import type { ReactNode } from 'react';
 import { Linking } from 'react-native';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
-import { MapScreen } from './MapScreen';
+import { MapScreen, ROUTE_RECALC_DISTANCE_METERS } from './MapScreen';
 import { networkMonitor } from '../map/networkMonitor';
 import { locationService } from '../map/location';
 import { offlineStorage } from '../map/offlineStorage';
 import type { RouteResult } from '../map/routeService';
 import type { RouteRequest } from '../map/routing';
 import type { PackInfo } from '../map/offlineStorage';
-import { MATCH_RADIUS_METERS, haversineDistance } from '../map/routeSnapshot';
+import { haversineDistance } from '../map/routeSnapshot';
 
 // Mock setup
 
@@ -461,6 +461,22 @@ describe('MapScreen', () => {
     });
   });
 
+  // Status jaringan 'unknown' saat app baru dibuka, sebelum cek pertama
+  // selesai. Label "Memeriksa koneksi" dengan titik abu-abu, beda dari
+  // 'online' (hijau) dan 'offline' (oranye).
+  describe('label status jaringan', () => {
+    test('status unknown menampilkan "Memeriksa koneksi"', async () => {
+      jest.mocked(networkMonitor.getStatus).mockReturnValue('unknown');
+      jest.mocked(networkMonitor.subscribe).mockReturnValue(() => {});
+
+      const { getByText } = await renderMapScreen();
+
+      await waitFor(() => {
+        expect(getByText('Memeriksa koneksi')).toBeTruthy();
+      });
+    });
+  });
+
   // Tes baru
 
   /**
@@ -521,7 +537,7 @@ describe('MapScreen', () => {
       // Sanity: jarak dari titik pertama memang <= 300 m.
       const firstOrigin = { lng: 106.8, lat: -6.175 };
       const lastOrigin = { lng: metersEast(106.8, -6.175, 100), lat: -6.175 };
-      expect(haversineDistance(firstOrigin, lastOrigin)).toBeLessThan(MATCH_RADIUS_METERS);
+      expect(haversineDistance(firstOrigin, lastOrigin)).toBeLessThan(ROUTE_RECALC_DISTANCE_METERS);
     });
 
     test('GPS update > 300 m memicu getRoute kedua', async () => {
@@ -546,7 +562,7 @@ describe('MapScreen', () => {
 
       const firstOrigin = { lng: 106.8, lat: -6.175 };
       const lastOrigin = { lng: metersEast(106.8, -6.175, 400), lat: -6.175 };
-      expect(haversineDistance(firstOrigin, lastOrigin)).toBeGreaterThan(MATCH_RADIUS_METERS);
+      expect(haversineDistance(firstOrigin, lastOrigin)).toBeGreaterThan(ROUTE_RECALC_DISTANCE_METERS);
     });
   });
 
@@ -672,7 +688,7 @@ describe('MapScreen', () => {
   describe('pemulihan online', () => {
     test('online pulih memicu satu getRoute tambahan walau GPS < 300 m', async () => {
       jest.mocked(networkMonitor.getStatus).mockReturnValue('offline');
-      let networkCallback: ((status: 'online' | 'offline') => void) | null = null;
+      let networkCallback: ((status: 'online' | 'offline' | 'unknown') => void) | null = null;
       jest.mocked(networkMonitor.subscribe).mockImplementation((cb) => {
         networkCallback = cb;
         return () => {};
