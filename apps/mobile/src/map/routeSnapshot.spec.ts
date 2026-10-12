@@ -7,7 +7,7 @@
  * - LRU retention: keep newest 20, delete oldest
  */
 
-import { haversineDistance, withinRadius, MATCH_RADIUS_METERS, MAX_SNAPSHOTS } from './routeSnapshot';
+import { haversineDistance, withinRadius, MAX_SNAPSHOTS, destMatches, DEST_MATCH_RADIUS_METERS } from './routeSnapshot';
 
 // Mock types
 
@@ -53,14 +53,6 @@ function createSnapshot(
   return snapshot;
 }
 
-// Simulasi withinRadius dengan logic yang sama
-function mockWithinRadius(
-  a: { lat: number; lng: number },
-  b: { lat: number; lng: number },
-  radiusMeters: number,
-): boolean {
-  return haversineDistance(a, b) <= radiusMeters;
-}
 
 // Tests
 
@@ -115,8 +107,8 @@ describe('routeSnapshot', () => {
       expect(withinRadius(a, b, 300)).toBe(false);
     });
 
-    test('MATCH_RADIUS_METERS constant is 300', () => {
-      expect(MATCH_RADIUS_METERS).toBe(300);
+    test('DEST_MATCH_RADIUS_METERS constant is 25', () => {
+      expect(DEST_MATCH_RADIUS_METERS).toBe(25);
     });
   });
 
@@ -184,45 +176,44 @@ describe('routeSnapshot', () => {
   });
 
   describe('radius matching scenarios', () => {
-    test('snapshot 100m from origin AND 150m from dest matches query', () => {
-      const queryOrigin = { lat: -6.175, lng: 106.827 };
-      const queryDest = { lat: -6.2, lng: 106.85 };
+    // destMatches(): menerima snapshot minimal { destLat, destLng } dan
+    // titik tujuan. Snapshot disimpan WatermelonDB sebagai string, jadi
+    // Number(string) harus menghasilkan koordinat valid.
+    describe('destMatches() dengan snapshot sebagai objek biasa', () => {
+      test('asal beda sekitar 2 km tapi tujuan sama: cocok (asal diabaikan)', () => {
+        // Snapshot punya tujuan [-6.2, 106.85]. Query minta tujuan sama
+        // tapi asal 2 km lebih utara. Pencocokan hanya lihat tujuan.
+        const snapshot = { destLat: '-6.2', destLng: '106.85' };
+        // 2 km offset latitude = 2_000 / 111_000 ~ 0.018 deg
+        const queryOrigin = { lat: -6.218, lng: 106.85 };
+        const queryDest = { lat: -6.2, lng: 106.85 };
+        // Asal query memang beda 2 km dari snapshot (kalau dicek manual).
+        expect(haversineDistance(queryOrigin, { lat: -6.2, lng: 106.85 })).toBeGreaterThan(1500);
+        // destMatches hanya lihat tujuan, jadi cocok.
+        expect(destMatches(snapshot, queryDest)).toBe(true);
+      });
 
-      // Snapshot origin ~100m north of query origin
-      const snapOrigin = { lat: -6.176, lng: 106.827 };
-      // Snapshot dest ~150m from query dest
-      const snapDest = { lat: -6.2015, lng: 106.851 };
+      test('tujuan beda sekitar 30 m: tidak cocok', () => {
+        const snapshot = { destLat: '-6.2', destLng: '106.85' };
+        // 30 m offset latitude = 30 / 111_000 ~ 0.00027 deg
+        const queryDest = { lat: -6.1997, lng: 106.85 };
+        // Sanity: jarak memang di atas 25 m
+        const dist = haversineDistance({ lat: -6.2, lng: 106.85 }, queryDest);
+        expect(dist).toBeGreaterThan(DEST_MATCH_RADIUS_METERS);
+        expect(destMatches(snapshot, queryDest)).toBe(false);
+      });
 
-      const originMatch = mockWithinRadius(snapOrigin, queryOrigin, 300);
-      const destMatch = mockWithinRadius(snapDest, queryDest, 300);
+      test('tujuan sama persis: cocok', () => {
+        const snapshot = { destLat: '-6.2', destLng: '106.85' };
+        const queryDest = { lat: -6.2, lng: 106.85 };
+        expect(destMatches(snapshot, queryDest)).toBe(true);
+      });
 
-      expect(originMatch).toBe(true);
-      expect(destMatch).toBe(true);
-    });
-
-    test('snapshot 400m from origin does NOT match', () => {
-      const queryOrigin = { lat: -6.175, lng: 106.827 };
-
-      // Snapshot origin ~400m north (outside 300m)
-      const snapOrigin = { lat: -6.179, lng: 106.827 };
-
-      const originMatch = mockWithinRadius(snapOrigin, queryOrigin, 300);
-
-      expect(originMatch).toBe(false);
-      // No need to check dest since origin already fails
-    });
-
-    test('snapshot matches even when slightly outside city block', () => {
-      // Jakarta typical block size ~100-150m
-      // Snapshot half a block away (~75m) should match
-      const queryOrigin = { lat: -6.175, lng: 106.827 };
-      const snapOrigin = { lat: -6.17568, lng: 106.828 }; // ~75m SE
-
-      const destQuery = { lat: -6.2, lng: 106.85 };
-      const snapDest = { lat: -6.20136, lng: 106.851 }; // ~150m SE
-
-      expect(mockWithinRadius(snapOrigin, queryOrigin, 300)).toBe(true);
-      expect(mockWithinRadius(snapDest, destQuery, 300)).toBe(true);
+      test('destLat dan destLng number (bukan string) juga diterima', () => {
+        const snapshot = { destLat: -6.2, destLng: 106.85 };
+        const queryDest = { lat: -6.2, lng: 106.85 };
+        expect(destMatches(snapshot, queryDest)).toBe(true);
+      });
     });
   });
 });

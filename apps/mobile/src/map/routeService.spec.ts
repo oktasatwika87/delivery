@@ -314,6 +314,86 @@ describe('RouteService', () => {
       expect(error.message).toBe('test message');
     });
   });
+
+  describe('getRoute() menunggu simpan snapshot', () => {
+    test('promise simpan ditahan: getRoute belum selesai sebelum simpan selesai', async () => {
+      // Arrange: fetch sukses dari provider, simpan snapshot ditahan
+      jest.spyOn(networkMonitor, 'getStatus').mockReturnValue('online');
+      const liveRoute = createMockRoute(testOrigin, testDest, 5000);
+      mockProvider.getRoute.mockResolvedValue(liveRoute);
+
+      // Simpan ditahan lewat deferred promise
+      let resolveInsert: (value: unknown) => void = () => {};
+      const insertPromise = new Promise<unknown>((resolve) => {
+        resolveInsert = resolve;
+      });
+      const insertSpy = jest
+        .spyOn(routeSnapshotService, 'insertFromRoute')
+        .mockReturnValue(insertPromise as never);
+
+      // Act: mulai getRoute
+      const getRoutePromise = routeService.getRoute(testRequest);
+
+      // Tunggu beberapa microtask agar fetch selesai dan saveSnapshot
+      // sudah mulai menunggu insertFromRoute.
+      await new Promise<void>((resolve) => {
+        setTimeout(() => resolve(), 20);
+      });
+
+      // getRoute belum selesai karena simpan masih ditahan
+      let getRouteResolved = false;
+      void getRoutePromise.then(() => {
+        getRouteResolved = true;
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(() => resolve(), 20);
+      });
+      expect(getRouteResolved).toBe(false);
+
+      // Selesaikan simpan, getRoute baru boleh selesai
+      resolveInsert({ id: 'snap-new' });
+
+      const result = await getRoutePromise;
+      expect(getRouteResolved).toBe(true);
+      expect(result.isFromCache).toBe(false);
+      expect(result.route).toEqual(liveRoute);
+      expect(insertSpy).toHaveBeenCalled();
+    });
+
+    test('simpan gagal: getRoute tetap mengembalikan rute live dengan isFromCache false, tidak jatuh ke cabang cadangan', async () => {
+      // Arrange: fetch sukses, simpan gagal (mis. DB penuh)
+      jest.spyOn(networkMonitor, 'getStatus').mockReturnValue('online');
+      const liveRoute = createMockRoute(testOrigin, testDest, 5000);
+      mockProvider.getRoute.mockResolvedValue(liveRoute);
+
+      const insertSpy = jest
+        .spyOn(routeSnapshotService, 'insertFromRoute')
+        .mockRejectedValue(new Error('Disk full'));
+
+      // findMatch TIDAK dipanggil kalau simpan gagal (tidak jatuh ke cabang cadangan)
+      const findMatchSpy = jest.spyOn(routeSnapshotService, 'findMatch');
+
+      // Spy console.warn supaya gagal simpan tidak bocor log ke test runner
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      // Act
+      const result = await routeService.getRoute(testRequest);
+
+      // Assert: getRoute tetap mengembalikan rute live
+      expect(result.isFromCache).toBe(false);
+      expect(result.route).toEqual(liveRoute);
+      expect(insertSpy).toHaveBeenCalled();
+      // findMatch TIDAK dipanggil: simpan gagal bukan alasan untuk fallback
+      expect(findMatchSpy).not.toHaveBeenCalled();
+      // Gagal simpan dicatat di log
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('failed to save snapshot'),
+        expect.any(Error),
+      );
+
+      warnSpy.mockRestore();
+    });
+  });
 });
 
 // snapshotToRoute conversion

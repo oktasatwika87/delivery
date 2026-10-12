@@ -71,8 +71,10 @@ export class RouteService {
    * Ambil rute dengan offline-first strategy.
    *
    * 1. Kalau online, coba fetch dari routingProvider.
-   * 2. Fetch sukses, simpan ke snapshot, return live route.
-   * 3. Fetch gagal ATAU offline, fallback ke snapshot match.
+   * 2. Fetch sukses, simpan ke snapshot (ditunggu sampai selesai),
+   *    return live route.
+   * 3. Fetch gagal ATAU offline, fallback ke snapshot match (cocok
+   *    berdasarkan tujuan saja, radius 25 m).
    * 4. Tidak ada snapshot match, throw RouteUnavailableError.
    */
   async getRoute(request: RouteRequest): Promise<RouteResult> {
@@ -81,6 +83,10 @@ export class RouteService {
     if (isOnline) {
       try {
         const route = await this.routingProvider.getRoute(request);
+        // Tunggu simpan selesai supaya pemanggil getRoute() mendapat
+        // jaminan snapshot sudah tersimpan sebelum getRoute resolve.
+        // Simpan gagal dicatat di log, getRoute tetap return rute live
+        // (isFromCache false) dan TIDAK jatuh ke cabang cadangan.
         await this.saveSnapshot(route);
         return { route, isFromCache: false };
       } catch (fetchError) {
@@ -136,16 +142,21 @@ export class RouteService {
   }
 
   /**
-   * Simpan rute ke snapshot. Error di-simpan secara async, caller tidak perlu tunggu.
+   * Simpan rute ke snapshot. Tunggu sampai insert selesai, tapi kalau
+   * insert menolak (mis. DB penuh), catat di log dan lanjut - getRoute
+   * tetap mengembalikan rute live karena fetch sudah berhasil.
    */
   private async saveSnapshot(route: Route): Promise<void> {
-    routeSnapshotService
-      .insertFromRoute(this.database, route)
-      .catch((err) => console.warn('[routeService] failed to save snapshot:', err));
+    try {
+      await routeSnapshotService.insertFromRoute(this.database, route);
+    } catch (err) {
+      console.warn('[routeService] failed to save snapshot:', err);
+    }
   }
 
   /**
-   * Cari snapshot yang match dengan request (radius 300m matching).
+   * Cari snapshot yang match dengan request (pencocokan tujuan saja,
+   * radius 25 m). Asal diabaikan - lihat destMatches().
    */
   private async findMatch(request: RouteRequest) {
     return routeSnapshotService.findMatch(this.database, {

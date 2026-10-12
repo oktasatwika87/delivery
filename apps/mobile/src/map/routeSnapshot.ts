@@ -1,20 +1,17 @@
 /**
- * routeSnapshot, service untuk cache rute terakhir & fallback offline.
+ * routeSnapshot, cache rute terakhir untuk fallback offline.
  *
- * Tanggung jawab:
- *   1. Simpan snapshot baru ke route_snapshots setelah getRoute() sukses.
- *   2. Query snapshot yang cocok dengan query saat ini (origin & dest
- *      masing-masing dalam radius 300m, haversine).
- *   3. Enforce retention LRU max 20 entry, cleanup jalankan sekali saat
- *      app boot (dipanggil dari App.tsx via runRetentionCleanup).
+ * Pencocokan snapshot berdasarkan tujuan saja, radius 25 m. Asal
+ * diabaikan - kalau ikut dicek, rute offline akan hilang begitu
+ * driver bergeser dari titik saat fetch, padahal rute untuk
+ * TUJUAN yang sama masih valid sampai tujuan bergeser > 25 m.
  *
- * Catatan desain:
- *   - Radius 300m, cukup dekat untuk pickup point yang geser sedikit,
- *     cukup longgar untuk false-match dihindari.
- *   - LRU 20 entry, independen dari pasangan origin-destination, snapshot
- *     paling lama di-evict ketika insert baru kelebihan.
- *   - Cleanup TIDAK pakai interval, sekali per boot, lewat App.tsx,
- *     supaya hemat baterai (lihat keputusan #8).
+ * Tujuan disimpan apa adanya dari koordinat order, jadi order
+ * yang sama selalu berjarak 0, dan 25 m cukup sempit supaya order
+ * lain di dekatnya tidak tertukar.
+ *
+ * LRU 20 entry: cleanup jalan sekali saat app dibuka (App.tsx)
+ * dan setelah tiap insert (insertFromRoute).
  */
 
 import { Q } from '@nozbe/watermelondb';
@@ -23,10 +20,10 @@ import type { Database } from '@nozbe/watermelondb';
 import { RouteSnapshotModel } from '../db/models/RouteSnapshotModel';
 import type { LngLat, Route } from './routing';
 
-/** Radius matching, origin & dest masing-masing harus berada dalam 300m. */
-export const MATCH_RADIUS_METERS = 300;
+/** Radius pencocokan tujuan, snapshot yang tujuan-nya dalam 25 m dianggap cocok. */
+export const DEST_MATCH_RADIUS_METERS = 25;
 
-/** LRU cap, lihat keputusan #7. */
+/** LRU cap. */
 export const MAX_SNAPSHOTS = 20;
 
 /** Earth radius dalam meter, dipakai untuk haversine. */
@@ -60,21 +57,22 @@ export function withinRadius(a: LngLat, b: LngLat, radiusMeters: number): boolea
   return haversineDistance(a, b) <= radiusMeters;
 }
 
-/**
- * Cek apakah snapshot match dengan query, baik origin maupun dest
- * masing-masing harus berada dalam MATCH_RADIUS_METERS.
- */
-export function snapshotMatches(
-  snapshot: RouteSnapshotModel,
-  query: { origin: LngLat; destination: LngLat },
-  radiusMeters: number = MATCH_RADIUS_METERS,
+/** Tipe longgar (string atau number) supaya tes bisa pakai objek
+ *  biasa tanpa WatermelonDB. Number() mengkonversi keduanya jadi
+ *  koordinat valid. */
+export interface MinimalDestSnapshot {
+  destLat: string | number;
+  destLng: string | number;
+}
+
+/** Cek apakah snapshot cocok dengan titik tujuan (radius 25 m, asal diabaikan). */
+export function destMatches(
+  snapshot: MinimalDestSnapshot,
+  dest: LngLat,
+  radiusMeters: number = DEST_MATCH_RADIUS_METERS,
 ): boolean {
-  const snapOrigin: LngLat = { lat: Number(snapshot.originLat), lng: Number(snapshot.originLng) };
   const snapDest: LngLat = { lat: Number(snapshot.destLat), lng: Number(snapshot.destLng) };
-  return (
-    withinRadius(snapOrigin, query.origin, radiusMeters) &&
-    withinRadius(snapDest, query.destination, radiusMeters)
-  );
+  return withinRadius(snapDest, dest, radiusMeters);
 }
 
 // Service
@@ -121,8 +119,8 @@ class RouteSnapshotServiceImpl implements RouteSnapshotService {
   }
 
   /**
-   * Query snapshot terbaru yang match dengan query (origin & dest radius match).
-   * Return null kalau tidak ada.
+   * Query snapshot terbaru yang cocok dengan tujuan query (radius 25 m,
+   * asal diabaikan). Return null kalau tidak ada.
    */
   async findMatch(
     db: Database,
@@ -137,7 +135,7 @@ class RouteSnapshotServiceImpl implements RouteSnapshotService {
       .fetch();
 
     for (const row of rows) {
-      if (snapshotMatches(row, query)) {
+      if (destMatches(row, query.destination)) {
         return row;
       }
     }
