@@ -130,8 +130,9 @@ export class SyncCoordinator implements Coordinator {
   }
 
   /**
-   * Subscribe to networkMonitor for reconnect events.
-   * When device goes offline -> online, trigger drain of pending actions.
+   * Subscribe ke networkMonitor dan drain outbox setiap perpindahan
+   * ke 'online' dari status lain, termasuk 'unknown' saat app dibuka
+   * atau aktif lagi.
    */
   private async setupNetworkListener(): Promise<void> {
     // Clean up any existing subscription
@@ -147,9 +148,11 @@ export class SyncCoordinator implements Coordinator {
 
       console.log(`[SyncCoordinator] Network status changed: ${this.lastNetworkStatus} -> ${status}`);
 
-      // Detect reconnect: was offline, now online
-      if (this.lastNetworkStatus === 'offline' && status === 'online') {
-        console.log('[SyncCoordinator] Reconnected, draining pending actions...');
+      // Drain setiap perpindahan ke 'online' dari status lain ('offline'
+      // atau 'unknown'), supaya aksi yang masuk saat app dibuka online
+      // (mis. COD yang dicatat sebelum app kembali ke latar) ikut terkirim.
+      if (status === 'online' && this.lastNetworkStatus !== 'online') {
+        console.log('[SyncCoordinator] Online detected, draining pending actions...');
         try {
           // Dynamic import to avoid circular dependency with WatermelonDB
           const { drainPendingActions } = await import('./outbox');

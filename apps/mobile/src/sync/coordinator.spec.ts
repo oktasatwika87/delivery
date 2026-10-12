@@ -36,6 +36,32 @@ jest.mock('./syncEvents', () => ({
   },
 }));
 
+// Mock networkMonitor - subscribe dipakai oleh setupNetworkListener.
+type NetworkListener = (status: 'online' | 'offline' | 'unknown') => void;
+type NetworkStatus = 'online' | 'offline' | 'unknown';
+const networkListenerRef: { current: NetworkListener | null } = { current: null };
+const getStatusMock: jest.Mock<NetworkStatus, []> = jest.fn(() => 'unknown');
+jest.mock('../map/networkMonitor', () => ({
+  networkMonitor: {
+    getStatus: getStatusMock,
+    subscribe: jest.fn((cb: NetworkListener) => {
+      networkListenerRef.current = cb;
+      return () => {
+        if (networkListenerRef.current === cb) networkListenerRef.current = null;
+      };
+    }),
+  },
+}));
+
+// Mock outbox - drainPendingActions dipanggil lewat dynamic import di
+// coordinator.ts. Mock modul ini SEBELUM SyncCoordinator di-load supaya
+// dynamic import dapat versi tiruan.
+const drainMock = jest.fn();
+jest.mock('./outbox', () => ({
+  __esModule: true,
+  drainPendingActions: (...args: unknown[]) => drainMock(...args),
+}));
+
 import { SyncCoordinator } from './coordinator';
 import type { Payment } from '@delivery/shared';
 
@@ -1732,6 +1758,53 @@ describe('SyncCoordinator', () => {
         ([event]) => event === 'orderRemovedFromView'
       );
       expect(orderRemovedCalls).toHaveLength(0);
+    });
+  });
+
+  // drain outbox setiap status jadi 'online', termasuk transisi
+  // 'unknown' -> 'online' saat app dibuka.
+  describe('setupNetworkListener: drain outbox setiap perpindahan ke online', () => {
+    let coordinator: SyncCoordinator;
+    const { networkMonitor } = require('../map/networkMonitor');
+
+    beforeEach(() => {
+      drainMock.mockReset();
+      drainMock.mockResolvedValue([]);
+      networkListenerRef.current = null;
+      jest.mocked(networkMonitor.getStatus).mockReturnValue('unknown');
+      coordinator = new SyncCoordinator();
+    });
+
+    // Pasang listener sekali, lalu fire beberapa transisi untuk simulasi
+    // rangkaian event dari networkMonitor dalam satu siklus hidup
+    // coordinator. setupNetworkListener dipanggil di awal; transisi
+    // berikutnya dipanggil via listener yang sudah terpasang.
+    async function setupAndFire(...statuses: Array<'online' | 'offline' | 'unknown'>): Promise<void> {
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.setupNetworkListener();
+      const listener = networkListenerRef.current;
+      if (!listener) throw new Error('Listener tidak terpasang');
+      for (const status of statuses) {
+        await listener(status);
+      }
+    }
+
+    test("'unknown' -> 'online' memanggil drain", async () => {
+      await setupAndFire('online');
+      expect(drainMock).toHaveBeenCalledTimes(1);
+    });
+
+    test("'offline' -> 'online' memanggil drain", async () => {
+      await setupAndFire('offline', 'online');
+      // 'unknown' -> 'offline' tidak drain, 'offline' -> 'online' drain
+      expect(drainMock).toHaveBeenCalledTimes(1);
+    });
+
+    test("'online' -> 'online' tidak memanggil drain (cek periodik, bukan transisi)", async () => {
+      // Transisi pertama: 'unknown' -> 'online' (drain 1x)
+      await setupAndFire('online', 'online');
+      // Hanya satu drain (dari transisi pertama)
+      expect(drainMock).toHaveBeenCalledTimes(1);
     });
   });
 });
