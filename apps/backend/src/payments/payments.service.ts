@@ -15,66 +15,133 @@ export class PaymentsService {
   ) {}
 
   /**
-   * Driver collects COD (cash on delivery) for an order.
-   * Reuses the existing idempotency key pattern to prevent double-collection.
-   * Creates payment with method: CASH and status: CAPTURED directly.
-   * Jumlah dari order.totalCents, amountCents klien diabaikan.
+   * Driver mencatat COD (bayar di tempat) untuk order miliknya. Jumlah diambil
+   * dari order.totalCents; amountCents dari aplikasi diabaikan.
+   *
+   * Semua cek dan penulisan berjalan di satu transaksi yang lebih dulu
+   * mengunci baris order (`SELECT ... FOR UPDATE`), sama seperti
+   * releaseToPool, supaya COD dan pelepasan order (pembatalan atau cron) yang
+   * datang bersamaan tidak bisa sama-sama lolos:
+   * 1. Order dibaca lewat tx. Tidak ada: 404. Driver bukan pemanggil: 403
+   *    dengan code ORDER_NOT_ASSIGNED.
+   * 2. Payment dengan idempotencyKey yang sama sudah ada: order sama berarti
+   *    kiriman ulang, dikembalikan apa adanya tanpa event; order lain 409
+   *    IDEMPOTENCY_KEY_CONFLICT (pesan sama dengan flagOrphanedCod).
+   * 3. Sudah ada COD tercatat dengan kunci lain: 409 COD_ALREADY_CAPTURED,
+   *    body membawa payment itu supaya aplikasi bisa menyimpannya.
+   * 4. Payment baru dibuat: CASH, CAPTURED, kind PAYMENT.
+   * Event order:cod_collected dikirim setelah transaksi selesai, hanya untuk
+   * payment baru.
+   *
+   * P2002 (kunci yang sama dipakai dua order pada saat bersamaan) ditangani
+   * di luar transaksi. Di Postgres satu perintah yang gagal membatalkan
+   * seluruh transaksi, dan Prisma tidak membuat `SAVEPOINT` per perintah,
+   * jadi payment dibaca ulang lewat this.prisma: order sama dikembalikan
+   * tanpa event, order lain 409 IDEMPOTENCY_KEY_CONFLICT, tidak ketemu: error
+   * aslinya dilempar lagi.
    */
   async collectCod(
     orderId: string,
     driverId: string,
     idempotencyKey: string,
   ): Promise<Payment> {
-    // Verify driver is assigned to this order
-    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
-    if (!order) {
-      throw new NotFoundException('Order tidak ditemukan');
-    }
-    if (order.driverId !== driverId) {
-      throw new ForbiddenException('Order ini tidak ditugaskan ke Anda');
-    }
-
-    // Gunakan jumlah dari server, bukan dari klien
-    const amountCents = order.totalCents;
-
-    // Use upsert with idempotency key to prevent double-collection
-    // If idempotencyKey already exists, return the existing record
-    let row: Awaited<ReturnType<PrismaClient['payment']['create']>>;
     try {
-      row = await this.prisma.payment.create({
-        data: {
-          orderId,
-          idempotencyKey,
-          method: 'CASH',
-          status: 'CAPTURED',
-          amountCents,
-          currency: order.currency,
-          kind: 'PAYMENT',
-        },
-      });
-    } catch (err) {
-      // Unique constraint violation on idempotencyKey -> record already exists.
-      // Deliberately NOT emitting order:cod_collected here, this branch is
-      // reached by an outbox retry replaying the same collection, and the
-      // customer was already notified on the original successful create.
-      const error = err as { code?: string };
-      if (error.code === 'P2002') {
-        const existing = await this.prisma.payment.findUnique({
-          where: { idempotencyKey },
+      const result = await this.prisma.$transaction(async (tx) => {
+        // Kunci baris order dulu; semua cek di bawah berjalan di dalam kunci ini.
+        await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId}::uuid FOR UPDATE`;
+
+        // Pemilik dicek di dalam kunci, supaya pelepasan order yang selesai tepat
+        // sebelum kunci didapat ikut terlihat.
+        const order = await tx.order.findUnique({ where: { id: orderId } });
+        if (!order) {
+          throw new NotFoundException('Order tidak ditemukan');
+        }
+        if (order.driverId !== driverId) {
+          throw new ForbiddenException({
+            code: 'ORDER_NOT_ASSIGNED',
+            message: 'Order ini tidak ditugaskan ke Anda',
+          });
+        }
+
+        // Cek payment dengan kunci ini sudah ada.
+        const sameKey = await tx.payment.findUnique({ where: { idempotencyKey } });
+        if (sameKey) {
+          if (sameKey.orderId === orderId) {
+            // Kiriman ulang: dikembalikan apa adanya, tanpa event.
+            return { payment: this.toDomain(sameKey), isReplay: true, order };
+          }
+          throw new ConflictException({
+            code: 'IDEMPOTENCY_KEY_CONFLICT',
+            message: `Idempotency key ${idempotencyKey} sudah dipakai di order lain`,
+          });
+        }
+
+        // Cek COD tercatat dengan kunci lain.
+        const existing = await tx.payment.findFirst({
+          where: {
+            orderId,
+            method: 'CASH',
+            kind: 'PAYMENT',
+            status: 'CAPTURED',
+            deletedAt: null,
+          },
         });
         if (existing) {
-          return this.toDomain(existing);
+          throw new ConflictException({
+            code: 'COD_ALREADY_CAPTURED',
+            message: 'COD order ini sudah tercatat.',
+            payment: this.toDomain(existing),
+          });
         }
+
+        // Buat payment baru. P2002 ditangani di luar transaksi, karena setelah
+        // error itu tx sudah batal.
+        const created = await tx.payment.create({
+          data: {
+            orderId,
+            idempotencyKey,
+            method: 'CASH',
+            status: 'CAPTURED',
+            amountCents: order.totalCents,
+            currency: order.currency,
+            kind: 'PAYMENT',
+          },
+        });
+        return { payment: this.toDomain(created), isReplay: false, order };
+      });
+
+      // Event hanya untuk payment baru dan baru dikirim setelah transaksi selesai,
+      // memakai data order yang dibaca di dalam kunci.
+      if (!result.isReplay) {
+        this.ordersGateway.emitOrderCodCollected(
+          result.order.customerId,
+          orderId,
+          result.order.totalCents,
+          result.order.currency,
+        );
       }
-      throw err;
+      return result.payment;
+    } catch (err) {
+      const error = err as { code?: string };
+      if (error.code !== 'P2002') {
+        throw err;
+      }
+      // P2002: tx sudah batal, baca ulang lewat this.prisma.
+      const winner = await this.prisma.payment.findUnique({
+        where: { idempotencyKey },
+      });
+      if (!winner) {
+        throw err;
+      }
+      if (winner.orderId !== orderId) {
+        throw new ConflictException({
+          code: 'IDEMPOTENCY_KEY_CONFLICT',
+          message: `Idempotency key ${idempotencyKey} sudah dipakai di order lain`,
+        });
+      }
+      // Kunci yang sama untuk order ini: payment dikembalikan tanpa event.
+      return this.toDomain(winner);
     }
-
-    // Live confirmation to the customer, order status itself doesn't change
-    // (see OrdersGateway.emitOrderCodCollected doc comment), so this is a
-    // notify-only emit, not a state-sync one.
-    this.ordersGateway.emitOrderCodCollected(order.customerId, orderId, amountCents, order.currency);
-
-    return this.toDomain(row);
   }
 
   /**

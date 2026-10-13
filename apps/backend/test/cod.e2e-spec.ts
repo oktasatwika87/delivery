@@ -34,6 +34,8 @@ describe('collect-cod and flag-orphaned (e2e)', () => {
     'e2e00000-0000-4000-8000-00000000c003',
     'e2e00000-0000-4000-8000-00000000c004',
     'e2e00000-0000-4000-8000-00000000c005',
+    'e2e00000-0000-4000-8000-00000000c010',
+    'e2e00000-0000-4000-8000-00000000c011',
   ];
 
   function generateToken(userId: string, role: UserRole): string {
@@ -220,6 +222,108 @@ describe('collect-cod and flag-orphaned (e2e)', () => {
 
       expect(res.status).toBe(201);
       expect(res.body.amountCents).toBe(orderTotal);
+    });
+  });
+
+  // collect-cod: satu COD tercatat per order. COD kedua dengan kunci berbeda
+  // dibalas 409 COD_ALREADY_CAPTURED, tidak dicatat lagi.
+
+  describe('collect-cod satu COD tercatat per order', () => {
+    test('COD kedua dengan kunci lain -> 409 COD_ALREADY_CAPTURED, body.payment.id sama dengan payment pertama', async () => {
+      const orderId = 'e2e00000-0000-4000-8000-00000000c010';
+      const orderTotal = 75000;
+      await prisma.order.create({
+        data: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: 'OUT_FOR_DELIVERY',
+          itemsJson: [],
+          addressJson: {},
+          totalCents: orderTotal,
+          currency: 'IDR',
+          version: 1,
+        },
+      });
+
+      try {
+        // COD pertama, 201
+        const first = await request(app.getHttpServer())
+          .post(`/payments/${orderId}/collect-cod`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ idempotencyKey: 'cod:e2e3a4b5-0000-4000-a000-00000000c010', amountCents: orderTotal });
+        expect(first.status).toBe(201);
+        const firstPaymentId = first.body.id;
+
+        // COD kedua dengan kunci berbeda, 409
+        const second = await request(app.getHttpServer())
+          .post(`/payments/${orderId}/collect-cod`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ idempotencyKey: 'cod:e2e3a4b6-0000-4000-a000-00000000c010', amountCents: orderTotal });
+        expect(second.status).toBe(409);
+        expect(second.body.code).toBe('COD_ALREADY_CAPTURED');
+        // body membawa payment yang sudah tercatat
+        expect(second.body.payment.id).toBe(firstPaymentId);
+
+        // DB: tepat 1 payment CAPTURED untuk order ini
+        const payments = await prisma.payment.findMany({
+          where: { orderId, status: 'CAPTURED', method: 'CASH', kind: 'PAYMENT', deletedAt: null },
+        });
+        expect(payments.length).toBe(1);
+        expect(payments[0].id).toBe(firstPaymentId);
+      } finally {
+        await prisma.payment.deleteMany({ where: { orderId } }).catch(() => {});
+        await prisma.order.deleteMany({ where: { id: orderId } }).catch(() => {});
+      }
+    });
+
+    // dua collect-cod dengan kunci berbeda dikirim bersamaan (Promise.all):
+    // tepat satu 201 dan satu 409, dan hanya satu COD tercatat. Mana yang
+    // menang tergantung urutan kedatangan.
+    test('dua COD dengan kunci berbeda dikirim bersamaan -> satu 201, satu 409', async () => {
+      const orderId = 'e2e00000-0000-4000-8000-00000000c011';
+      const orderTotal = 80000;
+      await prisma.order.create({
+        data: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: 'OUT_FOR_DELIVERY',
+          itemsJson: [],
+          addressJson: {},
+          totalCents: orderTotal,
+          currency: 'IDR',
+          version: 1,
+        },
+      });
+
+      try {
+        const [a, b] = await Promise.all([
+          request(app.getHttpServer())
+            .post(`/payments/${orderId}/collect-cod`)
+            .set('Authorization', `Bearer ${driverToken}`)
+            .send({ idempotencyKey: 'cod:e2e3a4c1-0000-4000-a000-00000000c011', amountCents: orderTotal }),
+          request(app.getHttpServer())
+            .post(`/payments/${orderId}/collect-cod`)
+            .set('Authorization', `Bearer ${driverToken}`)
+            .send({ idempotencyKey: 'cod:e2e3a4c2-0000-4000-a000-00000000c011', amountCents: orderTotal }),
+        ]);
+
+        const statuses = [a.status, b.status];
+        const successCount = statuses.filter((s) => s === 201).length;
+        const conflictCount = statuses.filter((s) => s === 409).length;
+        expect(successCount).toBe(1);
+        expect(conflictCount).toBe(1);
+
+        // DB: tepat 1 payment CAPTURED untuk order ini
+        const payments = await prisma.payment.findMany({
+          where: { orderId, status: 'CAPTURED', method: 'CASH', kind: 'PAYMENT', deletedAt: null },
+        });
+        expect(payments.length).toBe(1);
+      } finally {
+        await prisma.payment.deleteMany({ where: { orderId } }).catch(() => {});
+        await prisma.order.deleteMany({ where: { id: orderId } }).catch(() => {});
+      }
     });
   });
 });
