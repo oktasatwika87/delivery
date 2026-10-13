@@ -597,7 +597,7 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('400 jika order tidak dalam status cancellable (PENDING)', async () => {
+    test('409 jika order tidak dalam status yang bisa dibatalkan (PENDING)', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000d03';
       await prisma.order.upsert({
         where: { id: orderId },
@@ -616,11 +616,127 @@ describe('Orders (e2e) - accept/reject', () => {
       });
 
       try {
-        await request(app.getHttpServer())
+        const resp = await request(app.getHttpServer())
           .post(`/orders/${orderId}/cancel`)
           .set('Authorization', `Bearer ${driverToken}`)
+          .send({ version: 1 });
+        expect(resp.status).toBe(409);
+        expect(resp.body.code).toBe('ORDER_NOT_CANCELLABLE');
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    // order PREPARING milik driver lain dengan versi server lebih baru -> 409
+    // ORDER_REASSIGNED, DB tidak berubah.
+    test('409 ORDER_REASSIGNED: driver1 cancel PREPARING milik driver2 (versi server 3, kiriman 2), DB tidak berubah', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000d04';
+      const driver2Token = generateToken(driver2UserId, UserRole.DRIVER);
+      // driver1 menerima order dulu, jadi PREPARING dengan driverId = driver1
+      await createAssignedOrder(orderId, customerUserId);
+      try {
+        // driver1 menerima order (versi 1 -> 2)
+        await request(app.getHttpServer())
+          .post(`/orders/${orderId}/accept`)
+          .set('Authorization', `Bearer ${driverToken}`)
           .send({ version: 1 })
-          .expect(400);
+          .expect(200);
+        // order dipindah ke driver2 langsung lewat DB, versi 2 -> 3
+        await prisma.order.update({
+          where: { id: orderId },
+          data: { driverId: driver2UserId, version: 3 },
+        });
+
+        // driver1 membatalkan dengan versi 2 -> harus 409 ORDER_REASSIGNED
+        const resp = await request(app.getHttpServer())
+          .post(`/orders/${orderId}/cancel`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ version: 2 });
+        expect(resp.status).toBe(409);
+        expect(resp.body.code).toBe('ORDER_REASSIGNED');
+
+        // DB: order tetap PREPARING, driver tetap driver2, versi tetap 3
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.status).toBe(OrderStatusDb.PREPARING);
+        expect(dbOrder?.driverId).toBe(driver2UserId);
+        expect(dbOrder?.version).toBe(3);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    // order pool (driver null, cancelledBy null) dengan versi server lebih baru
+    // -> 409 ORDER_REASSIGNED.
+    test('409 ORDER_REASSIGNED: driver1 cancel order pool (driver null) versi 3, kiriman 2', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000d05';
+      // order pool versi 3, aplikasi mengirim versi 2.
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: null,
+          cancelledBy: null,
+          status: 'ASSIGNED',
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 3,
+        },
+        update: {},
+      });
+      try {
+        // driver1 membatalkan dengan versi 2 -> harus 409 ORDER_REASSIGNED
+        const resp = await request(app.getHttpServer())
+          .post(`/orders/${orderId}/cancel`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ version: 2 });
+        expect(resp.status).toBe(409);
+        expect(resp.body.code).toBe('ORDER_REASSIGNED');
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    // kiriman ulang pembatalan yang sudah berhasil: order ASSIGNED, driver null,
+    // cancelledBy = driver1, versi 3. Kiriman versi 2 -> 200, body.version 3,
+    // versi di DB tetap 3.
+    test('200: kirim ulang cancel (order ASSIGNED, driver null, cancelledBy driver1, versi 3), kiriman 2', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000d06';
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: null,
+          cancelledBy: driverUserId,
+          cancelReason: 'Kendaraan mogok',
+          status: 'ASSIGNED',
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 3,
+        },
+        update: {},
+      });
+      try {
+        // Versi 2 sudah basi, server di versi 3. Server mengenalinya sebagai
+        // kiriman ulang pembatalan yang sudah berhasil (cancelledBy = pemanggil,
+        // versi = kiriman + 1) dan mengembalikan order apa adanya.
+        const resp = await request(app.getHttpServer())
+          .post(`/orders/${orderId}/cancel`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ version: 2, reason: 'Kendaraan mogok' })
+          .expect(200);
+        expect(resp.body.version).toBe(3);
+        expect(resp.body.cancelledBy).toBe(driverUserId);
+
+        // DB: versi tetap 3
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.version).toBe(3);
+        expect(dbOrder?.cancelledBy).toBe(driverUserId);
       } finally {
         await cleanupOrder(orderId);
       }

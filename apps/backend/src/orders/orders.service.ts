@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Injectable,
   NotFoundException,
   ForbiddenException,
@@ -275,30 +274,22 @@ export class OrdersService {
   }
 
   /**
-   * Driver reject order yang sudah di-assign KHUSUS ke driver tsb.
-   * Validasi: DRIVER role, status ASSIGNED, DAN driver adalah owner order ini.
+   * Driver menolak order yang ditugaskan kepadanya. Order kembali ke pool
+   * (ASSIGNED, driverId null) dengan `cancelledBy` dan `cancelReason` null.
    *
-   * FIX (2026-09): dua bug ditemukan di implementasi lama,
-   * (a) tidak ada ownership check sama sekali (siapa pun dengan role DRIVER
-   *     bisa reject ORDER MANAPUN yang berstatus ASSIGNED, termasuk order
-   *     pool yang tidak terkait dengan mereka);
-   * (b) transisi ke CANCELLED, padahal CANCELLED adalah status terminal
-   *     (ORDER_ALLOWED_TRANSITIONS.CANCELLED = []), jadi setiap reject
-   *     membunuh order tsb permanen, bertentangan dengan komentar lama
-   *     "order bisa di-assign ke driver lain".
-   * Fix: ownership check sama seperti cancelOrder, dan transisi balik ke
-   * CONFIRMED + driverId: null (reassign-able), sama seperti cancelOrder.
+   * Urutan cek:
+   * 1. Order tidak ada: 404.
+   * 2. Driver order bukan pemanggil: versi beda 409 ORDER_REASSIGNED (order
+   *    sudah berpindah sejak aplikasi membacanya), versi sama 403
+   *    ORDER_NOT_ASSIGNED.
+   * 3. Status bukan ASSIGNED: 409 ORDER_NOT_CANCELLABLE.
+   * 4. releaseToPool, lalu event ke customer.
    *
-   * NOTE: order pool saat ini (status ASSIGNED, driverId: null, lihat
-   * findAvailable()) adalah broadcast, acceptOrder() adalah satu-satunya
-   * jalan order jadi ASSIGNED+driverId terisi, dan acceptOrder() langsung
-   * loncat ke PREPARING dalam operasi yang sama. Artinya tidak ada state
-   * reachable saat ini di mana order ASSIGNED punya driverId terisi, jadi
-   * dengan ownership check ini, endpoint reject aman (selalu 403) sampai
-   * ada model "offer ke driver tertentu" yang benar-benar mengisi driverId
-   * pada status ASSIGNED. Ini bukan bug baru, ini konsekuensi yang benar
-   * dari belum adanya model tsb, lihat Decision 4 (reassignment) di
-   * progress doc.
+   * `acceptOrder` langsung memindahkan order ke PREPARING, jadi saat ini
+   * tidak ada order ASSIGNED yang punya driver, dan penolakan tidak pernah
+   * lolos cek 3. Berbeda dengan `cancelOrder`, kiriman ulang penolakan tidak
+   * bisa dikenali karena `cancelledBy` ditulis null. Aplikasi saat ini tidak
+   * mengirim penolakan.
    */
   async rejectOrder(
     id: string,
@@ -308,19 +299,27 @@ export class OrdersService {
     const current = await this.prisma.order.findUnique({ where: { id } });
     if (!current) throw new NotFoundException(`Order ${id} tidak ditemukan`);
 
-    // Status check: harus ASSIGNED baru bisa di-reject
-    if (current.status !== OrderStatusDb.ASSIGNED) {
-      throw new BadRequestException({
-        code: 'ORDER_NOT_CANCELLABLE',
-        message: `Order berstatus ${current.status} tidak bisa ditolak, harus ASSIGNED.`,
-      });
-    }
-
-    // Ownership: hanya driver yang di-assign order ini yang boleh reject
+    // Cek 2: pemilik dulu. Versi beda berarti order sudah berpindah sejak
+    // aplikasi membacanya (409, aplikasi berhenti mengirim ulang). Versi sama
+    // berarti order memang bukan milik pemanggil (403).
     if (current.driverId !== driverId) {
+      if (current.version !== expectedVersion) {
+        throw new ConflictException({
+          code: 'ORDER_REASSIGNED',
+          message: 'Order ini sudah dipindahkan ke driver lain.',
+        });
+      }
       throw new ForbiddenException({
         code: 'ORDER_NOT_ASSIGNED',
         message: 'Order ini tidak ditugaskan ke Anda',
+      });
+    }
+
+    // Cek 3: status bukan ASSIGNED -> 409.
+    if (current.status !== OrderStatusDb.ASSIGNED) {
+      throw new ConflictException({
+        code: 'ORDER_NOT_CANCELLABLE',
+        message: `Order berstatus ${current.status} tidak bisa ditolak, harus ASSIGNED.`,
       });
     }
 
@@ -350,10 +349,22 @@ export class OrdersService {
   }
 
   /**
-   * Driver cancel order yang sudah di-assign.
-   * Validasi: DRIVER role, status ASSIGNED/PREPARING/OUT_FOR_DELIVERY,
-   * driver adalah owner dari order ini.
-   * Setelah cancel, order kembali ke CONFIRMED dan bisa di-assign ulang.
+   * Driver membatalkan order miliknya yang berstatus ASSIGNED, PREPARING,
+   * atau OUT_FOR_DELIVERY. Order kembali ke pool (ASSIGNED, driverId null)
+   * dengan `cancelledBy` berisi id driver.
+   *
+   * Urutan cek:
+   * 1. Order tidak ada: 404.
+   * 2. Driver order bukan pemanggil:
+   *    a. order ASSIGNED, driverId null, `cancelledBy` = pemanggil, dan versi
+   *       server = versi kiriman + 1: kiriman ulang pembatalan yang sudah
+   *       berhasil tetapi balasannya hilang. Order dikembalikan apa adanya,
+   *       tanpa menulis dan tanpa event;
+   *    b. versi beda: 409 ORDER_REASSIGNED;
+   *    c. versi sama: 403 ORDER_NOT_ASSIGNED.
+   * 3. Status selain ASSIGNED, PREPARING, dan OUT_FOR_DELIVERY: 409
+   *    ORDER_NOT_CANCELLABLE.
+   * 4. releaseToPool, lalu event ke customer.
    */
   async cancelOrder(
     id: string,
@@ -364,15 +375,35 @@ export class OrdersService {
     const current = await this.prisma.order.findUnique({ where: { id } });
     if (!current) throw new NotFoundException(`Order ${id} tidak ditemukan`);
 
-    // Driver ownership: hanya driver yang sedang assigned yang boleh cancel
+    // Cek 2: driver order bukan pemanggil, tiga cabang seperti di komentar fungsi.
     if (current.driverId !== driverId) {
+      // 2a: kiriman ulang pembatalan yang sudah berhasil. Hanya cancelOrder
+      // yang menulis `cancelledBy` dengan id driver (rejectOrder menulis null,
+      // cron 'SYSTEM'), dan versi harus tepat satu di atas kiriman. Kalau
+      // lebih, order sudah diubah lagi setelah pembatalan itu.
+      if (
+        current.status === OrderStatusDb.ASSIGNED &&
+        current.driverId === null &&
+        current.cancelledBy === driverId &&
+        current.version === expectedVersion + 1
+      ) {
+        return this.toDomain(current);
+      }
+      // 2b: versi beda -> 409 ORDER_REASSIGNED.
+      if (current.version !== expectedVersion) {
+        throw new ConflictException({
+          code: 'ORDER_REASSIGNED',
+          message: 'Order ini sudah dipindahkan ke driver lain.',
+        });
+      }
+      // 2c: driver lain dengan versi sama -> 403.
       throw new ForbiddenException({
         code: 'ORDER_NOT_ASSIGNED',
         message: 'Order ini tidak ditugaskan ke Anda',
       });
     }
 
-    // Status check: harus ASSIGNED, PREPARING, atau OUT_FOR_DELIVERY
+    // Cek 3: status yang bisa dibatalkan.
     const isCancellable = (
       status: OrderStatusDb,
     ): status is 'ASSIGNED' | 'PREPARING' | 'OUT_FOR_DELIVERY' =>
@@ -381,7 +412,7 @@ export class OrdersService {
       status === OrderStatusDb.OUT_FOR_DELIVERY;
 
     if (!isCancellable(current.status)) {
-      throw new BadRequestException({
+      throw new ConflictException({
         code: 'ORDER_NOT_CANCELLABLE',
         message: `Order berstatus ${current.status} tidak bisa dibatalkan, harus ASSIGNED, PREPARING, atau OUT_FOR_DELIVERY.`,
       });

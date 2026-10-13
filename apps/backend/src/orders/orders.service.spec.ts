@@ -11,20 +11,33 @@
  * 7. acceptOrder - OCC conflict (version mismatch) -> 409 VERSION_CONFLICT
  * 8. acceptOrder - order tidak ditemukan -> 404 NotFound
  * 9. rejectOrder - driver berhasil reject order ASSIGNED
- * 10. rejectOrder - gagal: order tidak dalam status ASSIGNED
- * 11. rejectOrder - OCC conflict -> 409 Conflict
- * 12. rejectOrder - order tidak ditemukan -> 404 NotFound
- * 13. cancelOrder - berhasil cancel dari ASSIGNED (status CONFIRMED, driverId null, cancelledBy set)
- * 14. cancelOrder - berhasil cancel dari PREPARING
- * 15. cancelOrder - berhasil cancel dari OUT_FOR_DELIVERY
- * 16. cancelOrder - gagal: driver bukan owner (403 Forbidden)
- * 17. cancelOrder - gagal: order tidak dalam status cancellable
- * 18. cancelOrder - OCC conflict -> 409 Conflict
- * 19. cancelOrder - order tidak ditemukan -> 404 NotFound
+ * 10. rejectOrder - gagal: order tidak dalam status ASSIGNED -> 409 ORDER_NOT_CANCELLABLE
+ * 11. rejectOrder - driver lain dengan versi beda -> 409 ORDER_REASSIGNED
+ * 12. rejectOrder - bukan pemilik, versi sama -> 403 Forbidden
+ * 13. rejectOrder - order tidak ditemukan -> 404 NotFound
+ * 14. rejectOrder - konflik versi (OCC) -> 409 VERSION_CONFLICT
+ * 15. cancelOrder - berhasil dari ASSIGNED, order kembali ke pool (ASSIGNED, driverId null,
+ *     cancelledBy terisi)
+ * 16. cancelOrder - berhasil dari PREPARING
+ * 17. cancelOrder - berhasil dari OUT_FOR_DELIVERY
+ * 18. cancelOrder - gagal: bukan pemilik, versi sama -> 403 Forbidden
+ * 19. cancelOrder - gagal: order PREPARING milik driver lain dengan versi server lebih baru
+ *     -> 409 ORDER_REASSIGNED
+ * 20. cancelOrder - gagal: order pool (driver null, cancelledBy null) dengan versi server
+ *     lebih baru -> 409 ORDER_REASSIGNED
+ * 21. cancelOrder - kiriman ulang pembatalan yang sudah berhasil (order ASSIGNED, driver
+ *     null, cancelledBy = pemanggil, versi = kiriman + 1) -> order dikembalikan tanpa
+ *     menulis dan tanpa event
+ * 22. cancelOrder - cancelledBy = pemanggil tapi versi server bukan kiriman + 1
+ *     -> 409 ORDER_REASSIGNED
+ * 23. cancelOrder - gagal: status tidak bisa dibatalkan (PENDING) -> 409 ORDER_NOT_CANCELLABLE
+ * 24. cancelOrder - gagal: status tidak bisa dibatalkan (DELIVERED) -> 409 ORDER_NOT_CANCELLABLE
+ * 25. cancelOrder - order tidak ditemukan -> 404 NotFound
+ * 26. cancelOrder - konflik versi (OCC) -> 409 VERSION_CONFLICT
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaClient, OrderStatusDb } from '@prisma/client';
 
 import { OrdersService } from './orders.service';
@@ -553,12 +566,46 @@ describe('OrdersService', () => {
 
       mockPrisma.order.findUnique.mockResolvedValue(orderPending);
 
+      // Pemanggil adalah pemilik order, jadi yang menolak adalah cek status (409).
       await expect(service.rejectOrder(orderId, version, driverId)).rejects.toThrow(
-        BadRequestException,
+        ConflictException,
       );
-      await expect(
-        service.rejectOrder(orderId, version, driverId),
-      ).rejects.toThrow('Order berstatus PENDING tidak bisa ditolak, harus ASSIGNED.');
+      let caught: unknown;
+      try {
+        await service.rejectOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'ORDER_NOT_CANCELLABLE',
+        message: expect.stringContaining('Order berstatus PENDING tidak bisa ditolak, harus ASSIGNED.'),
+      });
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    // driver lain dan versi beda: order sudah berpindah, 409 ORDER_REASSIGNED (bukan 403).
+    test('gagal: driver lain dengan versi berbeda -> 409 ORDER_REASSIGNED', async () => {
+      const orderAssignedToOther = {
+        ...mockOrderAssigned,
+        driverId: anotherDriverId,
+        version: version + 2,
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(orderAssignedToOther);
+
+      let caught: unknown;
+      try {
+        await service.rejectOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'ORDER_REASSIGNED',
+        message: expect.stringContaining('Order ini sudah dipindahkan ke driver lain.'),
+      });
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
@@ -766,12 +813,19 @@ describe('OrdersService', () => {
 
       mockPrisma.order.findUnique.mockResolvedValue(mockOrder);
 
-      await expect(
-        service.cancelOrder(orderId, version, driverId),
-      ).rejects.toThrow(BadRequestException);
-      await expect(
-        service.cancelOrder(orderId, version, driverId),
-      ).rejects.toThrow('Order berstatus PENDING tidak bisa dibatalkan');
+      let caught: unknown;
+      try {
+        await service.cancelOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'ORDER_NOT_CANCELLABLE',
+        message: expect.stringContaining('Order berstatus PENDING tidak bisa dibatalkan'),
+      });
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
@@ -780,12 +834,122 @@ describe('OrdersService', () => {
 
       mockPrisma.order.findUnique.mockResolvedValue(mockOrder);
 
-      await expect(
-        service.cancelOrder(orderId, version, driverId),
-      ).rejects.toThrow(BadRequestException);
-      await expect(
-        service.cancelOrder(orderId, version, driverId),
-      ).rejects.toThrow('Order berstatus DELIVERED tidak bisa dibatalkan');
+      let caught: unknown;
+      try {
+        await service.cancelOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'ORDER_NOT_CANCELLABLE',
+        message: expect.stringContaining('Order berstatus DELIVERED tidak bisa dibatalkan'),
+      });
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    // order PREPARING milik driver lain, versi server 3, kiriman 2 -> 409
+    // ORDER_REASSIGNED, order.update tidak dipanggil.
+    test('cancel PREPARING milik driver lain, versi server lebih baru -> 409 ORDER_REASSIGNED', async () => {
+      const mockOrder = {
+        ...makeOrderWithDriver(OrderStatusDb.PREPARING),
+        driverId: anotherDriverId,
+        version: version + 1, // server sudah 3, kiriman 2
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(mockOrder);
+
+      let caught: unknown;
+      try {
+        await service.cancelOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'ORDER_REASSIGNED',
+        message: expect.stringContaining('Order ini sudah dipindahkan ke driver lain.'),
+      });
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    // order pool (ASSIGNED, driver null, cancelledBy null, versi server 3), kiriman
+    // versi 2 -> 409 ORDER_REASSIGNED. Bukan kiriman ulang karena cancelledBy
+    // bukan pemanggil.
+    test('cancel pada order pool (driver null, cancelledBy null, versi 3), kiriman 2 -> 409 ORDER_REASSIGNED', async () => {
+      const mockOrder = {
+        ...makeOrderWithDriver(OrderStatusDb.ASSIGNED),
+        driverId: null,
+        cancelledBy: null,
+        version: version + 1, // server sudah 3, kiriman 2
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(mockOrder);
+
+      let caught: unknown;
+      try {
+        await service.cancelOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'ORDER_REASSIGNED',
+      });
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    // kiriman ulang pembatalan yang sudah berhasil: order ASSIGNED, driver null,
+    // cancelledBy = pemanggil, versi 3, kiriman 2. Order dikembalikan apa
+    // adanya, tanpa menulis dan tanpa event.
+    test('kirim ulang cancel: order ASSIGNED, driver null, cancelledBy pemanggil, versi 3, kiriman 2 -> kembalikan order, tanpa update & emit', async () => {
+      const mockOrder = {
+        ...makeOrderWithDriver(OrderStatusDb.ASSIGNED),
+        driverId: null,
+        cancelledBy: driverId,
+        cancelReason: 'Kendaraan mogok',
+        version: version + 1, // server 3, kiriman 2
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(mockOrder);
+
+      const result = await service.cancelOrder(orderId, version, driverId, 'Kendaraan mogok');
+
+      expect(result.version).toBe(version + 1);
+      expect(result.status).toBe('ASSIGNED');
+      expect(result.cancelledBy).toBe(driverId);
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      expect(mockGateway.emitOrderCancelled).not.toHaveBeenCalled();
+      expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
+    });
+
+    // cancelledBy = pemanggil tapi versi server 4, kiriman 2. Selisih dua versi
+    // berarti order sudah diubah lagi setelah pembatalan itu, jadi 409
+    // ORDER_REASSIGNED.
+    test('cancel: cancelledBy = pemanggil tapi versi server 4, kiriman 2 -> 409 ORDER_REASSIGNED', async () => {
+      const mockOrder = {
+        ...makeOrderWithDriver(OrderStatusDb.ASSIGNED),
+        driverId: null,
+        cancelledBy: driverId,
+        version: version + 2, // server 4, kiriman 2
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(mockOrder);
+
+      let caught: unknown;
+      try {
+        await service.cancelOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'ORDER_REASSIGNED',
+      });
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
@@ -860,7 +1024,7 @@ describe('OrdersService', () => {
         caught = err;
       }
 
-      expect(caught).toBeInstanceOf(BadRequestException);
+      expect(caught).toBeInstanceOf(ConflictException);
       const response = caught.getResponse();
       expect(response).toMatchObject({
         code: 'ORDER_NOT_CANCELLABLE',
