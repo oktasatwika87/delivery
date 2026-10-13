@@ -782,6 +782,63 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
+    // order OUT_FOR_DELIVERY dengan COD tercatat dibatalkan pemiliknya -> 409
+    // COD_ALREADY_CAPTURED. Status, driver, dan versi tidak berubah, tetap 1 payment.
+    test('409 COD_ALREADY_CAPTURED: cancel setelah collect-cod, DB tidak berubah', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000e10';
+      const idempotencyKey = 'cod:00000010-0000-4000-8000-000000000010';
+
+      // Persiapan: order OUT_FOR_DELIVERY milik driver1, versi 3
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: 'OUT_FOR_DELIVERY',
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 3,
+        },
+        update: {},
+      });
+
+      try {
+        // Driver collect-cod dulu (201)
+        await request(app.getHttpServer())
+          .post(`/payments/${orderId}/collect-cod`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ amountCents: 50000, idempotencyKey })
+          .expect(201);
+
+        // Driver membatalkan dengan versi 3 -> 409 COD_ALREADY_CAPTURED
+        const resp = await request(app.getHttpServer())
+          .post(`/orders/${orderId}/cancel`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ version: 3, reason: 'salah catat' });
+        expect(resp.status).toBe(409);
+        expect(resp.body.code).toBe('COD_ALREADY_CAPTURED');
+
+        // DB: status tetap OUT_FOR_DELIVERY, driver tetap driver1, versi tetap 3
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.status).toBe('OUT_FOR_DELIVERY');
+        expect(dbOrder?.driverId).toBe(driverUserId);
+        expect(dbOrder?.version).toBe(3);
+
+        // Tepat 1 payment CAPTURED untuk order itu
+        const payments = await prisma.payment.findMany({
+          where: { orderId, status: 'CAPTURED', method: 'CASH', kind: 'PAYMENT', deletedAt: null },
+        });
+        expect(payments.length).toBe(1);
+      } finally {
+        // Bersihkan payment tes ini lewat orderId order tes
+        await prisma.payment.deleteMany({ where: { orderId } }).catch(() => {});
+        await cleanupOrder(orderId);
+      }
+    });
+
     test('idempotency key replay - no double-create', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000e02';
       const idempotencyKey = 'cod:00000002-0000-4000-8000-000000000002';

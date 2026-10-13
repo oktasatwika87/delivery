@@ -62,6 +62,11 @@ export class ReassignmentService {
    * ConflictException(VERSION_CONFLICT) jadi kita tangkap dan return false
    * (skip silently, normal untuk multi-instance).
    *
+   * ConflictException(COD_ALREADY_CAPTURED) dari releaseToPool juga
+   * dilewati tanpa error. Query cron sudah tidak memilih order dengan COD
+   * tercatat, jadi ini hanya terjadi kalau COD tercatat di sela query dan
+   * pelepasan; di putaran berikutnya order itu tidak terpilih lagi.
+   *
    * @returns true kalau reassign berhasil, false kalau skipped/conflict
    */
   async triggerReassignment(
@@ -87,11 +92,12 @@ export class ReassignmentService {
     } catch (err) {
       if (err instanceof ConflictException) {
         const response = err.getResponse() as { code?: string };
-        if (response?.code === 'VERSION_CONFLICT') {
-          // OCC conflict, order sudah dimodifikasi (acceptOrder atau cancelOrder),
-          // skip silently. Ini normal di multi-instance atau race condition.
+        if (response?.code === 'VERSION_CONFLICT' || response?.code === 'COD_ALREADY_CAPTURED') {
+          // Versi berubah, atau COD tercatat di sela query dan pelepasan.
+          // Dua-duanya bukan galat: order yang versinya berubah dinilai lagi
+          // di putaran berikutnya, order dengan COD tidak terpilih lagi.
           this.logger.debug(
-            `[reassign] Order ${orderId} skipped, version changed (OCC conflict)`,
+            `[reassign] Order ${orderId} skipped, code=${response?.code}`,
           );
           return false;
         }
@@ -123,7 +129,9 @@ export class ReassignmentService {
       now.getTime() - this.timeoutDeliveryMinutes * 60 * 1000,
     );
 
-    // Ambil semua order aktif yang punya driver
+    // Ambil order aktif yang punya driver dan belum punya COD tercatat.
+    // Order dengan COD tercatat tidak boleh dilepas (releaseToPool akan
+    // menolaknya), jadi tidak perlu dicoba tiap menit.
     const activeOrders = await this.prisma.order.findMany({
       where: {
         status: {
@@ -131,6 +139,14 @@ export class ReassignmentService {
         },
         driverId: { not: null },
         deletedAt: null,
+        payments: {
+          none: {
+            method: 'CASH',
+            kind: 'PAYMENT',
+            status: 'CAPTURED',
+            deletedAt: null,
+          },
+        },
       },
       include: {
         driver: {

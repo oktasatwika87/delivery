@@ -135,6 +135,20 @@ describe('ReassignmentService', () => {
         service.triggerReassignment(orderId, version),
       ).rejects.toThrow('Database connection failed');
     });
+
+    // releaseToPool menolak dengan 409 COD_ALREADY_CAPTURED: diperlakukan
+    // seperti VERSION_CONFLICT, mengembalikan false tanpa melempar.
+    test('ConflictException COD_ALREADY_CAPTURED -> false, dilewati tanpa error', async () => {
+      const conflict = new ConflictException({
+        code: 'COD_ALREADY_CAPTURED',
+        message: 'COD order ini sudah tercatat, jadi order tidak bisa dilepas.',
+      });
+      mockOrdersService.releaseToPool.mockRejectedValue(conflict);
+
+      const result = await service.triggerReassignment(orderId, version);
+
+      expect(result).toBe(false);
+    });
   });
 
   // ===== checkReassignments tests =====
@@ -328,6 +342,28 @@ describe('ReassignmentService', () => {
       expect(mockOrdersService.releaseToPool).toHaveBeenCalledTimes(1);
       expect(mockOrdersService.releaseToPool).toHaveBeenCalledWith(
         expect.objectContaining({ orderId: 'order-old' }),
+      );
+    });
+
+    // query cron tidak memilih order yang COD-nya sudah tercatat.
+    test('checkReassignments: findMany memuat syarat payments.none (tanpa COD tercatat)', async () => {
+      mockPrisma.order.findMany.mockResolvedValue([]);
+
+      await service.checkReassignments();
+
+      expect(mockPrisma.order.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            payments: {
+              none: {
+                method: 'CASH',
+                kind: 'PAYMENT',
+                status: 'CAPTURED',
+                deletedAt: null,
+              },
+            },
+          }),
+        }),
       );
     });
   });

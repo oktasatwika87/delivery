@@ -52,7 +52,12 @@ describe('OrdersService', () => {
       update: jest.Mock;
       create: jest.Mock;
     };
+    payment: {
+      findFirst: jest.Mock;
+    };
     $executeRaw: jest.Mock;
+    $queryRaw: jest.Mock;
+    $transaction: jest.Mock;
   };
   let mockGateway: {
     emitOrderAccepted: jest.Mock;
@@ -78,7 +83,19 @@ describe('OrdersService', () => {
         update: jest.fn(),
         create: jest.fn(),
       },
+      payment: {
+        // Bawaan: belum ada COD tercatat. Tes yang butuh COD tercatat
+        // mengganti nilai ini.
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       $executeRaw: jest.fn(),
+      $queryRaw: jest.fn(),
+      // Tiruan $transaction: callback dijalankan dengan mockPrisma sebagai
+      // tx, jadi tx.$queryRaw, tx.order.update, dan tx.payment.findFirst
+      // memakai mock yang sama.
+      $transaction: jest.fn().mockImplementation((cb: (tx: typeof mockPrisma) => Promise<unknown>) =>
+        cb(mockPrisma),
+      ),
     };
 
     mockGateway = {
@@ -1052,6 +1069,37 @@ describe('OrdersService', () => {
         code: 'ORDER_NOT_ASSIGNED',
       });
     });
+
+    // order dengan COD tercatat dibatalkan pemiliknya -> 409
+    // COD_ALREADY_CAPTURED, emitOrderCancelled tidak dipanggil.
+    test('cancel order dengan COD tercatat -> 409 COD_ALREADY_CAPTURED, emitOrderCancelled tidak dipanggil', async () => {
+      const mockOrder = makeOrderWithDriver(OrderStatusDb.OUT_FOR_DELIVERY);
+      mockPrisma.order.findUnique.mockResolvedValue(mockOrder);
+      mockPrisma.payment.findFirst.mockResolvedValue({
+        id: 'payment-captured',
+        orderId,
+        method: 'CASH',
+        kind: 'PAYMENT',
+        status: 'CAPTURED',
+        deletedAt: null,
+      });
+
+      let caught: unknown;
+      try {
+        await service.cancelOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'COD_ALREADY_CAPTURED',
+        message: expect.stringContaining('COD order ini sudah tercatat'),
+      });
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      expect(mockGateway.emitOrderCancelled).not.toHaveBeenCalled();
+    });
   });
 
   // ===== releaseToPool tests =====
@@ -1158,6 +1206,61 @@ describe('OrdersService', () => {
       await expect(
         service.releaseToPool({ orderId, expectedVersion: version }),
       ).rejects.toThrow('Database connection failed');
+    });
+
+    // order punya COD tercatat (payment CASH PAYMENT CAPTURED) -> 409
+    // COD_ALREADY_CAPTURED, order.update dan emitOrderAvailable tidak dipanggil.
+    test('COD tercatat -> 409 COD_ALREADY_CAPTURED, tanpa update & emit', async () => {
+      mockPrisma.payment.findFirst.mockResolvedValue({
+        id: 'payment-captured',
+        orderId,
+        method: 'CASH',
+        kind: 'PAYMENT',
+        status: 'CAPTURED',
+        deletedAt: null,
+      });
+
+      let caught: unknown;
+      try {
+        await service.releaseToPool({ orderId, expectedVersion: version });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({
+        code: 'COD_ALREADY_CAPTURED',
+        message: expect.stringContaining('COD order ini sudah tercatat'),
+      });
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      expect(mockGateway.emitOrderAvailable).not.toHaveBeenCalled();
+    });
+
+    // tanpa COD tercatat: baris order dikunci ($queryRaw) sebelum order.update.
+    test('tanpa COD: $queryRaw dipanggil sebelum order.update', async () => {
+      const releasedOrder = {
+        ...mockAssignedOrder,
+        status: OrderStatusDb.ASSIGNED,
+        driverId: null,
+        version: version + 1,
+      };
+      mockPrisma.order.update.mockResolvedValue(releasedOrder);
+
+      const callOrder: string[] = [];
+      mockPrisma.$queryRaw.mockImplementation(() => {
+        callOrder.push('$queryRaw');
+        return Promise.resolve([{ id: orderId }]);
+      });
+      const originalUpdate = mockPrisma.order.update.getMockImplementation();
+      mockPrisma.order.update.mockImplementation((...args: unknown[]) => {
+        callOrder.push('order.update');
+        return originalUpdate ? originalUpdate(...args) : Promise.resolve(releasedOrder);
+      });
+
+      await service.releaseToPool({ orderId, expectedVersion: version });
+
+      expect(callOrder).toEqual(['$queryRaw', 'order.update']);
     });
   });
 

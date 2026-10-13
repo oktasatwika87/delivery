@@ -454,6 +454,12 @@ export class OrdersService {
    * P2025 jadi ConflictException(VERSION_CONFLICT) supaya caller bisa
    * translate sesuai konteks (OrdersService.rejectOrder/cancelOrder
    * propagate ke HTTP 409, ReassignmentService tangkap dan skip silently).
+   *
+   * Order dengan COD tercatat (payment CASH PAYMENT CAPTURED) tidak boleh
+   * dilepas, supaya COD order itu tidak bisa dicatat lagi oleh driver lain.
+   * Cek COD dan penulisan order berjalan di dalam satu transaksi yang lebih
+   * dulu mengunci baris order (`SELECT ... FOR UPDATE`). Tanpa kunci,
+   * pembatalan dan collect-cod yang datang bersamaan bisa sama-sama lolos cek.
    */
   async releaseToPool(args: {
     orderId: string;
@@ -462,30 +468,52 @@ export class OrdersService {
     cancelReason?: string | null;
   }): Promise<Order> {
     const { orderId, expectedVersion, cancelledBy = null, cancelReason = null } = args;
-    try {
-      const updated = await this.prisma.order.update({
-        where: { id: orderId, version: expectedVersion },
-        data: {
-          status: OrderStatusDb.ASSIGNED,
-          driverId: null,
-          cancelledBy,
-          cancelReason,
-          version: { increment: 1 },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // Kunci baris order dulu, supaya pembatalan atau collect-cod untuk order
+      // yang sama menunggu sampai transaksi ini selesai. Tanpa kunci, keduanya
+      // bisa sama-sama melihat belum ada COD lalu sama-sama lanjut.
+      await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId}::uuid FOR UPDATE`;
+      const capturedCod = await tx.payment.findFirst({
+        where: {
+          orderId,
+          method: 'CASH',
+          kind: 'PAYMENT',
+          status: 'CAPTURED',
+          deletedAt: null,
         },
       });
-      // Broadcast ke pool bahwa order tersedia lagi
-      this.ordersGateway.emitOrderAvailable(this.toDomain(updated));
-      return this.toDomain(updated);
-    } catch (err) {
-      const error = err as { code?: string };
-      if (error.code === 'P2025') {
+      if (capturedCod) {
         throw new ConflictException({
-          code: 'VERSION_CONFLICT',
-          message: 'Order sudah diubah oleh permintaan lain. Muat ulang lalu coba lagi.',
+          code: 'COD_ALREADY_CAPTURED',
+          message: 'COD order ini sudah tercatat, jadi order tidak bisa dilepas.',
         });
       }
-      throw err;
-    }
+      try {
+        return await tx.order.update({
+          where: { id: orderId, version: expectedVersion },
+          data: {
+            status: OrderStatusDb.ASSIGNED,
+            driverId: null,
+            cancelledBy,
+            cancelReason,
+            version: { increment: 1 },
+          },
+        });
+      } catch (err) {
+        const error = err as { code?: string };
+        if (error.code === 'P2025') {
+          throw new ConflictException({
+            code: 'VERSION_CONFLICT',
+            message: 'Order sudah diubah oleh permintaan lain. Muat ulang lalu coba lagi.',
+          });
+        }
+        throw err;
+      }
+    });
+    // Kabari pool setelah transaksi selesai. Kalau dikirim lebih dulu lalu
+    // transaksi gagal, pool sempat melihat order yang sebenarnya tidak lepas.
+    this.ordersGateway.emitOrderAvailable(this.toDomain(updated));
+    return this.toDomain(updated);
   }
 
   /**
