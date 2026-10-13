@@ -98,23 +98,6 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
 
   // Fetch available pool from REST
   const fetchPool = useCallback(async (): Promise<void> => {
-    // Pool row = driver_id empty (null or ''), _status 'synced', no pending action.
-    // Non-pool rows and rows with pending actions are never touched by fetchPool.
-    let poolRows: OrderModel[] = [];
-    try {
-      poolRows = await database
-        .get<OrderModel>('orders')
-        .query(
-          Q.where('status', 'ASSIGNED'),
-          Q.where('driver_id', null),
-          Q.where('deleted_at', null),
-        )
-        .fetch();
-    } catch {
-      // If querying pool fails, abort rather than modifying anything.
-      return;
-    }
-
     let response: Awaited<ReturnType<typeof fetchAvailableOrders>>;
     try {
       response = await fetchAvailableOrders();
@@ -130,83 +113,96 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
 
     const { items: serverItems, hasMore } = response;
     const serverIds = new Set(serverItems.map((item) => item.orderId).filter(Boolean));
-
-    // Collect pending action order IDs to exclude from updates.
-    const pendingIds = new Set<string>();
-    for (const row of poolRows) {
-      if (await hasPendingAction(row.id)) {
-        pendingIds.add(row.id);
-      }
-    }
-
-    const batch: any[] = [];
     const nowMs = Date.now();
+    const batch: OrderModel[] = [];
 
-    // Update pool rows that appear in server list (unless they have pending actions).
-    for (const item of serverItems) {
-      if (!item.orderId) continue;
-      const row = poolRows.find((r) => r.id === item.orderId);
-      if (!row) continue;
-      // Skip rows with pending actions.
-      if (pendingIds.has(row.id)) continue;
-      // Skip rows that are not 'synced' (local changes must not be overwritten).
-      if (row._getRaw('_status') !== 'synced') continue;
-      batch.push(
-        row.prepareUpdate((r) => {
-          // _setRaw for schema columns; direct mutation for internal _status/_changed.
-          // _setRaw mutates _raw in-place via Object.assign, so the changes persist on
-          // the same object that batch() pushes to the Loki adapter.
-          r._setRaw('server_version', item.version);
-          r._setRaw('total_cents', item.totalCents);
-          r._setRaw('currency', item.currency);
-          // Status pool order selalu ASSIGNED (pool hanya berisi order ASSIGNED).
-          // available order payload tidak mengirim status, jadi hardcode di sini.
-          r._setRaw('status', 'ASSIGNED');
-          // Internal fields: not in schema, set directly on _raw.
-          r._raw._status = 'synced';
-          r._raw._changed = '';
-          // updated_at tetap Date.now(), sama seperti buildPoolRow.
-          // created_at, items_json, address_json, customer_id tidak diubah.
-        }),
-      );
-    }
+    // Baris pool dibaca di dalam database.write yang sama dengan penulisannya.
+    // Kalau dipisah, tulisan Terima (handleAccept) bisa masuk di antaranya
+    // dan order yang baru diterima terhapus atau tertimpa lagi jadi ASSIGNED.
+    await database.write(async () => {
+      // Pool row = driver_id empty (null or ''), _status 'synced', no pending action.
+      // Non-pool rows and rows with pending actions are never touched by fetchPool.
+      const poolRows: OrderModel[] = await database
+        .get<OrderModel>('orders')
+        .query(
+          Q.where('status', 'ASSIGNED'),
+          Q.where('driver_id', null),
+          Q.where('deleted_at', null),
+        )
+        .fetch();
 
-    // Create new pool rows for server items not yet in local DB.
-    for (const item of serverItems) {
-      if (!item.orderId) continue;
-      if (poolRows.some((r) => r.id === item.orderId)) continue;
-      // Cek juga baris non-pool untuk mencegah pembuatan ganda
-      // (misalnya baris yang sudah punya driver_id terisi dari seed).
-      const alreadyExists = await database.get<OrderModel>('orders').find(item.orderId).catch(() => null);
-      if (alreadyExists) continue;
-      const row = buildPoolRow(
-        {
-          orderId: item.orderId,
-          totalCents: item.totalCents,
-          currency: item.currency,
-          createdAt: item.createdAt,
-          version: item.version,
-        },
-        nowMs,
-      );
-      batch.push(database.get<OrderModel>('orders').prepareCreateFromDirtyRaw(row));
-    }
-
-    // Delete pool rows not in server list, ONLY when hasMore is false.
-    if (!hasMore) {
+      // Collect pending action order IDs to exclude from updates.
+      const pendingIds = new Set<string>();
       for (const row of poolRows) {
-        if (serverIds.has(row.id)) continue;
+        if (await hasPendingAction(row.id)) {
+          pendingIds.add(row.id);
+        }
+      }
+
+      // Update pool rows that appear in server list (unless they have pending actions).
+      for (const item of serverItems) {
+        if (!item.orderId) continue;
+        const row = poolRows.find((r) => r.id === item.orderId);
+        if (!row) continue;
         // Skip rows with pending actions.
         if (pendingIds.has(row.id)) continue;
-        batch.push(row.prepareDestroyPermanently());
+        // Skip rows that are not 'synced' (local changes must not be overwritten).
+        if (row._getRaw('_status') !== 'synced') continue;
+        batch.push(
+          row.prepareUpdate((r) => {
+            // _setRaw for schema columns; direct mutation for internal _status/_changed.
+            // _setRaw mutates _raw in-place via Object.assign, so the changes persist on
+            // the same object that batch() pushes to the Loki adapter.
+            r._setRaw('server_version', item.version);
+            r._setRaw('total_cents', item.totalCents);
+            r._setRaw('currency', item.currency);
+            // Status pool order selalu ASSIGNED (pool hanya berisi order ASSIGNED).
+            // available order payload tidak mengirim status, jadi hardcode di sini.
+            r._setRaw('status', 'ASSIGNED');
+            // Internal fields: not in schema, set directly on _raw.
+            r._raw._status = 'synced';
+            r._raw._changed = '';
+            // updated_at tetap Date.now(), sama seperti buildPoolRow.
+            // created_at, items_json, address_json, customer_id tidak diubah.
+          }),
+        );
       }
-    }
 
-    if (batch.length > 0) {
-      await database.write(async () => {
+      // Create new pool rows for server items not yet in local DB.
+      for (const item of serverItems) {
+        if (!item.orderId) continue;
+        if (poolRows.some((r) => r.id === item.orderId)) continue;
+        // Cek juga baris non-pool untuk mencegah pembuatan ganda
+        // (misalnya baris yang sudah punya driver_id terisi dari seed).
+        const alreadyExists = await database.get<OrderModel>('orders').find(item.orderId).catch(() => null);
+        if (alreadyExists) continue;
+        const row = buildPoolRow(
+          {
+            orderId: item.orderId,
+            totalCents: item.totalCents,
+            currency: item.currency,
+            createdAt: item.createdAt,
+            version: item.version,
+          },
+          nowMs,
+        );
+        batch.push(database.get<OrderModel>('orders').prepareCreateFromDirtyRaw(row));
+      }
+
+      // Delete pool rows not in server list, ONLY when hasMore is false.
+      if (!hasMore) {
+        for (const row of poolRows) {
+          if (serverIds.has(row.id)) continue;
+          // Skip rows with pending actions.
+          if (pendingIds.has(row.id)) continue;
+          batch.push(row.prepareDestroyPermanently());
+        }
+      }
+
+      if (batch.length > 0) {
         await database.batch(...batch);
-      });
-    }
+      }
+    });
 
     // Reload pool orders from local DB
     const pool = await database

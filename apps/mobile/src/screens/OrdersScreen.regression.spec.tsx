@@ -830,6 +830,140 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
   });
 });
 
+// Regresi fetchPool: Terima yang selesai berbarengan dengan fetchPool (server
+// memancarkan order:unavailable hampir bersamaan dengan respons Terima) tidak
+// boleh membuat order yang baru diterima terhapus atau tertimpa.
+// Caranya: tiruan fetchAvailableOrders mengubah X jadi milik driver lewat
+// database.write sebelum mengembalikan daftar, jadi saat fetchPool menulis,
+// X sudah bukan baris pool. fetchPool harus membiarkan X apa adanya.
+describe('fetchPool - terima serentak tidak menghapus atau menimpa order', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = buildTestDatabase();
+    jest.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  const defaultRowFields = {
+    customer_id: '',
+    driver_id: null,
+    status: 'ASSIGNED',
+    items_json: '[]',
+    address_json: '{}',
+    total_cents: 55000,
+    currency: 'IDR',
+    notes: null,
+    server_version: 3,
+    deleted_at: null,
+    failed_sync_attempts: 0,
+    cancelled_by: null,
+    cancel_reason: null,
+    last_conflict_reason: null,
+    last_conflict_at: null,
+    created_at: 1_600_000_000_000,
+    updated_at: 1_600_000_000_000,
+  };
+
+  // Simulasikan handleAccept menulis baris lokal dari hasil terima server.
+  async function acceptX(): Promise<void> {
+    await db.write(async () => {
+      const row = await db.get<OrderModel>('orders').find('race-X');
+      await row.update((r) => {
+        r._setRaw('status', 'PREPARING');
+        r._setRaw('driver_id', 'driver-racer');
+        r._setRaw('server_version', 5);
+        r._raw._status = 'synced';
+        r._raw._changed = '';
+      });
+    });
+  }
+
+  it('tidak menghapus order yang baru diterima saat daftar server sudah kosong', async () => {
+    // X mula-mula baris pool (status ASSIGNED, driver_id null, synced).
+    await db.write(async () => {
+      const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+        id: 'race-X',
+        _status: 'synced',
+        _changed: '',
+        ...defaultRowFields,
+      });
+      await db.batch(prepared);
+    });
+
+    const client = jest.requireMock<{ fetchAvailableOrders: jest.Mock }>('../sync/client');
+    // Sebelum daftar dikembalikan: handleAccept selesai duluan, X bukan baris pool lagi.
+    // Daftar server sudah tidak memuat X.
+    client.fetchAvailableOrders.mockImplementation(async () => {
+      await acceptX();
+      return { items: [], hasMore: false };
+    });
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(client.fetchAvailableOrders).toHaveBeenCalled();
+    });
+    await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+
+    // X harus masih ada sebagai baris milik driver dengan versi baru.
+    const all = await db.get<OrderModel>('orders').query().fetch();
+    const x = all.find((r) => r.id === 'race-X');
+    expect(x).toBeDefined();
+    expect(x!._getRaw('status')).toBe('PREPARING');
+    expect(x!._getRaw('driver_id')).toBe('driver-racer');
+    expect(x!._getRaw('server_version')).toBe(5);
+  });
+
+  it('tidak menimpa order yang baru diterima saat daftar server masih memuat versi lama', async () => {
+    // X mula-mula baris pool (status ASSIGNED, driver_id null, synced).
+    await db.write(async () => {
+      const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+        id: 'race-X',
+        _status: 'synced',
+        _changed: '',
+        ...defaultRowFields,
+      });
+      await db.batch(prepared);
+    });
+
+    const client = jest.requireMock<{ fetchAvailableOrders: jest.Mock }>('../sync/client');
+    // Sebelum daftar dikembalikan: handleAccept selesai duluan, X bukan baris pool lagi.
+    // Daftar server masih memuat X dengan versi lama (3).
+    client.fetchAvailableOrders.mockImplementation(async () => {
+      await acceptX();
+      return {
+        items: [
+          {
+            orderId: 'race-X',
+            totalCents: 55000,
+            currency: 'IDR',
+            itemsCount: 1,
+            createdAt: new Date(1_600_000_000_000).toISOString(),
+            version: 3,
+          },
+        ],
+        hasMore: false,
+      };
+    });
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(client.fetchAvailableOrders).toHaveBeenCalled();
+    });
+    await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+
+    // X harus tetap PREPARING milik driver dengan versi baru (5),
+    // bukan tertimpa jadi ASSIGNED atau versi lama (3).
+    const row = await db.get<OrderModel>('orders').find('race-X');
+    expect(row._getRaw('status')).toBe('PREPARING');
+    expect(row._getRaw('driver_id')).toBe('driver-racer');
+    expect(row._getRaw('server_version')).toBe(5);
+  });
+});
+
 // Regresi handleAccept: accept order lewat REST, bukan cuma lokal
 // Sebelum diperbaiki, handleAccept hanya menulis WatermelonDB lokal tanpa memanggil
 // POST /orders/:id/accept. acceptOrder tidak pernah dipanggil, tes MERAH.
