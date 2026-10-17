@@ -24,6 +24,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaClient, OrderStatusDb } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 
 import { AppModule } from '../src/app.module';
 import { UserRole, OrderStatus } from '@delivery/shared';
@@ -126,8 +127,13 @@ describe('Orders (e2e) - accept/reject', () => {
     });
   }
 
-  // Helper: cleanup order
+  // Helper: cleanup order. Hapus payment lebih dulu supaya FK payments
+  // ke orders tidak menghalangi penghapusan order. Pola id e2e00000-...
+  // aman untuk deleteMany.
   async function cleanupOrder(id: string) {
+    try {
+      await prisma.payment.deleteMany({ where: { orderId: id } });
+    } catch {}
     try {
       await prisma.order.delete({ where: { id } });
     } catch {}
@@ -360,6 +366,15 @@ describe('Orders (e2e) - accept/reject', () => {
         expect(r1.body.status).toBe(OrderStatus.OUT_FOR_DELIVERY);
         expect(r1.body.version).toBe(2);
 
+        // DELIVERED butuh payment CAPTURED tercatat. COD lewat
+        // /payments/:orderId/collect-cod (lihat cara tes COD di cod.e2e-spec.ts).
+        const codKey = `cod:${randomUUID()}`;
+        const codResp = await request(app.getHttpServer())
+          .post(`/payments/${orderId}/collect-cod`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ idempotencyKey: codKey, amountCents: 50000 });
+        expect(codResp.status).toBe(201);
+
         const r2 = await request(app.getHttpServer())
           .patch(`/orders/${orderId}/status`)
           .set('Authorization', `Bearer ${driverToken}`)
@@ -583,6 +598,88 @@ describe('Orders (e2e) - accept/reject', () => {
         const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
         expect(dbOrder?.version).toBe(2);
         expect(dbOrder?.status).toBe(OrderStatusDb.OUT_FOR_DELIVERY);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    // DELIVERED tanpa payment CAPTURED -> 409 PAYMENT_NOT_CAPTURED. DB
+    // tidak berubah (status tetap OUT_FOR_DELIVERY, versi tidak naik).
+    test('409 PAYMENT_NOT_CAPTURED: order OUT_FOR_DELIVERY tanpa payment, DB tidak berubah', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f0e';
+      // Versi 2, seolah sudah transisi ke OUT_FOR_DELIVERY (versi naik dari 1).
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: OrderStatusDb.OUT_FOR_DELIVERY,
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 2,
+        },
+        update: {},
+      });
+      try {
+        const resp = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'DELIVERED', version: 2 });
+        expect(resp.status).toBe(409);
+        expect(resp.body.code).toBe('PAYMENT_NOT_CAPTURED');
+
+        // DB: status tetap OUT_FOR_DELIVERY, versi tetap 2
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.status).toBe(OrderStatusDb.OUT_FOR_DELIVERY);
+        expect(dbOrder?.version).toBe(2);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    // DELIVERED dengan payment CASH PENDING (bukan CAPTURED) -> 409
+    // PAYMENT_NOT_CAPTURED. Cek hanya melihat status CAPTURED, jadi
+    // payment yang masih PENDING tidak memenuhi syarat.
+    test('409 PAYMENT_NOT_CAPTURED: order OUT_FOR_DELIVERY dengan payment CASH PENDING saja', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f0f';
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: OrderStatusDb.OUT_FOR_DELIVERY,
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 2,
+        },
+        update: {},
+      });
+      // Payment CASH PENDING, kind PAYMENT, bukan CAPTURED. Harus dibuat
+      // lewat prisma langsung (collect-cod selalu CAPTURED).
+      await prisma.payment.create({
+        data: {
+          orderId,
+          method: 'CASH',
+          kind: 'PAYMENT',
+          status: 'PENDING',
+          amountCents: 50000,
+          currency: 'IDR',
+          idempotencyKey: `e2e:pending-${randomUUID()}`,
+        },
+      });
+      try {
+        const resp = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'DELIVERED', version: 2 });
+        expect(resp.status).toBe(409);
+        expect(resp.body.code).toBe('PAYMENT_NOT_CAPTURED');
       } finally {
         await cleanupOrder(orderId);
       }

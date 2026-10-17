@@ -1381,6 +1381,8 @@ describe('OrdersService', () => {
       };
       mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
       mockPrisma.order.update.mockResolvedValue(updatedOrder);
+      // DELIVERED butuh payment CAPTURED tercatat.
+      mockPrisma.payment.findFirst.mockResolvedValue({ id: 'payment-1' });
 
       const result = await service.transitionStatus(orderId, 'DELIVERED', version, driverId);
 
@@ -1425,9 +1427,10 @@ describe('OrdersService', () => {
       const r1 = await service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId);
       expect(r1.status).toBe('OUT_FOR_DELIVERY');
 
-      // Step 2: OUT_FOR_DELIVERY jadi DELIVERED (versi baru dari step 1)
+      // Langkah 2: OUT_FOR_DELIVERY jadi DELIVERED butuh payment CAPTURED.
       mockPrisma.order.findUnique.mockResolvedValueOnce(outForDelivery);
       mockPrisma.order.update.mockResolvedValueOnce(delivered);
+      mockPrisma.payment.findFirst.mockResolvedValueOnce({ id: 'payment-1' });
       const r2 = await service.transitionStatus(orderId, 'DELIVERED', version + 1, driverId);
       expect(r2.status).toBe('DELIVERED');
       expect(r2.version).toBe(version + 2);
@@ -1688,6 +1691,70 @@ describe('OrdersService', () => {
       const response = (caught as ForbiddenException).getResponse();
       expect(response).toMatchObject({ code: 'ORDER_NOT_ASSIGNED' });
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    // DELIVERED dari OUT_FOR_DELIVERY tanpa payment CAPTURED -> 409
+    // PAYMENT_NOT_CAPTURED. `order.update` dan emit tidak dipanggil.
+    test('DELIVERED dari OUT_FOR_DELIVERY tanpa payment CAPTURED jadi 409 PAYMENT_NOT_CAPTURED', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.OUT_FOR_DELIVERY, driverId);
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+      mockPrisma.payment.findFirst.mockResolvedValue(null);
+
+      let caught: unknown;
+      try {
+        await service.transitionStatus(orderId, 'DELIVERED', version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({ code: 'PAYMENT_NOT_CAPTURED' });
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      expect(mockGateway.emitOrderStatusUpdated).not.toHaveBeenCalled();
+    });
+
+    // `payment.findFirst` memakai orderId, kind 'PAYMENT', status
+    // 'CAPTURED', dan deletedAt null, tanpa syarat method, jadi pembayaran
+    // dengan metode apa pun dihitung.
+    test('DELIVERED memanggil payment.findFirst dengan orderId, kind PAYMENT, status CAPTURED, deletedAt null, tanpa method', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.OUT_FOR_DELIVERY, driverId);
+      const updatedOrder = {
+        ...currentOrder,
+        status: OrderStatusDb.DELIVERED,
+        version: version + 1,
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+      mockPrisma.order.update.mockResolvedValue(updatedOrder);
+      mockPrisma.payment.findFirst.mockResolvedValue({ id: 'payment-1' });
+
+      await service.transitionStatus(orderId, 'DELIVERED', version, driverId);
+
+      expect(mockPrisma.payment.findFirst).toHaveBeenCalledWith({
+        where: {
+          orderId,
+          kind: 'PAYMENT',
+          status: 'CAPTURED',
+          deletedAt: null,
+        },
+      });
+    });
+
+    // Target OUT_FOR_DELIVERY tidak butuh payment, jadi payment.findFirst
+    // tidak dipanggil.
+    test('PREPARING ke OUT_FOR_DELIVERY tidak memanggil payment.findFirst', async () => {
+      const currentOrder = makeOrder(OrderStatusDb.PREPARING, driverId);
+      const updatedOrder = {
+        ...currentOrder,
+        status: OrderStatusDb.OUT_FOR_DELIVERY,
+        version: version + 1,
+      };
+      mockPrisma.order.findUnique.mockResolvedValue(currentOrder);
+      mockPrisma.order.update.mockResolvedValue(updatedOrder);
+
+      await service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId);
+
+      expect(mockPrisma.payment.findFirst).not.toHaveBeenCalled();
     });
   });
 

@@ -105,7 +105,10 @@ export class OrdersService {
    *    nextStatus jadi 409 INVALID_TRANSITION
    *    (mis. DELIVERED diminta dari PREPARING, OUT_FOR_DELIVERY diminta dari
    *    DELIVERED atau CANCELLED)
-   * 6. Prisma update P2025 jadi 409 VERSION_CONFLICT
+   * 6. target DELIVERED butuh payment CAPTURED tercatat untuk order ini,
+   *    kalau belum ada jadi 409 PAYMENT_NOT_CAPTURED. Target OUT_FOR_DELIVERY
+   *    tidak butuh payment: COD baru ditagih saat order dalam perjalanan.
+   * 7. Prisma update P2025 jadi 409 VERSION_CONFLICT
    *
    * Setelah sukses: emit order:status_updated ke customer room (satu kali).
    * Tidak ada emitOrderUnavailable, dua transisi ini tidak pernah berasal
@@ -190,6 +193,28 @@ export class OrdersService {
       });
     }
 
+    // Cek 6: target DELIVERED butuh payment CAPTURED tercatat. Tanpa
+    // transaksi atau kunci baris: payment CAPTURED tidak pernah dihapus
+    // atau berubah status, jadi payment yang ditemukan di sini masih ada
+    // saat order ditulis DELIVERED.
+    if (nextStatus === OrderStatus.DELIVERED) {
+      const capturedPayment = await this.prisma.payment.findFirst({
+        where: {
+          orderId: id,
+          kind: 'PAYMENT',
+          status: 'CAPTURED',
+          deletedAt: null,
+        },
+      });
+      if (!capturedPayment) {
+        throw new ConflictException({
+          code: 'PAYMENT_NOT_CAPTURED',
+          message:
+            'Pembayaran order ini belum tercatat, jadi order belum bisa ditandai selesai.',
+        });
+      }
+    }
+
     try {
       const updated = await this.prisma.order.update({
         where: { id, version: expectedVersion },
@@ -210,7 +235,7 @@ export class OrdersService {
 
       return this.toDomain(updated);
     } catch (err) {
-      // Cek 6: OCC conflict jadi 409 VERSION_CONFLICT (pola sama dengan
+      // Cek 7: OCC conflict jadi 409 VERSION_CONFLICT (pola sama dengan
       // releaseToPool/acceptOrder).
       const error = err as { code?: string };
       if (error.code === 'P2025') {
