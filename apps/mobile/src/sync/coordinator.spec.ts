@@ -225,6 +225,21 @@ function attachModelMethods(row: MockRow): MockModel {
     state.batchOps.push({ type: 'update', row, fn });
     return row as MockModel;
   };
+  // Tiruan _setRaw meniru WatermelonDB: kalau nilai kolom berubah dan
+  // _status bukan 'created', baris ditandai 'updated' dan nama kolom
+  // ditambahkan ke _changed.
+  (row as MockRow)._setRaw = function(column: string, value: unknown): void {
+    if ((row._raw as Record<string, unknown>)[column] === value) return;
+    (row._raw as Record<string, unknown>)[column] = value;
+    if (row._raw._status !== 'created') {
+      row._raw._status = 'updated';
+      const changed = row._raw._changed ? String(row._raw._changed).split(',') : [];
+      if (!changed.includes(column)) {
+        changed.push(column);
+        row._raw._changed = changed.join(',');
+      }
+    }
+  };
   (row as unknown as MockModel).prepareDestroyPermanently = function(): MockModel {
     for (const [, records] of state.records) {
       if (records.has(row.id)) {
@@ -1758,6 +1773,65 @@ describe('SyncCoordinator', () => {
         ([event]) => event === 'orderRemovedFromView'
       );
       expect(orderRemovedCalls).toHaveLength(0);
+    });
+
+    // Order yang ditolak sampai batas diberi last_conflict_reason
+    // 'sync-rejected' supaya bannernya tampil.
+    test('order ditolak untuk kelima kalinya: last_conflict_reason "sync-rejected" dan last_conflict_at diisi', async () => {
+      const orderRow = createMockRow('order-sync-rejected-1', 'updated');
+      orderRow.serverVersion = 3;
+      orderRow.failedSyncAttempts = 4; // percobaan kelima mencapai batas
+      orderRow.status = 'CONFIRMED';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-sync-rejected-1', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-sync-rejected-1',
+          status: 'rejected',
+          reason: 'Order sudah di-reassign',
+        },
+      ];
+
+      // @ts-expect-error - akses method private untuk tes
+      await coordinator.resolveAcks(acks, mockDb);
+
+      const updated = state.records.get('orders')!.get('order-sync-rejected-1')!;
+      expect(updated._raw.last_conflict_reason).toBe('sync-rejected');
+      expect(typeof updated._raw.last_conflict_at).toBe('number');
+    });
+
+    test('order ditolak untuk keempat kalinya: last_conflict_reason belum diisi', async () => {
+      const orderRow = createMockRow('order-sync-rejected-2', 'updated');
+      orderRow.serverVersion = 3;
+      orderRow.failedSyncAttempts = 3; // percobaan keempat, belum sampai batas
+      orderRow.status = 'CONFIRMED';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-sync-rejected-2', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-sync-rejected-2',
+          status: 'rejected',
+          reason: 'Order sudah di-reassign',
+        },
+      ];
+
+      // @ts-expect-error - akses method private untuk tes
+      await coordinator.resolveAcks(acks, mockDb);
+
+      const updated = state.records.get('orders')!.get('order-sync-rejected-2')!;
+      // Belum sampai batas, last_conflict_reason belum ditulis
+      expect(updated._raw.last_conflict_reason).toBeUndefined();
+      expect(updated._raw.last_conflict_at).toBeUndefined();
     });
   });
 

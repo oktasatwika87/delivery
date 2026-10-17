@@ -895,6 +895,14 @@ export class SyncCoordinator implements Coordinator {
 
           batch.push(existing.prepareUpdate((r: any) => {
             r.failedSyncAttempts = nextAttempts;
+            // Order yang ditolak sampai batas diberi last_conflict_reason
+            // 'sync-rejected' supaya driver melihat bannernya. _status dan
+            // _changed tidak diubah: baris ini memang kotor, dan setelah batas
+            // tidak diambil collectDirty lagi.
+            if (ack.entityType === 'order' && nextAttempts >= MAX_SYNC_ATTEMPTS) {
+              r._setRaw('last_conflict_reason', 'sync-rejected');
+              r._setRaw('last_conflict_at', Date.now());
+            }
             // For chat messages and payments, flip domain status to FAILED so UI can surface it
             // Orders do NOT have a FAILED domain status, no status flip for orders
             if ((ack.entityType === 'chat_message' || ack.entityType === 'payment') && nextAttempts >= MAX_SYNC_ATTEMPTS) {
