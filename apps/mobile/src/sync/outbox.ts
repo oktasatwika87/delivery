@@ -283,20 +283,37 @@ export async function hasStalePendingAction(orderId: string): Promise<boolean> {
 }
 
 /**
- * Drain all pending actions, process them FIFO.
- * Called when device comes online.
+ * Kirim semua aksi di outbox, urut created_at (yang lama dulu).
+ *
+ * Pemanggilan berjalan berurutan: kalau pengiriman lain masih jalan, panggilan
+ * baru menunggu di antrean tingkat modul, lalu membaca ulang pending_actions.
+ * Karena itu aksi 'syncing' yang ditemukan saat mulai pasti sisa pengiriman
+ * yang terputus (misalnya aplikasi ditutup paksa) dan ikut dikirim lagi. Tanpa
+ * antrean, dua pemanggilan bersamaan bisa mengirim aksi yang sama dua kali.
  *
  * @param db - Database instance (defaults to global database)
  * @returns Array of process results
  */
+let drainQueue: Promise<unknown> = Promise.resolve();
+
 export async function drainPendingActions(db: Database = database): Promise<ProcessResult[]> {
   console.log('[outbox] Starting drain of pending actions...');
 
-  // Get all pending actions, ordered by created_at (FIFO)
+  // Sambungkan ke ujung antrean. Kalau pengiriman sebelumnya gagal, antrean
+  // tetap jalan untuk panggilan berikutnya.
+  const next = drainQueue.then(
+    () => runDrainOnce(db),
+    () => runDrainOnce(db),
+  );
+  drainQueue = next.catch(() => undefined);
+  return next;
+}
+
+async function runDrainOnce(db: Database): Promise<ProcessResult[]> {
   const pendingActions = await db
     .get<PendingActionModel>('pending_actions')
     .query(
-      Q.where('status', 'pending'),
+      Q.where('status', Q.oneOf(['pending', 'syncing'])),
       Q.sortBy('created_at', Q.asc)
     )
     .fetch();

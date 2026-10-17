@@ -177,6 +177,18 @@ export class SyncCoordinator implements Coordinator {
     if (this.stopped || !this.db) return;
     console.log('[syncTick] Running periodic sync...');
     try {
+      // Selama online, outbox dikirim dulu di tiap sinkron berkala, supaya aksi
+      // yang gagal karena gangguan sementara (jaringan, 5xx) dicoba lagi tanpa
+      // menunggu koneksi putus lalu tersambung.
+      if (networkMonitor.getStatus() === 'online') {
+        try {
+          const { drainPendingActions } = await import('./outbox');
+          await drainPendingActions(this.db);
+        } catch (err) {
+          // Kalau pengiriman outbox gagal, flushNow dan pull tetap jalan.
+          console.warn('[syncTick] drain failed, continuing with flush+pull:', err);
+        }
+      }
       // Flush dirty records TERLEBIH DAHULU, baru pull
       await this.flushNow();
       const cursor = await loadCursor();

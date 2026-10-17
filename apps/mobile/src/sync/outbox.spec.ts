@@ -716,6 +716,55 @@ describe('outbox', () => {
       expect(results).toHaveLength(2);
       expect(mockRejectOrder.mock.invocationCallOrder[0]).toBeLessThan(mockCancelOrder.mock.invocationCallOrder[0]);
     });
+
+    // drainPendingActions berjalan berurutan: panggilan kedua menunggu yang
+    // pertama selesai, lalu membaca ulang pending_actions. Tanpa antrean, dua
+    // panggilan yang mulai bersamaan sama-sama melihat aksi itu dan
+    // mengirimnya dua kali.
+    test('dua drainPendingActions bersamaan: API terpanggil sekali', async () => {
+      const action = makeRecord({ actionType: 'reject', targetOrderId: 'order-dedup', expectedVersion: 1 });
+      mockState.records.set('dedup-action', action);
+      attachMethods(action);
+      let concurrentCalls = 0;
+      let release: () => void = () => {};
+      const blocker = new Promise<void>((resolve) => { release = resolve; });
+      mockRejectOrder.mockImplementation(async () => {
+        concurrentCalls += 1;
+        await blocker;
+        concurrentCalls -= 1;
+        return { id: 'order-dedup', status: 'ASSIGNED', version: 2 };
+      });
+
+      const firstDrain = drainPendingActions();
+      // Panggilan kedua dimulai sebelum yang pertama sempat menandai aksi
+      // 'syncing'.
+      const secondDrain = drainPendingActions();
+
+      // Lepas tiruan API supaya panggilan pertama selesai.
+      release();
+      await firstDrain;
+      // Panggilan kedua jalan sesudahnya dan tidak menemukan aksi (sudah
+      // dihapus), jadi API tidak dipanggil lagi.
+      await secondDrain;
+
+      expect(mockRejectOrder).toHaveBeenCalledTimes(1);
+    });
+
+    // Aksi yang tertinggal 'syncing' karena aplikasi mati di tengah pengiriman
+    // harus ikut dikirim.
+    test('aksi syncing sisa pengiriman yang terputus ikut dikirim', async () => {
+      const action = makeRecord({ actionType: 'reject', targetOrderId: 'order-stuck-syncing', expectedVersion: 1, status: 'syncing' });
+      mockState.records.set('stuck-syncing', action);
+      attachMethods(action);
+      mockRejectOrder.mockResolvedValue({ id: 'order-stuck-syncing', status: 'ASSIGNED', version: 2 });
+
+      const results = await drainPendingActions();
+
+      // Dikirim walaupun statusnya 'syncing', bukan 'pending'.
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('success');
+      expect(mockRejectOrder).toHaveBeenCalledTimes(1);
+    });
   });
 
   // Temuan 1 (Skenario A): handleVersionConflict di outbox.ts menulis

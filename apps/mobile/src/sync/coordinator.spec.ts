@@ -1807,4 +1807,37 @@ describe('SyncCoordinator', () => {
       expect(drainMock).toHaveBeenCalledTimes(1);
     });
   });
+
+  // Selama online, syncTick mengirim outbox di tiap sinkron berkala, supaya
+  // aksi yang gagal karena gangguan sementara dicoba lagi tanpa menunggu
+  // koneksi putus lalu tersambung. drainMock sama dengan yang dipakai tes
+  // setupNetworkListener di atas.
+  describe('syncTick: outbox dikirim tiap sinkron berkala', () => {
+    const { networkMonitor } = require('../map/networkMonitor');
+
+    beforeEach(() => {
+      drainMock.mockReset();
+      drainMock.mockResolvedValue([]);
+      jest.mocked(networkMonitor.getStatus).mockReset();
+    });
+
+    test('memanggil drainPendingActions saat online', async () => {
+      jest.mocked(networkMonitor.getStatus).mockReturnValue('online');
+      // syncTick berhenti kalau db kosong, jadi db diisi dulu.
+      // @ts-expect-error - akses field private untuk tes
+      coordinator.db = mockDb;
+      // @ts-expect-error - akses method private untuk tes
+      await coordinator.syncTick();
+      expect(drainMock).toHaveBeenCalledTimes(1);
+    });
+
+    test('tidak memanggil drainPendingActions saat offline', async () => {
+      jest.mocked(networkMonitor.getStatus).mockReturnValue('offline');
+      // @ts-expect-error - akses field private untuk tes
+      coordinator.db = mockDb;
+      // @ts-expect-error - akses method private untuk tes
+      await coordinator.syncTick();
+      expect(drainMock).not.toHaveBeenCalled();
+    });
+  });
 });
