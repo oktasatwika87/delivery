@@ -22,7 +22,7 @@ import { getCurrentUserId } from '../sync/session';
 import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
-import { enqueueCancel, enqueueCollectCod, drainPendingActions, isPendingActionStale } from '../sync/outbox';
+import { enqueueCancel, enqueueCollectCod, drainPendingActions, isPendingActionStale, retryFailedAction, discardFailedAction } from '../sync/outbox';
 import { updateOrderStatus, getOrderById, ApiError } from '../sync/client';
 import { networkMonitor } from '../map/networkMonitor';
 
@@ -48,14 +48,15 @@ interface Props {
 
 interface FailedPaymentBannerProps {
   payments: PaymentModel[];
+  codCaptured: boolean;
   onDismiss: () => void;
   isDismissed: boolean;
 }
 
-function FailedPaymentBanner({ payments, onDismiss, isDismissed }: FailedPaymentBannerProps): React.JSX.Element | null {
+function FailedPaymentBanner({ payments, codCaptured, onDismiss, isDismissed }: FailedPaymentBannerProps): React.JSX.Element | null {
   const hasFailedPayment = payments.some((p) => p.status === PaymentStatus.FAILED);
 
-  if (!hasFailedPayment || isDismissed) return null;
+  if (!hasFailedPayment || isDismissed || codCaptured) return null;
 
   return (
     <View style={styles.failedBanner}>
@@ -86,13 +87,13 @@ function OrderConflictBanner({ event, onDismiss }: OrderConflictBannerProps): Re
 
   const getMessage = () => {
     if (event.reason === 'reassigned') {
-      return 'Order ini sudah di-reassign ke driver lain. Hubungi support jika ini seharusnya masih order Anda.';
+      return 'Order ini sudah dipindahkan ke driver lain.';
     }
     if (event.reason === 'rejected-oc') {
       return event.ackReason ?? 'Order tidak bisa diperbarui — status di server sudah berubah.';
     }
     if (event.reason === 'accepted-by-other') {
-      return 'Order ini sudah di-accept driver lain. Silakan pilih order lain dari daftar Tersedia.';
+      return 'Order ini sudah diambil driver lain. Pilih order lain dari daftar Tersedia.';
     }
     // order-status-conflict
     return `Status order diperbarui server — sekarang ${event.serverStatus}.`;
@@ -110,7 +111,8 @@ function OrderConflictBanner({ event, onDismiss }: OrderConflictBannerProps): Re
   );
 }
 
-// Last Conflict Banner (Skenario A)
+// Banner konflik tersimpan: teks per last_conflict_reason, tampil 24 jam sejak
+// last_conflict_at.
 
 interface LastConflictBannerProps {
   order: OrderModel;
@@ -127,15 +129,20 @@ function LastConflictBanner({ order, isDismissed, onDismiss }: LastConflictBanne
 
   if (isDismissed || isExpired || !order.lastConflictReason) return null;
 
-  const getMessage = () => {
+  const getMessage = (): string => {
     switch (order.lastConflictReason) {
-      case 'accepted-by-other':
-        return 'Order yang Anda batalkan ternyata sudah di-accept driver lain. Silakan cek status terbaru.';
       case 'reassigned':
-        return 'Order yang Anda batalkan ternyata sudah diselesaikan. Status order sudah tidak bisa dibatalkan.';
-      case 'order-status-conflict':
+        return 'Order ini sudah dipindahkan ke driver lain, jadi aksi Anda tidak diproses.';
+      case 'cancelled-by-server':
+        return 'Pembatalan tidak diproses karena order sudah berubah di server. Data order sudah diperbarui.';
+      case 'cancel-cod-captured':
+        return 'Order ini tidak bisa dibatalkan karena COD-nya sudah tercatat. Selesaikan pengantarannya.';
+      case 'cod-already-captured':
+        return 'COD order ini sudah tercatat sebelumnya, jadi catatan dari HP ini tidak disimpan. Kalau Anda menerima uang dua kali, hubungi support.';
+      case 'sync-rejected':
+        return 'Perubahan data order ini di HP ditolak server. Kalau data order terlihat salah, hubungi support.';
       default:
-        return 'Order yang Anda batalkan ternyata sudah tidak bisa dibatalkan — server sudah ubah status. Silakan cek status terbaru.';
+        return 'Order ini sudah berubah di server.';
     }
   };
 
@@ -147,6 +154,79 @@ function LastConflictBanner({ order, isDismissed, onDismiss }: LastConflictBanne
       <TouchableOpacity onPress={onDismiss} style={styles.conflictBannerDismiss}>
         <Text style={styles.conflictBannerDismissText}>✕</Text>
       </TouchableOpacity>
+    </View>
+  );
+}
+
+// Banner aksi gagal, satu per aksi 'failed'. Cancel dan reject punya tombol
+// Coba lagi dan Abaikan; COD hanya Coba lagi karena tidak bisa dibuang.
+
+interface FailedActionBannerProps {
+  action: PendingActionModel;
+  onRetry: (actionId: string) => void;
+  onDiscard: (actionId: string) => void;
+}
+
+function FailedActionBanner({ action, onRetry, onDiscard }: FailedActionBannerProps): React.JSX.Element | null {
+  if (action.actionType === 'cancel') {
+    return (
+      <View style={styles.failedActionBanner}>
+        <Text style={styles.failedActionBannerText}>
+          Pembatalan ditolak server dan tidak dicoba lagi otomatis.
+        </Text>
+        <View style={styles.failedActionButtons}>
+          <TouchableOpacity onPress={() => onRetry(action.id)} style={styles.retryButton}>
+            <Text style={styles.retryButtonText}>Coba lagi</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => onDiscard(action.id)} style={styles.discardButton}>
+            <Text style={styles.discardButtonText}>Abaikan</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+  if (action.actionType === 'reject') {
+    return (
+      <View style={styles.failedActionBanner}>
+        <Text style={styles.failedActionBannerText}>
+          Penolakan order ditolak server dan tidak dicoba lagi otomatis.
+        </Text>
+        <View style={styles.failedActionButtons}>
+          <TouchableOpacity onPress={() => onRetry(action.id)} style={styles.retryButton}>
+            <Text style={styles.retryButtonText}>Coba lagi</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => onDiscard(action.id)} style={styles.discardButton}>
+            <Text style={styles.discardButtonText}>Abaikan</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+  if (action.actionType === 'collect_cod') {
+    return (
+      <View style={styles.failedActionBanner}>
+        <Text style={styles.failedActionBannerText}>
+          COD gagal dicatat server dan tidak dicoba lagi otomatis. Simpan uangnya, lalu coba lagi atau hubungi support.
+        </Text>
+        <View style={styles.failedActionButtons}>
+          <TouchableOpacity onPress={() => onRetry(action.id)} style={styles.retryButton}>
+            <Text style={styles.retryButtonText}>Coba lagi</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+  return null;
+}
+
+// Banner COD yatim, satu per aksi COD 'orphaned_needs_review'. Tanpa tombol.
+
+function OrphanedCodBanner(): React.JSX.Element | null {
+  return (
+    <View style={styles.orphanBanner}>
+      <Text style={styles.orphanBannerText}>
+        Order ini sudah tidak ditugaskan ke Anda saat COD-nya terkirim. Simpan uangnya dan hubungi support.
+      </Text>
     </View>
   );
 }
@@ -219,21 +299,14 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [hasCodPayment, setHasCodPayment] = useState(false);
-  // hasCashPaymentNotFailed: turunan terpisah untuk gate "Selesai diantar".
-  // Gate tombol COD masih pakai hasCodPayment (jangan diubah).
-  const [hasCashPaymentNotFailed, setHasCashPaymentNotFailed] = useState(false);
+  // payments dan pending_actions diamati dengan observeWithColumns(['status']):
+  // observe() tidak memancarkan saat kolom berubah, jadi perubahan status tidak
+  // akan menggambar ulang tombol dan banner.
   const [payments, setPayments] = useState<PaymentModel[]>([]);
+  const [pendingActions, setPendingActions] = useState<PendingActionModel[]>([]);
   const [failedBannerDismissed, setFailedBannerDismissed] = useState(false);
   const [conflictEvent, setConflictEvent] = useState<OrderConflictEvent | null>(null);
-  // Skenario A: dismiss state untuk LastConflictBanner (persisted signal)
   const [lastConflictDismissed, setLastConflictDismissed] = useState(false);
-  // Observe pending_actions untuk banner reaktif, berubah/hilang sendiri
-  const [pendingActions, setPendingActions] = useState<PendingActionModel[]>([]);
-  // hasPending: sumber utama dari observe. observe bikin tombol reaktif,
-  // nonaktif saat ada pending, aktif lagi saat pending dihapus dari outbox.
-  const [hasPending, setHasPending] = useState(false);
-  // Use ref for synchronous inflight guard (state updates are async, refs are sync)
   const inflightCollectRef = useRef(false);
   const inflightStatusRef = useRef(false);
   const [isOnline, setIsOnline] = useState(networkMonitor.getStatus() === 'online');
@@ -282,7 +355,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     };
   }, [database, orderId]);
 
-  // Observe payments collection filtered by orderId
+  // Payment order ini, termasuk perubahan statusnya.
   useEffect(() => {
     if (!orderId) return;
 
@@ -293,24 +366,10 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         const paymentsCollection = database.get<PaymentModel>('payments');
         subscription = paymentsCollection
           .query(Q.where('order_id', orderId))
-          .observe()
+          .observeWithColumns(['status'])
           .subscribe({
             next: (records) => {
               setPayments(records);
-              // Update hasCodPayment based on observation
-              const hasCod = records.some(
-                (p) => p.method === PaymentMethod.CASH,
-              );
-              setHasCodPayment(hasCod);
-              // hasCashPaymentNotFailed: turunan terpisah untuk gate tombol
-              // Selesai diantar (OUT_FOR_DELIVERY jadi DELIVERED). Hanya true kalau
-              // ada payment CASH yang belum FAILED, payment FAILED tetap
-              // dianggap "belum ada COD yang valid", jadi driver perlu retry
-              // collect sebelum boleh selesaikan delivery.
-              const hasCashNotFailed = records.some(
-                (p) => p.method === PaymentMethod.CASH && p.status !== PaymentStatus.FAILED,
-              );
-              setHasCashPaymentNotFailed(hasCashNotFailed);
             },
             error: (err) => {
               console.warn('[OrderDetail] payments observe error:', err);
@@ -352,7 +411,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     };
   }, [orderId, order?.status]);
 
-  // Observe pending_actions untuk banner reaktif, berubah/hilang sendiri
+  // Aksi outbox order ini, termasuk perubahan statusnya.
   useEffect(() => {
     if (!orderId) return;
     let subscription: { unsubscribe: () => void } | null = null;
@@ -362,11 +421,10 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         subscription = database
           .get<PendingActionModel>('pending_actions')
           .query(Q.where('target_order_id', orderId))
-          .observe()
+          .observeWithColumns(['status'])
           .subscribe({
             next: (actions) => {
               setPendingActions(actions);
-              setHasPending(actions.length > 0);
             },
             error: (err) => {
               console.warn('[OrderDetail] pending_actions observe error:', err);
@@ -383,14 +441,25 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     };
   }, [database, orderId]);
 
-  // isPendingStale: turunan pendingActions, banner stale reaktif dari observe.
-  const isPendingStale = pendingActions.some((a) => isPendingActionStale(a));
+  // Nilai turunan untuk syarat tombol dan banner. codCaptured: COD order ini
+  // sudah tercatat di server (payment CASH CAPTURED).
+  const codCaptured = payments.some(
+    (p) => p.method === PaymentMethod.CASH && p.status === PaymentStatus.CAPTURED,
+  );
+  // activeAction: aksi yang masih menunggu terkirim ('pending' atau 'syncing').
+  const activeAction = pendingActions.filter(
+    (a) => a.status === 'pending' || a.status === 'syncing',
+  );
+  const failedActions = pendingActions.filter((a) => a.status === 'failed');
+  const orphanedCodActions = pendingActions.filter(
+    (a) => a.actionType === 'collect_cod' && a.status === 'orphaned_needs_review',
+  );
+  // isPendingStale: ada aksi yang menunggu terkirim lebih dari sejam.
+  const isPendingStale = activeAction.some((a) => isPendingActionStale(a));
 
   /**
-   * Check if the current driver can cancel this order.
-   * Driver can cancel if:
-   * - Status is ASSIGNED, PREPARING, or OUT_FOR_DELIVERY
-   * - Driver is assigned to this order (driverId matches current user)
+   * Batalkan: status masih bisa dibatalkan, order milik driver ini, COD belum
+   * tercatat, dan tidak ada aksi outbox apa pun untuk order ini.
    */
   const canDriverCancel = (order: OrderModel): boolean => {
     const cancellableStatuses = [
@@ -400,25 +469,28 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     ];
     if (!cancellableStatuses.includes(order.status as any)) return false;
     if (!currentUserId || order.driverId !== currentUserId) return false;
+    if (codCaptured) return false;
+    if (pendingActions.length > 0) return false;
     return true;
   };
 
   /**
-   * Check if COD button should be shown.
-   * Shows for OUT_FOR_DELIVERY orders assigned to current driver,
-   * and only if no COD payment already exists.
+   * Terima Cash (COD): OUT_FOR_DELIVERY, milik driver ini, COD belum tercatat,
+   * dan tidak ada aksi outbox apa pun. Selama COD masih antre, tombol tidak
+   * tampil walaupun detail dibuka ulang, jadi tidak ada aksi COD kedua.
    */
   const canCollectCod = (order: OrderModel): boolean => {
     if (order.status !== OrderStatus.OUT_FOR_DELIVERY) return false;
     if (!currentUserId || order.driverId !== currentUserId) return false;
-    if (hasCodPayment) return false;
+    if (codCaptured) return false;
+    if (pendingActions.length > 0) return false;
     return true;
   };
 
   /**
-   * Check if driver status button should be shown.
-   * Shows for PREPARING -> OUT_FOR_DELIVERY or OUT_FOR_DELIVERY -> DELIVERED
-   * transitions, assigned to current driver, with no pending action.
+   * Mulai antar dan Selesai diantar: PREPARING atau OUT_FOR_DELIVERY, milik
+   * driver ini, dan tidak ada aksi outbox apa pun. Selesai diantar juga butuh
+   * COD yang sudah tercatat.
    */
   const canUpdateStatus = (order: OrderModel): boolean => {
     if (
@@ -426,6 +498,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
       order.status !== OrderStatus.OUT_FOR_DELIVERY
     ) return false;
     if (!currentUserId || order.driverId !== currentUserId) return false;
+    if (pendingActions.length > 0) return false;
+    if (order.status === OrderStatus.OUT_FOR_DELIVERY && !codCaptured) return false;
     return true;
   };
 
@@ -570,22 +644,9 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
                 Alert.alert('Gagal', result.error ?? 'Tidak bisa mencatat payment. Coba lagi.');
                 return;
               }
-              // Optimistic UI: show as collected immediately
-              setHasCodPayment(true);
-              // hasPending datang dari observe pending_actions, jangan set manual di sini.
-              // Pencegah double-tap pakai inflightCollectRef.
-              // Try to drain immediately in case we're already online, the
-              // coordinator's own drain only fires on an offline->online
-              // transition, so an action enqueued while already online would
-              // otherwise sit pending until the next real disconnect/reconnect.
-              // NOTE: outbox.ts is already statically imported above (for
-              // enqueueCancel/enqueueCollectCod/hasPendingAction), so there's
-              // no module-load-time-WatermelonDB concern here the way there
-              // is in coordinator.ts (which does NOT otherwise import outbox.ts),
-              // a dynamic import isn't needed, and dynamic import() inside a
-              // .tsx file isn't supported by this project's Jest config anyway
-              // (throws without --experimental-vm-modules), so it would be
-              // untestable here even if it worked at runtime.
+              // Tombol COD hilang karena aksinya terlihat lewat pengamatan
+              // pending_actions. Kirim antrean langsung supaya tidak menunggu
+              // sinkron berkala berikutnya.
               try {
                 await drainPendingActions(database);
               } catch (err) {
@@ -624,20 +685,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
                 Alert.alert('Gagal', result.error ?? 'Tidak bisa membatalkan order. Coba lagi.');
                 return;
               }
-              // hasPending datang dari observe pending_actions, jangan set manual di sini.
-              // Pencegah double-tap pakai inflightCollectRef (shared dengan COD).
-              // Try to drain immediately in case we're already online, the
-              // coordinator's own drain only fires on an offline->online
-              // transition, so an action enqueued while already online would
-              // otherwise sit pending until the next real disconnect/reconnect.
-              // NOTE: outbox.ts is already statically imported above (for
-              // enqueueCancel/enqueueCollectCod/hasPendingAction), so there's
-              // no module-load-time-WatermelonDB concern here the way there
-              // is in coordinator.ts (which does NOT otherwise import outbox.ts),
-              // a dynamic import isn't needed, and dynamic import() inside a
-              // .tsx file isn't supported by this project's Jest config anyway
-              // (throws without --experimental-vm-modules), so it would be
-              // untestable here even if it worked at runtime.
+              // Kirim antrean langsung supaya tidak menunggu sinkron berkala
+              // berikutnya.
               try {
                 await drainPendingActions(database);
               } catch (err) {
@@ -679,6 +728,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
       {/* Failed Payment Banner */}
       <FailedPaymentBanner
         payments={payments}
+        codCaptured={codCaptured}
         isDismissed={failedBannerDismissed}
         onDismiss={() => setFailedBannerDismissed(true)}
       />
@@ -689,15 +739,30 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         onDismiss={() => setConflictEvent(null)}
       />
 
-      {/* Last Conflict Banner (Skenario A, persisted) */}
+      {/* Banner konflik tersimpan */}
       <LastConflictBanner
         order={order}
         isDismissed={lastConflictDismissed}
         onDismiss={() => setLastConflictDismissed(true)}
       />
 
+      {/* Banner aksi gagal, satu per aksi */}
+      {failedActions.map((action) => (
+        <FailedActionBanner
+          key={action.id}
+          action={action}
+          onRetry={(actionId) => { void retryFailedAction(actionId); }}
+          onDiscard={(actionId) => { void discardFailedAction(actionId); }}
+        />
+      ))}
+
+      {/* Banner COD yatim, satu per aksi */}
+      {orphanedCodActions.map((action) => (
+        <OrphanedCodBanner key={action.id} />
+      ))}
+
       {/* Pending Action Indicator */}
-      {hasPending && !isPendingStale && (
+      {activeAction.length > 0 && !isPendingStale && (
         <View style={styles.pendingBanner}>
           <Text style={styles.pendingBannerText}>Menunggu sinkronisasi...</Text>
         </View>
@@ -782,10 +847,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         </TouchableOpacity>
       )}
 
-      {/* Cancel Button, only visible if driver can cancel this order and there's
-          no cancel already queued (prevents re-tapping and enqueueing duplicate
-          cancel actions while offline, same guard pattern as the COD button below) */}
-      {order && currentUserId && canDriverCancel(order) && !hasPending && (
+      {/* Tombol Batalkan, syaratnya di canDriverCancel */}
+      {order && currentUserId && canDriverCancel(order) && (
         <TouchableOpacity
           style={styles.cancelButton}
           onPress={() => handleCancelOrder(order)}
@@ -794,7 +857,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         </TouchableOpacity>
       )}
 
-      {/* COD Button, only visible if driver can collect COD and no COD payment exists */}
+      {/* Tombol COD, syaratnya di canCollectCod */}
       {order && currentUserId && canCollectCod(order) && (
         <TouchableOpacity
           style={styles.codButton}
@@ -804,12 +867,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         </TouchableOpacity>
       )}
 
-      {/* Driver Status Button, PREPARING -> OUT_FOR_DELIVERY or OUT_FOR_DELIVERY -> DELIVERED.
-          PREPARING: always shown (no pending).
-          OUT_FOR_DELIVERY: shown only if ada payment CASH yang BUKAN FAILED,
-          DAN tidak ada pending action. */}
-      {order && currentUserId && canUpdateStatus(order) && !hasPending &&
-        (order.status === OrderStatus.PREPARING || hasCashPaymentNotFailed) && (
+      {/* Tombol Mulai antar dan Selesai diantar, syaratnya di canUpdateStatus */}
+      {order && currentUserId && canUpdateStatus(order) && (
         <TouchableOpacity
           style={[
             styles.statusButton,
@@ -1090,5 +1149,62 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#92400e',
     textAlign: 'center',
+  },
+  // Banner aksi gagal
+  failedActionBanner: {
+    backgroundColor: '#fee2e2',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#fecaca',
+  },
+  failedActionBannerText: {
+    fontSize: 14,
+    color: '#7f1d1d',
+    fontWeight: '500',
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  failedActionButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  retryButton: {
+    backgroundColor: '#dc2626',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  discardButton: {
+    backgroundColor: '#fff',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#dc2626',
+  },
+  discardButtonText: {
+    color: '#dc2626',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  // Banner COD yatim
+  orphanBanner: {
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#fcd34d',
+  },
+  orphanBannerText: {
+    fontSize: 14,
+    color: '#92400e',
+    fontWeight: '500',
+    lineHeight: 20,
   },
 });

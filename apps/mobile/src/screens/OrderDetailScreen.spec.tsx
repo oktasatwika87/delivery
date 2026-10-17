@@ -68,12 +68,16 @@ const mockEnqueueCollectCod = jest.fn();
 const mockHasPendingAction = jest.fn();
 const mockDrainPendingActions = jest.fn();
 const mockGetPendingActionsForOrder = jest.fn();
+const mockRetryFailedAction = jest.fn();
+const mockDiscardFailedAction = jest.fn();
 // Inline implementasi isPendingActionStale (sama dengan outbox.ts) supaya tes stale akurat
 // tanpa perlu jest.requireActual yang bisa gagal karena native module.
 const STALE_THRESHOLD_MS = 60 * 60 * 1000;
 // Minimal shape pending action buat test mock, hanya field yang dipakai tes.
 interface MockPendingAction {
   id: string;
+  actionType?: 'reject' | 'cancel' | 'collect_cod';
+  status?: 'pending' | 'syncing' | 'failed' | 'orphaned_needs_review';
   createdAt: Date | number | string;
 }
 function computeIsPendingActionStale(action: MockPendingAction | null | undefined): boolean {
@@ -98,6 +102,8 @@ jest.mock('../sync/outbox', () => ({
   drainPendingActions: (...args: unknown[]) => mockDrainPendingActions(...args),
   getPendingActionsForOrder: (...args: unknown[]) => mockGetPendingActionsForOrder(...args),
   isPendingActionStale: (...args: unknown[]) => mockIsPendingActionStale(...args),
+  retryFailedAction: (...args: unknown[]) => mockRetryFailedAction(...args),
+  discardFailedAction: (...args: unknown[]) => mockDiscardFailedAction(...args),
 }));
 
 // WatermelonDB mock
@@ -148,17 +154,19 @@ let mockPaymentsQuery: any = null;
 const mockPendingActions: MockPendingAction[] = [];
 let pendingActionsSubscriptionCallback: ((actions: MockPendingAction[]) => void) | null = null;
 
+// Tiruan koleksi payments. Hanya observeWithColumns yang disediakan, seperti
+// yang dipakai layar, karena observe() tidak memancarkan saat kolom berubah.
 const mockPaymentsCollection: any = {
   query: jest.fn().mockImplementation((_query: any) => {
     mockPaymentsQuery = {
-      observe: jest.fn().mockReturnValue({
+      observeWithColumns: jest.fn().mockImplementation((_cols: string[]) => ({
         subscribe: jest.fn().mockImplementation(({ next }: { next: (payments: any[]) => void }) => {
           paymentsSubscriptionCallback = next;
           // Immediately emit current payments
           next([...mockPayments]);
           return { unsubscribe: jest.fn() };
         }),
-      }),
+      })),
     };
     return mockPaymentsQuery;
   }),
@@ -174,17 +182,21 @@ const mockPaymentsCollection: any = {
   }),
 };
 
-// Mock pending_actions collection, observe terpanggil saat komponen mount
+// Tiruan koleksi pending_actions, polanya sama dengan payments.
+let mockPendingActionsQuery: { observeWithColumns: jest.Mock } | null = null;
 const mockPendingActionsCollection: { query: jest.Mock } = {
-  query: jest.fn().mockImplementation((_query: unknown) => ({
-    observe: jest.fn().mockReturnValue({
-      subscribe: jest.fn().mockImplementation(({ next }: { next: (actions: MockPendingAction[]) => void }) => {
-        pendingActionsSubscriptionCallback = next;
-        next([...mockPendingActions]);
-        return { unsubscribe: jest.fn() };
-      }),
-    }),
-  })),
+  query: jest.fn().mockImplementation((_query: unknown) => {
+    mockPendingActionsQuery = {
+      observeWithColumns: jest.fn().mockImplementation((_cols: string[]) => ({
+        subscribe: jest.fn().mockImplementation(({ next }: { next: (actions: MockPendingAction[]) => void }) => {
+          pendingActionsSubscriptionCallback = next;
+          next([...mockPendingActions]);
+          return { unsubscribe: jest.fn() };
+        }),
+      })),
+    };
+    return mockPendingActionsQuery;
+  }),
 };
 
 // Mock order untuk prepareUpdate dalam database.write
@@ -403,7 +415,7 @@ describe('cancel button behavior (outbox wiring)', () => {
     // observe). Simulasi observe fire dengan pending action agar hasPending
     // jadi true dan tombol hilang.
     await act(async () => {
-      pendingActionsSubscriptionCallback?.([{ id: 'pending-cancel', createdAt: new Date() }]);
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-cancel', status: 'pending', actionType: 'cancel', createdAt: new Date() }]);
     });
     await waitFor(() => {
       expect(queryByText('Batalkan Order')).toBeNull();
@@ -810,8 +822,11 @@ describe('Payment observation', () => {
       expect(mockPaymentsCollection.query).toHaveBeenCalled();
     });
 
-    // Verify observe was called on the query result
-    expect(mockPaymentsQuery?.observe).toHaveBeenCalled();
+    // Verifikasi observeWithColumns dipanggil pada hasil query
+    expect(mockPaymentsQuery?.observeWithColumns).toHaveBeenCalled();
+    // Kolom status ikut diamati supaya payment yang menjadi CAPTURED menggambar
+    // ulang tombol COD dan Selesai diantar.
+    expect(mockPaymentsQuery?.observeWithColumns).toHaveBeenCalledWith(['status']);
   });
 
   test('updates hasCodPayment when payment changes via observation', async () => {
@@ -926,7 +941,7 @@ describe('Stale Pending Action Banner', () => {
     const { getByText, queryByText } = renderScreen();
     // Observe fire saat mount, trigger dengan fresh pending action (bukan stale)
     await act(async () => {
-      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', createdAt: new Date() }]);
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', status: 'pending', actionType: 'collect_cod', createdAt: new Date() }]);
     });
     await waitFor(() => {
       expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
@@ -941,7 +956,7 @@ describe('Stale Pending Action Banner', () => {
     const { getByText, queryByText } = renderScreen();
     // Trigger observe dengan stale action (> 60 menit)
     await act(async () => {
-      pendingActionsSubscriptionCallback?.([{ id: 'pending-stale', createdAt: new Date(Date.now() - 61 * 60 * 1000) }]);
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-stale', status: 'pending', actionType: 'cancel', createdAt: new Date(Date.now() - 61 * 60 * 1000) }]);
     });
     await waitFor(() => {
       expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
@@ -956,7 +971,7 @@ describe('Stale Pending Action Banner', () => {
     const { getByText, queryByText } = renderScreen();
     // Trigger observe dengan stale action
     await act(async () => {
-      pendingActionsSubscriptionCallback?.([{ id: 'pending-stale', createdAt: new Date(Date.now() - 120 * 60 * 1000) }]);
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-stale', status: 'pending', actionType: 'cancel', createdAt: new Date(Date.now() - 120 * 60 * 1000) }]);
     });
     await waitFor(() => {
       expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
@@ -988,7 +1003,7 @@ describe('Stale Pending Action Banner', () => {
 
     // Banner tampil dengan pending action
     await act(async () => {
-      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', createdAt: new Date() }]);
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', status: 'pending', actionType: 'collect_cod', createdAt: new Date() }]);
     });
     await waitFor(() => {
       expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
@@ -1117,7 +1132,7 @@ describe('driver status button visibility', () => {
   // BAGIAN 3: OUT_FOR_DELIVERY jadi DELIVERED hanya kalau ada COD payment dan tidak ada pending
   test('appears for OUT_FOR_DELIVERY with COD payment and no pending', async () => {
     Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
-    mockPayments.push({ id: 'cod-1', orderId: 'order-123', method: PaymentMethod.CASH });
+    mockPayments.push({ id: 'cod-1', orderId: 'order-123', method: PaymentMethod.CASH, status: PaymentStatus.CAPTURED });
     const { getByText } = renderScreen();
     await act(async () => {
       paymentsSubscriptionCallback?.([...mockPayments]);
@@ -1140,7 +1155,7 @@ describe('driver status button visibility', () => {
     mockPayments.push({ id: 'cod-1', orderId: 'order-123', method: PaymentMethod.CASH });
     await act(async () => {
       paymentsSubscriptionCallback?.([...mockPayments]);
-      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', createdAt: new Date() }]);
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', status: 'pending', actionType: 'collect_cod', createdAt: new Date() }]);
     });
     const { queryByText } = renderScreen();
     await waitFor(() => {
@@ -1212,7 +1227,7 @@ describe('driver status button visibility', () => {
     const { queryByText } = renderScreen();
     // Trigger observe dengan pending action
     await act(async () => {
-      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', createdAt: new Date() }]);
+      pendingActionsSubscriptionCallback?.([{ id: 'pending-1', status: 'pending', actionType: 'collect_cod', createdAt: new Date() }]);
     });
     await waitFor(() => {
       expect(queryByText('Mulai antar')).toBeNull();
@@ -1604,5 +1619,421 @@ describe('OrderDetail re-renders when findAndObserve emits same object reference
     await waitFor(() => {
       expect(getByText('Terima Cash (COD)')).toBeTruthy();
     });
+  });
+});
+
+// Syarat tombol, banner aksi gagal, dan teks LastConflictBanner.
+
+describe('syarat tombol mengikuti payment CAPTURED', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    paymentsSubscriptionCallback = null;
+    pendingActionsSubscriptionCallback = null;
+    mockHasPendingAction.mockResolvedValue(false);
+  });
+
+  // COD yang masih antre belum punya baris payment, tapi tombol COD tetap tidak
+  // tampil saat detail dibuka ulang.
+  test('detail dibuka saat aksi collect_cod pending (belum ada payment): tombol COD tidak tampil', async () => {
+    mockPendingActions.push({
+      id: 'cod-pending',
+      actionType: 'collect_cod',
+      status: 'pending',
+      createdAt: new Date(),
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(queryByText('Terima Cash (COD)')).toBeNull();
+    });
+  });
+
+  // Payment CASH CAPTURED pada OUT_FOR_DELIVERY: Batalkan dan COD tidak
+  // tampil, Selesai diantar tampil.
+  test('payment CASH CAPTURED pada OUT_FOR_DELIVERY: Batalkan dan COD tidak tampil, Selesai diantar tampil', async () => {
+    mockPayments.push({
+      id: 'cod-captured-1',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.CAPTURED,
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    const { queryByText, getByText } = renderScreen();
+    await act(async () => {
+      paymentsSubscriptionCallback?.([...mockPayments]);
+    });
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+    expect(queryByText('Terima Cash (COD)')).toBeNull();
+    expect(queryByText('Batalkan Order')).toBeNull();
+  });
+
+  // Payment CASH PENDING (misalnya sisa laporan COD yatim driver sebelumnya)
+  // bukan COD tercatat: Selesai diantar tidak tampil, COD tampil.
+  test('payment CASH PENDING: Selesai diantar tidak tampil, COD tampil', async () => {
+    mockPayments.push({
+      id: 'cod-pending-1',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.PENDING,
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    const { queryByText, getByText } = renderScreen();
+    await act(async () => {
+      paymentsSubscriptionCallback?.([...mockPayments]);
+    });
+    await waitFor(() => {
+      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+    });
+    expect(queryByText('Selesai diantar')).toBeNull();
+  });
+});
+
+describe('banner aksi gagal dan banner COD yatim', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    paymentsSubscriptionCallback = null;
+    pendingActionsSubscriptionCallback = null;
+    mockHasPendingAction.mockResolvedValue(false);
+    mockRetryFailedAction.mockReset();
+    mockRetryFailedAction.mockResolvedValue(undefined);
+    mockDiscardFailedAction.mockReset();
+    mockDiscardFailedAction.mockResolvedValue(undefined);
+  });
+
+  // Aksi cancel berubah dari 'pending' ke 'failed' lewat observeWithColumns:
+  // banner biru hilang (tidak ada aksi aktif), banner gagal tampil dengan
+  // tombol Coba lagi dan Abaikan.
+  test('aksi cancel pending -> failed: banner biru hilang, banner gagal tampil, Coba lagi + Abaikan memanggil fungsi outbox', async () => {
+    mockPendingActions.push({
+      id: 'cancel-pending',
+      actionType: 'cancel',
+      status: 'pending',
+      createdAt: new Date(),
+    });
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+
+    const { queryByText, getByText, getAllByText } = renderScreen();
+    // Status 'pending': banner biru tampil
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
+    });
+
+    // Status berubah menjadi 'failed': banner biru hilang, banner gagal tampil.
+    mockPendingActions[0].status = 'failed';
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(getByText('Pembatalan ditolak server dan tidak dicoba lagi otomatis.')).toBeTruthy();
+    });
+    expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
+    // Tombol Coba lagi dan Abaikan tampil
+    expect(getByText('Coba lagi')).toBeTruthy();
+    expect(getByText('Abaikan')).toBeTruthy();
+
+    // Tekan Coba lagi -> retryFailedAction dipanggil dengan id aksi
+    fireEvent.press(getAllByText('Coba lagi')[0]);
+    expect(mockRetryFailedAction).toHaveBeenCalledWith('cancel-pending');
+    // Tekan Abaikan -> discardFailedAction dipanggil dengan id aksi
+    fireEvent.press(getAllByText('Abaikan')[0]);
+    expect(mockDiscardFailedAction).toHaveBeenCalledWith('cancel-pending');
+  });
+
+  test('aksi COD failed: tanpa tombol Abaikan', async () => {
+    mockPendingActions.push({
+      id: 'cod-pending',
+      actionType: 'collect_cod',
+      status: 'failed',
+      createdAt: new Date(),
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    const { queryByText, getByText, getAllByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(
+        getByText(
+          'COD gagal dicatat server dan tidak dicoba lagi otomatis. Simpan uangnya, lalu coba lagi atau hubungi support.',
+        ),
+      ).toBeTruthy();
+    });
+    // Coba lagi saja, tanpa Abaikan
+    expect(getByText('Coba lagi')).toBeTruthy();
+    expect(queryByText('Abaikan')).toBeNull();
+
+    fireEvent.press(getAllByText('Coba lagi')[0]);
+    expect(mockRetryFailedAction).toHaveBeenCalledWith('cod-pending');
+  });
+
+  test('aksi COD orphaned_needs_review: banner yatim tampil, banner biru tidak', async () => {
+    mockPendingActions.push({
+      id: 'cod-orphan',
+      actionType: 'collect_cod',
+      status: 'orphaned_needs_review',
+      createdAt: new Date(),
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    const { queryByText, getByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(
+        getByText(
+          'Order ini sudah tidak ditugaskan ke Anda saat COD-nya terkirim. Simpan uangnya dan hubungi support.',
+        ),
+      ).toBeTruthy();
+    });
+    // Tidak ada tombol Coba lagi/Abaikan
+    expect(queryByText('Coba lagi')).toBeNull();
+    expect(queryByText('Abaikan')).toBeNull();
+    // Banner biru tidak tampil
+    expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
+  });
+});
+
+describe('LastConflictBanner menampilkan teks per alasan', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    pendingActionsSubscriptionCallback = null;
+    paymentsSubscriptionCallback = null;
+    mockHasPendingAction.mockResolvedValue(false);
+  });
+
+  function setLastConflict(reason: string, at: number = Date.now()): void {
+    Object.assign(mockOrder, {
+      _raw: { id: 'order-123', _status: 'synced' },
+      lastConflictReason: reason,
+      lastConflictAt: at,
+    });
+  }
+
+  test('reassigned: tampil banner', async () => {
+    setLastConflict('reassigned');
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(
+        getByText(/Order ini sudah dipindahkan ke driver lain, jadi aksi Anda tidak diproses/),
+      ).toBeTruthy();
+    });
+  });
+
+  test('cancelled-by-server: tampil banner', async () => {
+    setLastConflict('cancelled-by-server');
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(
+        getByText(
+          /Pembatalan tidak diproses karena order sudah berubah di server\. Data order sudah diperbarui\./,
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  test('cancel-cod-captured: tampil banner', async () => {
+    setLastConflict('cancel-cod-captured');
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(
+        getByText(
+          /Order ini tidak bisa dibatalkan karena COD-nya sudah tercatat\. Selesaikan pengantarannya\./,
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  test('cod-already-captured: tampil banner', async () => {
+    setLastConflict('cod-already-captured');
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(
+        getByText(
+          /COD order ini sudah tercatat sebelumnya, jadi catatan dari HP ini tidak disimpan\. Kalau Anda menerima uang dua kali, hubungi support\./,
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  test('sync-rejected: tampil banner', async () => {
+    setLastConflict('sync-rejected');
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(
+        getByText(
+          /Perubahan data order ini di HP ditolak server\. Kalau data order terlihat salah, hubungi support\./,
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  test('LastConflictBanner alasan lain: teks bawaan', async () => {
+    setLastConflict('unknown-reason');
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(
+        getByText(/Order ini sudah berubah di server\./),
+      ).toBeTruthy();
+    });
+  });
+});
+
+describe('syarat tombol mengikuti aksi berstatus apa pun', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    paymentsSubscriptionCallback = null;
+    pendingActionsSubscriptionCallback = null;
+    mockHasPendingAction.mockResolvedValue(false);
+  });
+
+  test('aksi cancel failed pada OUT_FOR_DELIVERY: Batalkan dan COD tidak tampil', async () => {
+    mockPendingActions.push({
+      id: 'cancel-failed-ofd',
+      actionType: 'cancel',
+      status: 'failed',
+      createdAt: new Date(),
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(queryByText('Batalkan Order')).toBeNull();
+      expect(queryByText('Terima Cash (COD)')).toBeNull();
+    });
+  });
+
+  test('aksi cancel failed pada PREPARING: Mulai antar tidak tampil', async () => {
+    mockPendingActions.push({
+      id: 'cancel-failed-prep',
+      actionType: 'cancel',
+      status: 'failed',
+      createdAt: new Date(),
+    });
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(queryByText('Mulai antar')).toBeNull();
+    });
+  });
+
+  test('aksi COD orphaned_needs_review: tombol COD tidak tampil', async () => {
+    mockPendingActions.push({
+      id: 'cod-orphan-ofd',
+      actionType: 'collect_cod',
+      status: 'orphaned_needs_review',
+      createdAt: new Date(),
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(queryByText('Terima Cash (COD)')).toBeNull();
+    });
+  });
+});
+
+describe('beberapa banner gagal / yatim', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    paymentsSubscriptionCallback = null;
+    pendingActionsSubscriptionCallback = null;
+    mockHasPendingAction.mockResolvedValue(false);
+    mockRetryFailedAction.mockReset();
+    mockRetryFailedAction.mockResolvedValue(undefined);
+    mockDiscardFailedAction.mockReset();
+    mockDiscardFailedAction.mockResolvedValue(undefined);
+  });
+
+  test('dua aksi failed: banner gagal tampil untuk masing-masing', async () => {
+    mockPendingActions.push(
+      {
+        id: 'cancel-failed-2',
+        actionType: 'cancel',
+        status: 'failed',
+        createdAt: new Date(),
+      },
+      {
+        id: 'cod-failed-2',
+        actionType: 'collect_cod',
+        status: 'failed',
+        createdAt: new Date(),
+      },
+    );
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(
+        getByText('Pembatalan ditolak server dan tidak dicoba lagi otomatis.'),
+      ).toBeTruthy();
+    });
+    expect(
+      getByText(
+        'COD gagal dicatat server dan tidak dicoba lagi otomatis. Simpan uangnya, lalu coba lagi atau hubungi support.',
+      ),
+    ).toBeTruthy();
+  });
+});
+
+describe('pending_actions diamati dengan observeWithColumns', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    paymentsSubscriptionCallback = null;
+    pendingActionsSubscriptionCallback = null;
+  });
+
+  test('pending_actions diamati dengan observeWithColumns status', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    renderScreen();
+    await waitFor(() => {
+      expect(mockPendingActionsCollection.query).toHaveBeenCalled();
+    });
+    expect(mockPendingActionsQuery?.observeWithColumns).toHaveBeenCalled();
+    expect(mockPendingActionsQuery?.observeWithColumns).toHaveBeenCalledWith(['status']);
   });
 });
