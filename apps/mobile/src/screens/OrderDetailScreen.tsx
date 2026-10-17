@@ -16,15 +16,21 @@ import type { Database } from '@nozbe/watermelondb';
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
 import { PaymentModel } from '../db/models/PaymentModel';
-import { PendingActionModel } from '../db/models/PendingActionModel';
+import { PendingActionModel, readUpdateStatusTarget } from '../db/models/PendingActionModel';
 import { formatCurrency } from '../formatCurrency';
 import { getCurrentUserId } from '../sync/session';
 import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
-import { enqueueCancel, enqueueCollectCod, drainPendingActions, isPendingActionStale, retryFailedAction, discardFailedAction } from '../sync/outbox';
-import { updateOrderStatus, getOrderById, ApiError } from '../sync/client';
-import { networkMonitor } from '../map/networkMonitor';
+import {
+  enqueueCancel,
+  enqueueCollectCod,
+  enqueueUpdateStatus,
+  drainPendingActions,
+  isPendingActionStale,
+  retryFailedAction,
+  discardFailedAction,
+} from '../sync/outbox';
 
 // Types
 
@@ -158,8 +164,9 @@ function LastConflictBanner({ order, isDismissed, onDismiss }: LastConflictBanne
   );
 }
 
-// Banner aksi gagal, satu per aksi 'failed'. Cancel dan reject punya tombol
-// Coba lagi dan Abaikan; COD hanya Coba lagi karena tidak bisa dibuang.
+// Banner aksi gagal, satu per aksi 'failed'. Cancel, reject, dan update_status
+// punya tombol Coba lagi dan Abaikan; COD hanya Coba lagi karena tidak
+// bisa dibuang.
 
 interface FailedActionBannerProps {
   action: PendingActionModel;
@@ -191,6 +198,30 @@ function FailedActionBanner({ action, onRetry, onDiscard }: FailedActionBannerPr
         <Text style={styles.failedActionBannerText}>
           Penolakan order ditolak server dan tidak dicoba lagi otomatis.
         </Text>
+        <View style={styles.failedActionButtons}>
+          <TouchableOpacity onPress={() => onRetry(action.id)} style={styles.retryButton}>
+            <Text style={styles.retryButtonText}>Coba lagi</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => onDiscard(action.id)} style={styles.discardButton}>
+            <Text style={styles.discardButtonText}>Abaikan</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+  if (action.actionType === 'update_status') {
+    // Teks per target yang dituju aksi. Target yang tidak terbaca
+    // (payload korup) memakai pesan bawaan.
+    const target = readUpdateStatusTarget(action.payloadJson);
+    const message =
+      target === 'OUT_FOR_DELIVERY'
+        ? 'Mulai antar ditolak server dan tidak dicoba lagi otomatis.'
+        : target === 'DELIVERED'
+        ? 'Selesai diantar ditolak server dan tidak dicoba lagi otomatis.'
+        : 'Perubahan status ditolak server dan tidak dicoba lagi otomatis.';
+    return (
+      <View style={styles.failedActionBanner}>
+        <Text style={styles.failedActionBannerText}>{message}</Text>
         <View style={styles.failedActionButtons}>
           <TouchableOpacity onPress={() => onRetry(action.id)} style={styles.retryButton}>
             <Text style={styles.retryButtonText}>Coba lagi</Text>
@@ -309,17 +340,9 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [lastConflictDismissed, setLastConflictDismissed] = useState(false);
   const inflightCollectRef = useRef(false);
   const inflightStatusRef = useRef(false);
-  const [isOnline, setIsOnline] = useState(networkMonitor.getStatus() === 'online');
 
   useEffect(() => {
     getCurrentUserId().then(setCurrentUserId);
-  }, []);
-
-  useEffect(() => {
-    const unsubscribe = networkMonitor.subscribe((status) => {
-      setIsOnline(status === 'online');
-    });
-    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -450,24 +473,52 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const activeAction = pendingActions.filter(
     (a) => a.status === 'pending' || a.status === 'syncing',
   );
+  // statusActionsActive: aksi update_status yang masih menunggu terkirim,
+  // urut dari createdAt (aksi tertua dulu). Dipakai untuk displayStatus dan
+  // syarat tombol status, sehingga tampilan menunjukkan status yang berlaku
+  // setelah antrean selesai terkirim.
+  const statusActionsActive = activeAction
+    .filter((a) => a.actionType === 'update_status')
+    .sort((a, b) => {
+      const aMs = a.createdAt instanceof Date ? a.createdAt.getTime() : Number(a.createdAt);
+      const bMs = b.createdAt instanceof Date ? b.createdAt.getTime() : Number(b.createdAt);
+      return aMs - bMs;
+    });
+  // failedActions: aksi 'failed' jenis apa pun (cancel, reject, update_status, COD).
   const failedActions = pendingActions.filter((a) => a.status === 'failed');
+  // hasFailedOrOrphanedAction: ada aksi 'failed' atau yatim untuk order ini.
+  // Tombol aksi (Mulai antar, COD, Selesai diantar, Batalkan) tidak tampil
+  // saat ada aksi gagal/yatim, supaya driver melihat banner dulu dan memilih
+  // Coba lagi atau Abaikan sebelum menambah aksi baru.
   const orphanedCodActions = pendingActions.filter(
     (a) => a.actionType === 'collect_cod' && a.status === 'orphaned_needs_review',
   );
+  const hasFailedOrOrphanedAction =
+    failedActions.length > 0 || orphanedCodActions.length > 0;
   // isPendingStale: ada aksi yang menunggu terkirim lebih dari sejam.
   const isPendingStale = activeAction.some((a) => isPendingActionStale(a));
+  // displayStatus: target aksi status aktif yang paling baru (createdAt
+  // terbesar), yaitu status order setelah antrean selesai terkirim. Kalau
+  // tidak ada aksi status, atau ada aksi 'failed'/yatim jenis apa pun untuk
+  // order ini, pakai status baris order dari server.
+  const latestStatusAction = statusActionsActive[statusActionsActive.length - 1];
+  const latestStatusTarget = latestStatusAction
+    ? readUpdateStatusTarget(latestStatusAction.payloadJson)
+    : null;
+  const displayStatus = (latestStatusTarget && !hasFailedOrOrphanedAction)
+    ? latestStatusTarget
+    : order?.status;
 
   /**
-   * Batalkan: status masih bisa dibatalkan, order milik driver ini, COD belum
-   * tercatat, dan tidak ada aksi outbox apa pun untuk order ini.
+   * Batalkan: order milik driver ini, status masih bisa dibatalkan, COD belum
+   * tercatat, dan tidak ada aksi outbox apa pun.
    */
   const canDriverCancel = (order: OrderModel): boolean => {
-    const cancellableStatuses = [
-      OrderStatus.ASSIGNED,
-      OrderStatus.PREPARING,
-      OrderStatus.OUT_FOR_DELIVERY,
-    ];
-    if (!cancellableStatuses.includes(order.status as any)) return false;
+    if (order.status !== OrderStatus.ASSIGNED &&
+        order.status !== OrderStatus.PREPARING &&
+        order.status !== OrderStatus.OUT_FOR_DELIVERY) {
+      return false;
+    }
     if (!currentUserId || order.driverId !== currentUserId) return false;
     if (codCaptured) return false;
     if (pendingActions.length > 0) return false;
@@ -475,51 +526,75 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   };
 
   /**
-   * Terima Cash (COD): OUT_FOR_DELIVERY, milik driver ini, COD belum tercatat,
-   * dan tidak ada aksi outbox apa pun. Selama COD masih antre, tombol tidak
-   * tampil walaupun detail dibuka ulang, jadi tidak ada aksi COD kedua.
+   * Terima Cash (COD): displayStatus OUT_FOR_DELIVERY, order milik driver,
+   * COD belum tercatat, tidak ada aksi collect_cod, cancel, atau reject
+   * yang antre, dan tidak ada aksi 'failed' atau yatim. Mulai antar yang
+   * masih antre tidak menghalangi, karena displayStatus sudah
+   * OUT_FOR_DELIVERY.
    */
   const canCollectCod = (order: OrderModel): boolean => {
-    if (order.status !== OrderStatus.OUT_FOR_DELIVERY) return false;
+    if (displayStatus !== OrderStatus.OUT_FOR_DELIVERY) return false;
     if (!currentUserId || order.driverId !== currentUserId) return false;
     if (codCaptured) return false;
-    if (pendingActions.length > 0) return false;
+    if (pendingActions.some((a) => a.actionType === 'collect_cod')) return false;
+    if (pendingActions.some((a) => a.actionType === 'cancel' || a.actionType === 'reject')) return false;
+    if (hasFailedOrOrphanedAction) return false;
     return true;
   };
 
   /**
-   * Mulai antar dan Selesai diantar: PREPARING atau OUT_FOR_DELIVERY, milik
-   * driver ini, dan tidak ada aksi outbox apa pun. Selesai diantar juga butuh
-   * COD yang sudah tercatat.
+   * Mulai antar: displayStatus PREPARING, order milik driver, dan tidak ada
+   * aksi outbox apa pun untuk order ini.
+   * Selesai diantar: displayStatus OUT_FOR_DELIVERY, COD tercatat (payment
+   * CAPTURED) atau ada aksi collect_cod aktif ('pending'/'syncing'),
+   * tidak ada aksi cancel/reject, tidak ada aksi 'failed' atau yatim.
+   * Mulai antar yang masih antre tidak menghalangi: displayStatus
+   * OUT_FOR_DELIVERY berarti Mulai antar sudah diantre atau terkirim.
    */
   const canUpdateStatus = (order: OrderModel): boolean => {
-    if (
-      order.status !== OrderStatus.PREPARING &&
-      order.status !== OrderStatus.OUT_FOR_DELIVERY
-    ) return false;
     if (!currentUserId || order.driverId !== currentUserId) return false;
-    if (pendingActions.length > 0) return false;
-    if (order.status === OrderStatus.OUT_FOR_DELIVERY && !codCaptured) return false;
-    return true;
+    if (displayStatus === OrderStatus.PREPARING) {
+      // Mulai antar: aksi apa pun untuk order ini menghalangi.
+      if (pendingActions.length > 0) return false;
+      return true;
+    }
+    if (displayStatus === OrderStatus.OUT_FOR_DELIVERY) {
+      // Selesai diantar: aksi cancel/reject/failed/yatim tetap menghalangi,
+      // tapi aksi collect_cod aktif tidak (driver bisa lanjut mengetuk
+      // Selesai diantar saat COD-nya antre).
+      if (pendingActions.some((a) => a.actionType === 'cancel' || a.actionType === 'reject')) return false;
+      if (hasFailedOrOrphanedAction) return false;
+      if (!codCaptured &&
+          !pendingActions.some((a) =>
+            a.actionType === 'collect_cod' && (a.status === 'pending' || a.status === 'syncing')
+          )) {
+        return false;
+      }
+      return true;
+    }
+    return false;
   };
 
   /**
-   * Handle driver status update (PREPARING -> OUT_FOR_DELIVERY, OUT_FOR_DELIVERY -> DELIVERED).
-   * Online-only, direct API call with OCC.
+   * Mulai antar dan Selesai diantar: aksi update_status diantre lewat
+   * outbox, supaya tetap jalan saat offline. Target dihitung dari
+   * displayStatus (status yang sedang ditampilkan), bukan dari order.status,
+   * supaya Selesai diantar yang diketuk saat Mulai antar masih antre
+   * menghasilkan target DELIVERED.
    */
   const handleUpdateStatus = async (orderToUpdate: OrderModel) => {
-    const nextStatus =
-      orderToUpdate.status === OrderStatus.PREPARING
-        ? OrderStatus.OUT_FOR_DELIVERY
-        : OrderStatus.DELIVERED;
-    const alertTitle =
-      orderToUpdate.status === OrderStatus.PREPARING
-        ? 'Mulai Antar'
-        : 'Selesai diantar';
-    const alertBody =
-      orderToUpdate.status === OrderStatus.PREPARING
-        ? 'Tandai order ini sedang dalam perjalanan?'
-        : 'Tandai order ini sudah selesai diantar?';
+    if (displayStatus !== OrderStatus.PREPARING && displayStatus !== OrderStatus.OUT_FOR_DELIVERY) {
+      return;
+    }
+    const nextStatus = displayStatus === OrderStatus.PREPARING
+      ? OrderStatus.OUT_FOR_DELIVERY
+      : OrderStatus.DELIVERED;
+    const alertTitle = displayStatus === OrderStatus.PREPARING
+      ? 'Mulai Antar'
+      : 'Selesai diantar';
+    const alertBody = displayStatus === OrderStatus.PREPARING
+      ? 'Tandai order ini sedang dalam perjalanan?'
+      : 'Tandai order ini sudah selesai diantar?';
 
     Alert.alert(alertTitle, alertBody, [
       { text: 'Batal', style: 'cancel' },
@@ -527,91 +602,23 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         text: 'Ya',
         onPress: async () => {
           if (inflightStatusRef.current) return;
-          if (networkMonitor.getStatus() !== 'online') {
-            Alert.alert(
-              'Butuh Koneksi',
-              'Status hanya bisa diubah saat ada koneksi internet.',
-            );
-            return;
-          }
           inflightStatusRef.current = true;
           try {
-            const result = await updateOrderStatus(
-              orderToUpdate.id,
-              nextStatus,
-              orderToUpdate.serverVersion,
-            );
-            // Tulis row dari respons server
-            await database.write(async () => {
-              const collection = database.get<OrderModel>('orders');
-              const row = await collection.find(orderToUpdate.id);
-              await database.batch(
-                row.prepareUpdate((r) => {
-                  r._setRaw('status', result.status);
-                  r._setRaw('server_version', result.version);
-                  r._setRaw('updated_at', Date.parse(result.updatedAt));
-                  if (result.driverId !== undefined) {
-                    r._setRaw('driver_id', result.driverId ?? '');
-                  }
-                  if (result.cancelledBy !== undefined) {
-                    r._setRaw('cancelled_by', result.cancelledBy ?? '');
-                  }
-                  if (result.cancelReason !== undefined) {
-                    r._setRaw('cancel_reason', result.cancelReason ?? '');
-                  }
-                  r._setRaw('last_conflict_reason', '');
-                  r._setRaw('last_conflict_at', null);
-                  r._raw._status = 'synced';
-                  r._raw._changed = '';
-                }),
-              );
-            });
-          } catch (err) {
-            if (err instanceof ApiError && err.status === 409) {
-              Alert.alert(
-                'Order sudah berubah, data diperbarui.',
-                undefined,
-                [{ text: 'OK' }],
-              );
-              // GET /orders/:id lalu tulis row dari respons
-              try {
-                const refreshed = await getOrderById(orderToUpdate.id);
-                await database.write(async () => {
-                  const collection = database.get<OrderModel>('orders');
-                  const row = await collection.find(orderToUpdate.id);
-                  await database.batch(
-                    row.prepareUpdate((r) => {
-                      r._setRaw('status', refreshed.status);
-                      r._setRaw('server_version', refreshed.version);
-                      r._setRaw('updated_at', Date.parse(refreshed.updatedAt));
-                      if (refreshed.driverId !== undefined) {
-                        r._setRaw('driver_id', refreshed.driverId ?? '');
-                      }
-                      if (refreshed.cancelledBy !== undefined) {
-                        r._setRaw('cancelled_by', refreshed.cancelledBy ?? '');
-                      }
-                      if (refreshed.cancelReason !== undefined) {
-                        r._setRaw('cancel_reason', refreshed.cancelReason ?? '');
-                      }
-                      r._setRaw('last_conflict_reason', '');
-                      r._setRaw('last_conflict_at', null);
-                      r._raw._status = 'synced';
-                      r._raw._changed = '';
-                    }),
-                  );
-                });
-              } catch {
-                // GET gagal, row tidak diubah
-              }
-            } else if (err instanceof ApiError && err.status === 403) {
-              Alert.alert(
-                'Order ini sudah tidak ditugaskan ke Anda.',
-                undefined,
-                [{ text: 'OK' }],
-              );
-            } else {
-              Alert.alert('Gagal', 'Status gagal diubah. Coba lagi.');
+            const result = await enqueueUpdateStatus(orderToUpdate.id, nextStatus);
+            if (!result.success) {
+              Alert.alert('Gagal', 'Status gagal dicatat. Coba lagi.');
+              return;
             }
+            try {
+              await drainPendingActions(database);
+            } catch (err) {
+              // Kalau kirim antrean gagal (offline), aksi tetap tersimpan
+              // 'pending' dan dikirim di kesempatan berikutnya.
+              console.log('[OrderDetail] drain attempt while offline, action queued');
+            }
+          } catch (err) {
+            console.error('[OrderDetail] failed to enqueue update_status:', err);
+            Alert.alert('Gagal', 'Status gagal dicatat. Coba lagi.');
           } finally {
             inflightStatusRef.current = false;
           }
@@ -780,7 +787,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Order #{order.id.slice(0, 8)}</Text>
-        <StatusBadge status={order.status} />
+        <StatusBadge status={displayStatus ?? order.status} />
       </View>
 
       {/* Items */}
@@ -872,18 +879,18 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         <TouchableOpacity
           style={[
             styles.statusButton,
-            (!isOnline || inflightStatusRef.current) && styles.statusButtonDisabled,
+            inflightStatusRef.current && styles.statusButtonDisabled,
           ]}
           onPress={() => handleUpdateStatus(order)}
-          disabled={!isOnline || inflightStatusRef.current}
+          disabled={inflightStatusRef.current}
         >
           <Text
             style={[
               styles.statusButtonText,
-              (!isOnline || inflightStatusRef.current) && styles.statusButtonTextDisabled,
+              inflightStatusRef.current && styles.statusButtonTextDisabled,
             ]}
           >
-            {order.status === OrderStatus.PREPARING ? 'Mulai antar' : 'Selesai diantar'}
+            {displayStatus === OrderStatus.PREPARING ? 'Mulai antar' : 'Selesai diantar'}
           </Text>
         </TouchableOpacity>
       )}

@@ -8,8 +8,6 @@ import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 
 import { OrderDetailScreen } from './OrderDetailScreen';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
-import { ApiError } from '../sync/client';
-import { networkMonitor } from '../map/networkMonitor';
 import type { NetworkStatus } from '../map/networkMonitor';
 import type { OrderModel } from '../db/models/OrderModel';
 
@@ -65,6 +63,7 @@ jest.mock('../sync/session', () => ({
 // These are defined at module level so they can be referenced in tests
 const mockEnqueueCancel = jest.fn();
 const mockEnqueueCollectCod = jest.fn();
+const mockEnqueueUpdateStatus = jest.fn();
 const mockHasPendingAction = jest.fn();
 const mockDrainPendingActions = jest.fn();
 const mockGetPendingActionsForOrder = jest.fn();
@@ -76,9 +75,10 @@ const STALE_THRESHOLD_MS = 60 * 60 * 1000;
 // Minimal shape pending action buat test mock, hanya field yang dipakai tes.
 interface MockPendingAction {
   id: string;
-  actionType?: 'reject' | 'cancel' | 'collect_cod';
+  actionType?: 'reject' | 'cancel' | 'collect_cod' | 'update_status';
   status?: 'pending' | 'syncing' | 'failed' | 'orphaned_needs_review';
   createdAt: Date | number | string;
+  payloadJson?: unknown;
 }
 function computeIsPendingActionStale(action: MockPendingAction | null | undefined): boolean {
   if (!action?.createdAt) return false;
@@ -98,6 +98,7 @@ jest.mock('../sync/outbox', () => ({
   __esModule: true,
   enqueueCancel: (...args: unknown[]) => mockEnqueueCancel(...args),
   enqueueCollectCod: (...args: unknown[]) => mockEnqueueCollectCod(...args),
+  enqueueUpdateStatus: (...args: unknown[]) => mockEnqueueUpdateStatus(...args),
   hasPendingAction: (...args: unknown[]) => mockHasPendingAction(...args),
   drainPendingActions: (...args: unknown[]) => mockDrainPendingActions(...args),
   getPendingActionsForOrder: (...args: unknown[]) => mockGetPendingActionsForOrder(...args),
@@ -230,6 +231,17 @@ jest.mock('@nozbe/watermelondb', () => ({
     where: jest.fn().mockReturnValue({ _where: 'order_id' }),
   },
   withDatabase: (C: any) => C,
+  // Kelas Model kosong, cukup untuk memuat PendingActionModel (layar
+  // mengimpor readUpdateStatusTarget dari file itu). @field, @text, @date,
+  // dan lainnya di-mock di bawah sebagai fungsi kosong.
+  Model: class {},
+}));
+jest.mock('@nozbe/watermelondb/decorators', () => ({
+  field: () => () => {},
+  text: () => () => {},
+  date: () => () => {},
+  readonly: () => () => {},
+  json: () => () => {},
 }));
 
 function renderScreen() {
@@ -1239,11 +1251,13 @@ describe('driver status button visibility', () => {
 
 describe('driver status button behavior', () => {
   let alertSpy: jest.SpyInstance;
-  let nmSubscribeSpy: jest.SpyInstance | undefined;
 
   beforeEach(() => {
     alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockEnqueueUpdateStatus.mockReset();
+    mockDrainPendingActions.mockReset();
+    mockDrainPendingActions.mockResolvedValue([]);
     mockUpdateOrderStatus.mockReset();
     mockGetOrderById.mockReset();
     mockOrderPrepareUpdate.mockReset();
@@ -1259,52 +1273,48 @@ describe('driver status button behavior', () => {
 
   afterEach(() => {
     alertSpy.mockRestore();
-    nmSubscribeSpy?.mockRestore();
-    nmSubscribeSpy = undefined;
-    mockGetStatusFn.mockReset();
-    mockGetStatusFn.mockReturnValue('online');
   });
 
-  test('offline: button nonaktif dengan pesan', async () => {
+  // Aksi status tidak butuh jaringan: saat offline tombol tetap aktif, aksi
+  // masuk ke outbox, dan kirim antrean yang gagal tidak memunculkan galat.
+  test('offline: tombol tetap aktif, enqueueUpdateStatus dipanggil', async () => {
     Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
-    // Subscribe fires synchronously so isOnline=true from the start, button enabled.
-    nmSubscribeSpy = jest.spyOn(networkMonitor, 'subscribe').mockImplementation((cb: (s: NetworkStatus) => void) => {
-      cb('online');
-      return () => {};
-    });
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: true, pendingActionId: 'pa-1' });
+    mockDrainPendingActions.mockRejectedValue(new TypeError('Network request failed'));
 
     const { getByText } = renderScreen();
     await waitFor(() => {
       expect(getByText('Mulai antar')).toBeTruthy();
     });
-    // Press main button, confirmation alert fires
+
     await act(async () => {
       fireEvent.press(getByText('Mulai antar'));
     });
-    // Extract "Ya" button from confirmation alert, set getStatus='offline', press Ya
+
     const alertCalls = (Alert.alert as jest.Mock).mock.calls;
     const alertArgs = alertCalls[0];
     const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
     const yaButton = buttons.find((b) => b.text === 'Ya');
-    // Set offline BEFORE pressing Ya so offline guard fires inside onPress
-    mockGetStatusFn.mockReturnValue('offline');
+
     await act(async () => {
       yaButton?.onPress?.();
     });
-    expect(Alert.alert).toHaveBeenLastCalledWith(
-      'Butuh Koneksi',
-      'Status hanya bisa diubah saat ada koneksi internet.',
-    );
+
+    // Aksi masuk outbox dengan target PREPARING -> OUT_FOR_DELIVERY.
+    expect(mockEnqueueUpdateStatus).toHaveBeenCalledWith('order-123', 'OUT_FOR_DELIVERY');
+    // drainPendingActions dipanggil dan gagal karena offline; galatnya tidak
+    // ditampilkan.
+    expect(mockDrainPendingActions).toHaveBeenCalled();
+    expect(Alert.alert).not.toHaveBeenCalledWith('Gagal', expect.anything());
+    // updateOrderStatus tidak dipanggil langsung dari layar.
+    expect(mockUpdateOrderStatus).not.toHaveBeenCalled();
   });
 
-  test('sukses: updateOrderStatus dipanggil dengan server_version baris', async () => {
+  // Sukses: enqueueUpdateStatus dipanggil dengan target dari displayStatus.
+  // updateOrderStatus tidak dipanggil langsung dari layar.
+  test('sukses: enqueueUpdateStatus dipanggil dengan target dari displayStatus', async () => {
     Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 3 });
-    mockUpdateOrderStatus.mockResolvedValue({
-      id: 'order-123',
-      status: 'OUT_FOR_DELIVERY',
-      version: 4,
-      updatedAt: '2026-09-25T12:00:00.000Z',
-    });
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: true, pendingActionId: 'pa-1' });
 
     const { getByText } = renderScreen();
     await waitFor(() => {
@@ -1324,17 +1334,14 @@ describe('driver status button behavior', () => {
       yaButton?.onPress?.();
     });
 
-    expect(mockUpdateOrderStatus).toHaveBeenCalledWith('order-123', 'OUT_FOR_DELIVERY', 3);
+    expect(mockEnqueueUpdateStatus).toHaveBeenCalledWith('order-123', 'OUT_FOR_DELIVERY');
+    expect(mockUpdateOrderStatus).not.toHaveBeenCalled();
   });
 
-  test('sukses: prepareUpdate dipanggil, baris ditandai synced dan _changed kosong', async () => {
-    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
-    mockUpdateOrderStatus.mockResolvedValue({
-      id: 'order-123',
-      status: 'OUT_FOR_DELIVERY',
-      version: 2,
-      updatedAt: '2026-09-25T12:00:00.000Z',
-    });
+  // Kalau enqueueUpdateStatus mengembalikan success=false, Alert 'Gagal' tampil.
+  test('enqueueUpdateStatus gagal: Alert Gagal tampil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 3 });
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: false, error: 'Not authenticated' });
 
     const { getByText } = renderScreen();
     await waitFor(() => {
@@ -1354,219 +1361,182 @@ describe('driver status button behavior', () => {
       yaButton?.onPress?.();
     });
 
-    await waitFor(() => {
-      expect(mockOrderPrepareUpdate).toHaveBeenCalled();
-    });
-
-    // database.batch dipanggil dengan hasil prepareUpdate
-    await waitFor(() => {
-      expect(mockDatabaseBatch).toHaveBeenCalled();
-    });
-    expect(mockDatabaseBatch.mock.calls[0][0]).toBeDefined();
-    expect(typeof mockDatabaseBatch.mock.calls[0][0]).toBe('object');
-
-    // Verifikasi prepareUpdate cb mem-set _raw dengan benar
-    const updateCb = mockOrderPrepareUpdate.mock.calls[0][0];
-    const recordMock = { _setRaw: jest.fn(), _raw: { _status: '', _changed: '' } };
-    updateCb(recordMock);
-    expect(recordMock._setRaw).toHaveBeenCalledWith('status', 'OUT_FOR_DELIVERY');
-    expect(recordMock._setRaw).toHaveBeenCalledWith('server_version', 2);
-    expect(recordMock._raw._status).toBe('synced');
-    expect(recordMock._raw._changed).toBe('');
-    expect(recordMock._setRaw).toHaveBeenCalledWith('updated_at', Date.parse('2026-09-25T12:00:00.000Z'));
-    expect(recordMock._setRaw).toHaveBeenCalledWith('last_conflict_reason', '');
-    expect(recordMock._setRaw).toHaveBeenCalledWith('last_conflict_at', null);
+    expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Status gagal dicatat. Coba lagi.');
   });
 
-  test('409 VERSION_CONFLICT: pesan muncul dan GET dipanggil', async () => {
-    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
-
-    mockUpdateOrderStatus.mockImplementationOnce(() =>
-      Promise.reject(new ApiError('conflict', 409, 'VERSION_CONFLICT', { code: 'VERSION_CONFLICT' })),
-    );
-    mockGetOrderById.mockResolvedValue({
-      id: 'order-123',
-      status: 'OUT_FOR_DELIVERY',
-      version: 2,
-      updatedAt: '2026-09-25T12:00:00.000Z',
+  // Baris PREPARING dengan aksi update_status OUT_FOR_DELIVERY 'pending':
+  // displayStatus menjadi OUT_FOR_DELIVERY, jadi Mulai antar tidak tampil.
+  test('aksi update_status OUT_FOR_DELIVERY pending: Mulai antar tidak tampil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    mockPendingActions.push({
+      id: 'us-pending-1',
+      actionType: 'update_status',
+      status: 'pending',
+      createdAt: new Date(),
+      payloadJson: { status: 'OUT_FOR_DELIVERY' },
     });
-
-    const { getByText } = renderScreen();
-    await waitFor(() => {
-      expect(getByText('Mulai antar')).toBeTruthy();
-    });
-
+    const { queryByText } = renderScreen();
     await act(async () => {
-      fireEvent.press(getByText('Mulai antar'));
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
-
-    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
-    const alertArgs = alertCalls[0];
-    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
-    const yaButton = buttons.find((b) => b.text === 'Ya');
-
-    await act(async () => {
-      yaButton?.onPress?.();
-    });
-
     await waitFor(() => {
-      expect(Alert.alert).toHaveBeenCalledWith(
-        'Order sudah berubah, data diperbarui.',
-        undefined,
-        [{ text: 'OK' }],
-      );
+      expect(queryByText('Mulai antar')).toBeNull();
     });
-    expect(mockGetOrderById).toHaveBeenCalledWith('order-123');
-    // database.batch dipanggil dengan hasil prepareUpdate dari refreshed GET
-    await waitFor(() => {
-      expect(mockDatabaseBatch).toHaveBeenCalled();
-    });
-    // verify updated_at dan last_conflict_at dari refreshed GET
-    expect(mockOrder._setRaw).toHaveBeenCalledWith('updated_at', Date.parse('2026-09-25T12:00:00.000Z'));
-    expect(mockOrder._setRaw).toHaveBeenCalledWith('last_conflict_reason', '');
-    expect(mockOrder._setRaw).toHaveBeenCalledWith('last_conflict_at', null);
   });
 
-  test('409 INVALID_TRANSITION: pesan muncul dan GET dipanggil', async () => {
-    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
-
-    mockUpdateOrderStatus.mockImplementationOnce(() =>
-      Promise.reject(new ApiError('conflict', 409, 'INVALID_TRANSITION', { code: 'INVALID_TRANSITION' })),
-    );
-    mockGetOrderById.mockResolvedValue({
-      id: 'order-123',
-      status: 'OUT_FOR_DELIVERY',
-      version: 2,
-      updatedAt: '2026-09-25T12:00:00.000Z',
+  // Aksi update_status 'failed' target OUT_FOR_DELIVERY: banner dengan
+  // "Coba lagi" dan "Abaikan" muncul, label status dari baris order.
+  test('aksi update_status failed target OUT_FOR_DELIVERY: banner teks Mulai antar dengan Coba lagi dan Abaikan', async () => {
+    mockPendingActions.push({
+      id: 'us-failed-1',
+      actionType: 'update_status',
+      status: 'failed',
+      createdAt: new Date(),
+      payloadJson: { status: 'OUT_FOR_DELIVERY' },
     });
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
 
-    const { getByText } = renderScreen();
-    await waitFor(() => {
-      expect(getByText('Mulai antar')).toBeTruthy();
-    });
-
+    const { getByText, queryByText, getAllByText } = renderScreen();
     await act(async () => {
-      fireEvent.press(getByText('Mulai antar'));
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
-
-    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
-    const alertArgs = alertCalls[0];
-    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
-    const yaButton = buttons.find((b) => b.text === 'Ya');
-
-    await act(async () => {
-      yaButton?.onPress?.();
-    });
-
     await waitFor(() => {
-      expect(Alert.alert).toHaveBeenCalledWith(
-        'Order sudah berubah, data diperbarui.',
-        undefined,
-        [{ text: 'OK' }],
-      );
+      expect(getByText('Mulai antar ditolak server dan tidak dicoba lagi otomatis.')).toBeTruthy();
     });
-    expect(mockGetOrderById).toHaveBeenCalledWith('order-123');
-    // database.batch dipanggil dengan hasil prepareUpdate dari refreshed GET
-    await waitFor(() => {
-      expect(mockDatabaseBatch).toHaveBeenCalled();
-    });
-    // verify updated_at dan last_conflict_at dari refreshed GET
-    expect(mockOrder._setRaw).toHaveBeenCalledWith('updated_at', Date.parse('2026-09-25T12:00:00.000Z'));
-    expect(mockOrder._setRaw).toHaveBeenCalledWith('last_conflict_reason', '');
-    expect(mockOrder._setRaw).toHaveBeenCalledWith('last_conflict_at', null);
+    // Label status tetap dari baris order, bukan target yang gagal.
+    expect(queryByText('OUT_FOR_DELIVERY')).toBeNull();
+    // Tombol Coba lagi dan Abaikan tampil.
+    fireEvent.press(getAllByText('Coba lagi')[0]);
+    expect(mockRetryFailedAction).toHaveBeenCalledWith('us-failed-1');
+    fireEvent.press(getAllByText('Abaikan')[0]);
+    expect(mockDiscardFailedAction).toHaveBeenCalledWith('us-failed-1');
   });
 
-  test('403: pesan muncul, baris tidak ditulis, GET tidak dipanggil', async () => {
-    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
-    mockUpdateOrderStatus.mockImplementationOnce(() =>
-      Promise.reject(new ApiError('Forbidden', 403, undefined, undefined)),
-    );
+  // Sama dengan di atas tapi target DELIVERED.
+  test('aksi update_status failed target DELIVERED: banner teks Selesai diantar', async () => {
+    mockPendingActions.push({
+      id: 'us-failed-2',
+      actionType: 'update_status',
+      status: 'failed',
+      createdAt: new Date(),
+      payloadJson: { status: 'DELIVERED' },
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
 
     const { getByText } = renderScreen();
-    await waitFor(() => {
-      expect(getByText('Mulai antar')).toBeTruthy();
-    });
-
     await act(async () => {
-      fireEvent.press(getByText('Mulai antar'));
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
-
-    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
-    const alertArgs = alertCalls[0];
-    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
-    const yaButton = buttons.find((b) => b.text === 'Ya');
-
-    await act(async () => {
-      yaButton?.onPress?.();
-    });
-
     await waitFor(() => {
-      expect(Alert.alert).toHaveBeenCalledWith(
-        'Order ini sudah tidak ditugaskan ke Anda.',
-        undefined,
-        [{ text: 'OK' }],
-      );
+      expect(getByText('Selesai diantar ditolak server dan tidak dicoba lagi otomatis.')).toBeTruthy();
     });
-    expect(mockGetOrderById).not.toHaveBeenCalled();
-    expect(mockOrderPrepareUpdate).not.toHaveBeenCalled();
   });
 
-  test('500: pesan gagal umum, baris tidak ditulis', async () => {
-    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
-    mockUpdateOrderStatus.mockImplementationOnce(() =>
-      Promise.reject(new ApiError('Internal Server Error', 500)),
-    );
-
-    const { getByText } = renderScreen();
-    await waitFor(() => {
-      expect(getByText('Mulai antar')).toBeTruthy();
+  // Aksi 'collect_cod' 'pending' pada order OUT_FOR_DELIVERY dengan payment
+  // CAPTURED: Selesai diantar tampil, COD tidak.
+  test('baris OUT_FOR_DELIVERY + aksi collect_cod pending: Selesai diantar tampil, COD tidak', async () => {
+    mockPayments.push({ id: 'cod-1', orderId: 'order-123', method: PaymentMethod.CASH, status: PaymentStatus.CAPTURED });
+    mockPendingActions.push({
+      id: 'cod-pending-1',
+      actionType: 'collect_cod',
+      status: 'pending',
+      createdAt: new Date(),
     });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
 
+    const { getByText, queryByText } = renderScreen();
     await act(async () => {
-      fireEvent.press(getByText('Mulai antar'));
+      paymentsSubscriptionCallback?.([...mockPayments]);
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
-
-    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
-    const alertArgs = alertCalls[0];
-    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
-    const yaButton = buttons.find((b) => b.text === 'Ya');
-
-    await act(async () => {
-      yaButton?.onPress?.();
-    });
-
     await waitFor(() => {
-      expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Status gagal diubah. Coba lagi.');
+      expect(getByText('Selesai diantar')).toBeTruthy();
     });
-    expect(mockOrderPrepareUpdate).not.toHaveBeenCalled();
+    expect(queryByText('Terima Cash (COD)')).toBeNull();
   });
 
-  test('error jaringan: pesan gagal umum, baris tidak ditulis', async () => {
-    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
-    mockUpdateOrderStatus.mockRejectedValue(new Error('Network request failed'));
-
-    const { getByText } = renderScreen();
-    await waitFor(() => {
-      expect(getByText('Mulai antar')).toBeTruthy();
+  // Aksi collect_cod 'failed' dan aksi update_status DELIVERED 'pending':
+  // karena ada aksi 'failed', label status dari baris (bukan DELIVERED), dan
+  // tombol Selesai diantar serta COD tidak tampil.
+  test('aksi collect_cod failed + aksi update_status DELIVERED pending: label dari baris, tombol tidak tampil', async () => {
+    mockPendingActions.push({
+      id: 'cod-failed-1',
+      actionType: 'collect_cod',
+      status: 'failed',
+      createdAt: new Date(),
     });
+    mockPendingActions.push({
+      id: 'deliver-pending-1',
+      actionType: 'update_status',
+      status: 'pending',
+      createdAt: new Date(),
+      payloadJson: { status: 'DELIVERED' },
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
 
+    const { getByText, queryByText } = renderScreen();
     await act(async () => {
-      fireEvent.press(getByText('Mulai antar'));
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
-
-    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
-    const alertArgs = alertCalls[0];
-    const buttons = alertArgs[2] as Array<{ text: string; onPress?: () => void }>;
-    const yaButton = buttons.find((b) => b.text === 'Ya');
-
-    await act(async () => {
-      yaButton?.onPress?.();
-    });
-
+    // Banner COD gagal tampil. Label status dari baris (OUT_FOR_DELIVERY),
+    // bukan DELIVERED, karena ada aksi 'failed'.
     await waitFor(() => {
-      expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Status gagal diubah. Coba lagi.');
+      expect(getByText('COD gagal dicatat server dan tidak dicoba lagi otomatis. Simpan uangnya, lalu coba lagi atau hubungi support.')).toBeTruthy();
     });
-    expect(mockOrderPrepareUpdate).not.toHaveBeenCalled();
+    expect(getByText('OUT FOR_DELIVERY')).toBeTruthy();
+    expect(queryByText('DELIVERED')).toBeNull();
+    // Tombol Selesai diantar dan COD tidak tampil.
+    expect(queryByText('Selesai diantar')).toBeNull();
+    expect(queryByText('Terima Cash (COD)')).toBeNull();
+  });
+
+  // Order OUT_FOR_DELIVERY tanpa payment dan tanpa aksi: Selesai diantar
+  // tidak tampil (belum COD), COD tampil.
+  test('baris OUT_FOR_DELIVERY tanpa payment dan tanpa aksi: Selesai diantar tidak tampil, COD tampil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+    });
+    expect(queryByText('Selesai diantar')).toBeNull();
+  });
+
+  // Perubahan status aksi datang lewat observeWithColumns: label status dan
+  // tombol digambar ulang. Simulasi aksi update_status OUT_FOR_DELIVERY yang
+  // berubah dari 'pending' ke 'failed'.
+  test('perubahan status aksi dari observeWithColumns menggambar ulang label status dan tombol', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    mockPendingActions.push({
+      id: 'us-pending-1',
+      actionType: 'update_status',
+      status: 'pending',
+      createdAt: new Date(),
+      payloadJson: { status: 'OUT_FOR_DELIVERY' },
+    });
+
+    const { getByText, queryByText } = renderScreen();
+    // Awal: label status OUT_FOR_DELIVERY (target aksi status aktif), tombol
+    // Mulai antar tidak tampil karena ada aksi pending.
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(getByText('OUT FOR_DELIVERY')).toBeTruthy();
+    });
+    expect(queryByText('Mulai antar')).toBeNull();
+
+    // Aksi 'failed': banner tampil, label status dari baris (order.status).
+    mockPendingActions[0].status = 'failed';
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(getByText('Mulai antar ditolak server dan tidak dicoba lagi otomatis.')).toBeTruthy();
+    });
+    // Label status kembali ke PREPARING (dari baris).
+    expect(queryByText('PREPARING')).toBeTruthy();
+    expect(queryByText('Mulai antar')).toBeNull();
   });
 });
 
@@ -2035,5 +2005,127 @@ describe('pending_actions diamati dengan observeWithColumns', () => {
     });
     expect(mockPendingActionsQuery?.observeWithColumns).toHaveBeenCalled();
     expect(mockPendingActionsQuery?.observeWithColumns).toHaveBeenCalledWith(['status']);
+  });
+});
+
+describe('displayStatus dan syarat tombol dari aksi status antre', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockEnqueueUpdateStatus.mockReset();
+    mockDrainPendingActions.mockReset();
+    mockDrainPendingActions.mockResolvedValue([]);
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: true, pendingActionId: 'pa-display' });
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    pendingActionsSubscriptionCallback = null;
+    paymentsSubscriptionCallback = null;
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+  });
+
+  test('baris PREPARING + aksi status OUT_FOR_DELIVERY pending: label OUT_FOR_DELIVERY, COD tampil, tombol lain tidak', async () => {
+    mockPendingActions.push({
+      id: 'us-ofd-pending',
+      actionType: 'update_status',
+      status: 'pending',
+      createdAt: new Date(),
+      payloadJson: { status: 'OUT_FOR_DELIVERY' },
+    });
+
+    const { getByText, queryByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    // Label status: target aksi aktif yang paling baru = OUT_FOR_DELIVERY.
+    await waitFor(() => {
+      expect(getByText('OUT FOR_DELIVERY')).toBeTruthy();
+    });
+    // COD tampil (displayStatus OUT_FOR_DELIVERY, tidak ada aksi collect_cod
+    // yang menghalangi, tidak ada aksi cancel/reject/failed/yatim).
+    expect(getByText('Terima Cash (COD)')).toBeTruthy();
+    // Mulai antar/Selesai diantar/Batalkan TIDAK tampil.
+    expect(queryByText('Mulai antar')).toBeNull();
+    expect(queryByText('Selesai diantar')).toBeNull();
+    expect(queryByText('Batalkan Order')).toBeNull();
+    // Banner 'Menunggu sinkronisasi...' tampil.
+    expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
+  });
+
+  test('ditambah aksi COD pending tanpa payment: Selesai diantar tampil dan mengantre DELIVERED', async () => {
+    mockPendingActions.push({
+      id: 'us-ofd-pending',
+      actionType: 'update_status',
+      status: 'pending',
+      createdAt: new Date(1000),
+      payloadJson: { status: 'OUT_FOR_DELIVERY' },
+    });
+    mockPendingActions.push({
+      id: 'cod-pending',
+      actionType: 'collect_cod',
+      status: 'pending',
+      createdAt: new Date(2000),
+    });
+
+    const { getByText, queryByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    // Selesai diantar tampil: displayStatus OUT_FOR_DELIVERY, dan aksi
+    // collect_cod aktif memenuhi syarat COD walaupun payment belum tercatat.
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+    // COD tidak tampil (ada aksi collect_cod yang antre).
+    expect(queryByText('Terima Cash (COD)')).toBeNull();
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+    const alertCalls = (Alert.alert as jest.Mock).mock.calls;
+    const buttons = alertCalls[0][2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    expect(mockEnqueueUpdateStatus).toHaveBeenCalledWith('order-123', 'DELIVERED');
+  });
+
+  test('ditambah aksi status DELIVERED pending: label DELIVERED, tanpa tombol aksi', async () => {
+    mockPendingActions.push({
+      id: 'us-ofd-pending',
+      actionType: 'update_status',
+      status: 'pending',
+      createdAt: new Date(1000),
+      payloadJson: { status: 'OUT_FOR_DELIVERY' },
+    });
+    mockPendingActions.push({
+      id: 'cod-pending',
+      actionType: 'collect_cod',
+      status: 'pending',
+      createdAt: new Date(2000),
+    });
+    mockPendingActions.push({
+      id: 'us-delivered-pending',
+      actionType: 'update_status',
+      status: 'pending',
+      createdAt: new Date(3000),
+      payloadJson: { status: 'DELIVERED' },
+    });
+
+    const { getByText, queryByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    // Label status: target aksi paling baru = DELIVERED.
+    await waitFor(() => {
+      expect(getByText('DELIVERED')).toBeTruthy();
+    });
+    // Keempat tombol aksi TIDAK tampil.
+    expect(queryByText('Mulai antar')).toBeNull();
+    expect(queryByText('Selesai diantar')).toBeNull();
+    expect(queryByText('Terima Cash (COD)')).toBeNull();
+    expect(queryByText('Batalkan Order')).toBeNull();
   });
 });
