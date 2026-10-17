@@ -173,6 +173,9 @@ function createCollection(name: string) {
 
   return {
     async find(id: string): Promise<MockModel> {
+      // Catat id ini supaya tes applyPull bisa memastikan find dipanggil
+      // di dalam database.write.
+      if (inWrite) findCallsDuringWrite.push(id);
       const record = collectionRecords.get(id);
       if (!record) throw new Error(`Row not found: ${id}`);
       return attachModelMethods(record);
@@ -240,6 +243,10 @@ function attachModelMethods(row: MockRow): MockModel {
       }
     }
   };
+  // Tiruan _getRaw membaca nilai kolom dari _raw, sama dengan WatermelonDB.
+  (row as MockRow)._getRaw = function(column: string): unknown {
+    return (row._raw as Record<string, unknown>)[column];
+  };
   (row as unknown as MockModel).prepareDestroyPermanently = function(): MockModel {
     for (const [, records] of state.records) {
       if (records.has(row.id)) {
@@ -252,24 +259,42 @@ function attachModelMethods(row: MockRow): MockModel {
   return row as MockModel;
 }
 
+// Tanda bahwa fungsi di dalam database.write sedang berjalan. Dipakai untuk
+// memastikan applyPull memanggil find() di dalam write, bukan di luarnya.
+let inWrite = false;
+// Daftar id baris yang dicari lewat collection.find selama write berjalan.
+// Dikosongkan oleh tes yang memakainya.
+const findCallsDuringWrite: string[] = [];
+
 // Database mock, support WatermelonDB write pattern
 const mockDb = {
   get(name: string) {
     return createCollection(name);
   },
   async write<T>(fn: () => Promise<T>): Promise<T> {
-    // WatermelonDB write() wraps a function that performs batch operations
-    // Execute all deferred operations when batch is called
-    for (const op of state.batchOps) {
-      if (op.type === 'update') {
-        op.fn(op.row); // Apply the update to the row
+    const prevInWrite = inWrite;
+    inWrite = true;
+    try {
+      // Perubahan yang disiapkan sebelum write dipanggil diterapkan di sini.
+      for (const op of state.batchOps) {
+        if (op.type === 'update') {
+          op.fn(op.row);
+        }
       }
+      return await fn();
+    } finally {
+      inWrite = prevInWrite;
     }
-    return fn();
   },
   async batch(..._ops: unknown[]) {
-    // Batch is called INSIDE write(), so deferred ops already executed above
-    // Clear after execution
+    // Perubahan yang disiapkan di dalam write (seperti di applyPull)
+    // diterapkan saat batch dipanggil. Tanpa ini, prepareUpdate di dalam
+    // write tidak pernah sampai ke baris.
+    for (const op of state.batchOps) {
+      if (op.type === 'update') {
+        op.fn(op.row);
+      }
+    }
     state.batchOps = [];
   },
 };
@@ -529,6 +554,135 @@ describe('SyncCoordinator', () => {
       expect(deleted!.serverVersion).toBe(3);
       expect((deleted as Record<string, unknown>).deletedAt).toBeDefined();
       expect(deleted!._raw._status).toBe('synced');
+    });
+
+    // applyPull tidak boleh menurunkan versi order lokal. Outbox menulis
+    // server_version dari respons aksi yang sukses (misalnya update_status),
+    // lalu pull yang datanya diambil lebih dulu membawa versi lama. Tanpa
+    // penjaga, versi lokal turun dan aksi status berikutnya ditolak
+    // VERSION_CONFLICT.
+    test('order lokal versi 5, pull membawa versi 4: baris tidak ditimpa', async () => {
+      const existingRow = createMockRow('order-stale-pull', 'updated');
+      existingRow._raw.server_version = 5; // versi lokal lebih besar dari pull
+      existingRow.status = 'OUT_FOR_DELIVERY';
+      state.records.get('orders')!.set('order-stale-pull', existingRow);
+
+      const pullResponse: SyncPullResponse = {
+        nextCursor: 'cursor-2',
+        records: [
+          {
+            entityType: 'order',
+            id: 'order-stale-pull',
+            serverVersion: 4,
+            serverChangedAt: new Date().toISOString(),
+            deleted: false,
+            data: {
+              customerId: 'cust-1',
+              driverId: 'driver-1',
+              status: 'PREPARING',
+              items: [],
+              deliveryAddress: {},
+              totalCents: 10000,
+              currency: 'IDR',
+              notes: null,
+            },
+          },
+        ],
+        serverTime: new Date().toISOString(),
+      };
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.applyPull(pullResponse, mockDb);
+
+      // Baris lokal tidak ditimpa: status tetap OUT_FOR_DELIVERY, dan
+      // server_version lokal tetap 5 (tidak diturunkan ke 4).
+      const row = state.records.get('orders')!.get('order-stale-pull')!;
+      expect(row.status).toBe('OUT_FOR_DELIVERY');
+      expect(row._raw.server_version).toBe(5);
+    });
+
+    test('order lokal versi 4, pull versi 5: baris diperbarui (kasus normal)', async () => {
+      const existingRow = createMockRow('order-fresh-pull', 'updated');
+      existingRow._raw.server_version = 4; // versi lokal lebih kecil dari pull
+      existingRow.status = 'OUT_FOR_DELIVERY';
+      state.records.get('orders')!.set('order-fresh-pull', existingRow);
+
+      const pullResponse: SyncPullResponse = {
+        nextCursor: 'cursor-2',
+        records: [
+          {
+            entityType: 'order',
+            id: 'order-fresh-pull',
+            serverVersion: 5,
+            serverChangedAt: new Date().toISOString(),
+            deleted: false,
+            data: {
+              customerId: 'cust-1',
+              driverId: 'driver-1',
+              status: 'DELIVERED',
+              items: [],
+              deliveryAddress: {},
+              totalCents: 10000,
+              currency: 'IDR',
+              notes: null,
+            },
+          },
+        ],
+        serverTime: new Date().toISOString(),
+      };
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.applyPull(pullResponse, mockDb);
+
+      // Baris lokal ditimpa: status dari pull, dan serverVersion lokal
+      // menjadi versi pull. applyServerDataToLocalRow menulis ke
+      // row.serverVersion; baris tiruan tidak punya @field, jadi nilainya
+      // tidak masuk ke _raw.server_version.
+      const row = state.records.get('orders')!.get('order-fresh-pull')!;
+      expect(row.status).toBe('DELIVERED');
+      expect(row.serverVersion).toBe(5);
+    });
+
+    // applyPull harus membaca baris yang sudah ada dengan find() di dalam
+    // database.write, bukan di luarnya. Tanpa ini, tulisan outbox yang
+    // masuk di antara baca dan tulis (misalnya setelah await find())
+    // tertimpa data pull yang diambil lebih dulu.
+    test('find untuk baris yang sudah ada dipanggil saat database.write sedang berjalan', async () => {
+      const existingRow = createMockRow('order-inwrite', 'synced');
+      existingRow._raw.server_version = 1;
+      state.records.get('orders')!.set('order-inwrite', existingRow);
+
+      findCallsDuringWrite.length = 0;
+
+      const pullResponse: SyncPullResponse = {
+        nextCursor: 'cursor-2',
+        records: [
+          {
+            entityType: 'order',
+            id: 'order-inwrite',
+            serverVersion: 2,
+            serverChangedAt: new Date().toISOString(),
+            deleted: false,
+            data: {
+              customerId: 'cust-1',
+              driverId: null,
+              status: 'PREPARING',
+              items: [],
+              deliveryAddress: {},
+              totalCents: 10000,
+              currency: 'IDR',
+              notes: null,
+            },
+          },
+        ],
+        serverTime: new Date().toISOString(),
+      };
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.applyPull(pullResponse, mockDb);
+
+      // find dipanggil di dalam database.write.
+      expect(findCallsDuringWrite).toContain('order-inwrite');
     });
   });
 

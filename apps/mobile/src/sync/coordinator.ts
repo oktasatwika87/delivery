@@ -370,57 +370,74 @@ export class SyncCoordinator implements Coordinator {
     if (!database) return;
     if (pull.records.length === 0) return;
 
-    const batch: any[] = [];
+    // find() dan penulisan batch berjalan di dalam SATU database.write.
+    // Kalau find() di luar write, tulisan outbox yang masuk di antara baca
+    // dan tulis (misalnya setelah await find()) tertimpa data pull yang
+    // diambil lebih dulu.
+    await database.write(async () => {
+      const batch: any[] = [];
 
-    for (const record of pull.records) {
-      const collection = this.collectionFor(record.entityType, database);
-      if (!collection) continue;
+      for (const record of pull.records) {
+        const collection = this.collectionFor(record.entityType, database);
+        if (!collection) continue;
 
-      if (record.deleted) {
-        // Soft delete lokal, cari row, kalau ada, mark deleted_at
-        const existing = await collection.find(record.id).catch(() => null);
-        if (existing) {
-          batch.push(existing.prepareUpdate((r: any) => {
-            r.deletedAt = Date.now();
-            r.serverVersion = record.serverVersion;
-            // Mark as synced agar tidak dianggap dirty di collectDirty() berikutnya
-            r._raw._status = 'synced';
-          }));
-        }
-      } else {
-        // Upsert: create kalau belum ada, update kalau sudah ada
-        const existing = await collection.find(record.id).catch(() => null);
-
-        if (existing) {
-          batch.push(existing.prepareUpdate((r: any) => {
-            this.applyServerDataToLocalRow(r, record);
-            // Mark as synced agar tidak dianggap dirty di collectDirty() berikutnya
-            r._raw._status = 'synced';
-          }));
+        if (record.deleted) {
+          // Soft delete lokal, cari row, kalau ada, mark deleted_at
+          const existing = await collection.find(record.id).catch(() => null);
+          if (existing) {
+            batch.push(existing.prepareUpdate((r: any) => {
+              r.deletedAt = Date.now();
+              r.serverVersion = record.serverVersion;
+              // Mark as synced agar tidak dianggap dirty di collectDirty() berikutnya
+              r._raw._status = 'synced';
+            }));
+          }
         } else {
-          // Gunakan prepareCreateFromDirtyRaw + database.batch(), official
-          // WatermelonDB API untuk record dengan custom ID (server UUID).
-          // Pola lama (collection.prepareCreate + r._raw.id = record.id)
-          // tidak didukung resmi WatermelonDB dan bisa bikin row korup.
-          // Pola ini sudah dipakai di OrdersScreen fetchPool
-          // dan outbox enqueue*, sekarang applyPull catch up.
-          //
-          // Field mapping parallel dengan applyServerDataToLocalRow (update
-          // path). Lihat buildRawRowForCreate JSDoc untuk Decision rationale
-          // kenapa dua function terpisah, bukan shared mapping spec.
-          const preparedRecord = collection.prepareCreateFromDirtyRaw(
-            this.buildRawRowForCreate(record),
-          );
-          batch.push(preparedRecord);
+          // Upsert: create kalau belum ada, update kalau sudah ada
+          const existing = await collection.find(record.id).catch(() => null);
+
+          if (existing) {
+            // Versi order lokal tidak boleh turun: aksi outbox yang baru
+            // sukses (misalnya update_status atau cancel) menulis
+            // server_version dari respons, sedangkan pull yang datanya
+            // diambil lebih dulu membawa versi lama. Kalau baris itu
+            // tertimpa, aksi status berikutnya mengirim versi lama dan
+            // ditolak VERSION_CONFLICT. Nilai lokal yang bukan angka tidak
+            // dibandingkan, baris diperbarui.
+            if (record.entityType === 'order') {
+              const localVersion = existing._getRaw('server_version');
+              if (typeof localVersion === 'number' && localVersion > record.serverVersion) {
+                continue;
+              }
+            }
+            batch.push(existing.prepareUpdate((r: any) => {
+              this.applyServerDataToLocalRow(r, record);
+              // Mark as synced agar tidak dianggap dirty di collectDirty() berikutnya
+              r._raw._status = 'synced';
+            }));
+          } else {
+            // Gunakan prepareCreateFromDirtyRaw + database.batch(), official
+            // WatermelonDB API untuk record dengan custom ID (server UUID).
+            // Pola lama (collection.prepareCreate + r._raw.id = record.id)
+            // tidak didukung resmi WatermelonDB dan bisa bikin row korup.
+            // Pola ini sudah dipakai di OrdersScreen fetchPool
+            // dan outbox enqueue*, sekarang applyPull catch up.
+            //
+            // Field mapping parallel dengan applyServerDataToLocalRow (update
+            // path). Lihat buildRawRowForCreate JSDoc untuk Decision rationale
+            // kenapa dua function terpisah, bukan shared mapping spec.
+            const preparedRecord = collection.prepareCreateFromDirtyRaw(
+              this.buildRawRowForCreate(record),
+            );
+            batch.push(preparedRecord);
+          }
         }
       }
-    }
 
-    if (batch.length > 0) {
-      await database.write(async () => {
+      if (batch.length > 0) {
         await database.batch(...batch);
-      });
-    }
+      }
+    });
 
     await saveCursor(pull.nextCursor);
   }
