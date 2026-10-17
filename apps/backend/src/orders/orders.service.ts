@@ -90,13 +90,22 @@ export class OrdersService {
    *
    * Urutan cek:
    * 1. Order tidak ditemukan jadi 404 NotFound
-   * 2. userId !== order.driverId jadi 403 Forbidden
+   * 2. driverId order bukan pemanggil:
+   *    - version order beda dengan expectedVersion jadi 409 ORDER_REASSIGNED
+   *      (order sudah berpindah ke driver lain sejak aplikasi membacanya)
+   *    - version sama jadi 403 ORDER_NOT_ASSIGNED
    * 3. nextStatus bukan OUT_FOR_DELIVERY atau DELIVERED jadi 403 Forbidden
-   * 4. current.status tidak cocok dengan sumber yang diharapkan untuk
+   * 4. current.status sudah sama dengan target: anggap kiriman ulang dari
+   *    driver yang sama setelah respons pertama hilang. Kembalikan order apa
+   *    adanya, tanpa menulis dan tanpa event. expectedVersion tidak dicek
+   *    di sini: OUT_FOR_DELIVERY dan DELIVERED milik driver pemanggil hanya
+   *    bisa dicapai lewat PATCH driver itu sendiri, dan HP bisa sudah
+   *    menerima versi baru lewat pull sebelum mengirim ulang.
+   * 5. current.status tidak cocok dengan sumber yang diharapkan untuk
    *    nextStatus jadi 409 INVALID_TRANSITION
-   *    (mis. DELIVERED diminta dari PREPARING, OUT_FOR_DELIVERY diminta
-   *    saat sudah OUT_FOR_DELIVERY)
-   * 5. Prisma update P2025 jadi 409 VERSION_CONFLICT
+   *    (mis. DELIVERED diminta dari PREPARING, OUT_FOR_DELIVERY diminta dari
+   *    DELIVERED atau CANCELLED)
+   * 6. Prisma update P2025 jadi 409 VERSION_CONFLICT
    *
    * Setelah sukses: emit order:status_updated ke customer room (satu kali).
    * Tidak ada emitOrderUnavailable, dua transisi ini tidak pernah berasal
@@ -140,9 +149,21 @@ export class OrdersService {
     const current = await this.prisma.order.findUnique({ where: { id } });
     if (!current) throw new NotFoundException(`Order ${id} tidak ditemukan`);
 
-    // Cek 2: bukan driver order jadi 403
+    // Cek 2: driver order bukan pemanggil. Versi beda berarti order sudah
+    // berpindah ke driver lain sejak aplikasi membacanya (409). Versi sama
+    // berarti order memang bukan milik pemanggil (403). Pola sama dengan
+    // cabang yang sama di cancelOrder di file ini.
     if (current.driverId !== userId) {
-      throw new ForbiddenException('Order ini bukan milik Anda');
+      if (current.version !== expectedVersion) {
+        throw new ConflictException({
+          code: 'ORDER_REASSIGNED',
+          message: 'Order ini sudah dipindahkan ke driver lain.',
+        });
+      }
+      throw new ForbiddenException({
+        code: 'ORDER_NOT_ASSIGNED',
+        message: 'Order ini tidak ditugaskan ke Anda',
+      });
     }
 
     // Cek 3: target bukan OUT_FOR_DELIVERY atau DELIVERED jadi 403
@@ -152,7 +173,15 @@ export class OrdersService {
       );
     }
 
-    // Cek 4: sumber tidak cocok dengan target jadi 409 INVALID_TRANSITION
+    // Cek 4: status order sudah sama dengan target. Anggap kiriman ulang
+    // dari driver yang sama setelah respons pertama hilang. Kembalikan
+    // order apa adanya, tanpa menulis dan tanpa event. expectedVersion
+    // sengaja tidak dicek di sini (alasannya di komentar fungsi).
+    if (current.status === nextStatus) {
+      return this.toDomain(current);
+    }
+
+    // Cek 5: sumber tidak cocok dengan target jadi 409 INVALID_TRANSITION
     const expectedSource = OrdersService.PATCH_STATUS_EXPECTED_SOURCE[nextStatus];
     if (current.status !== expectedSource) {
       throw new ConflictException({
@@ -181,7 +210,7 @@ export class OrdersService {
 
       return this.toDomain(updated);
     } catch (err) {
-      // Cek 5: OCC conflict jadi 409 VERSION_CONFLICT (pola sama dengan
+      // Cek 6: OCC conflict jadi 409 VERSION_CONFLICT (pola sama dengan
       // releaseToPool/acceptOrder).
       const error = err as { code?: string };
       if (error.code === 'P2025') {

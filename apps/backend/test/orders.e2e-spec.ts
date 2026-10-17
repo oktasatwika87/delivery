@@ -388,24 +388,26 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
-    test('403: driver lain (bukan driverId order) jadi ditolak', async () => {
+    test('403: driver lain (bukan driverId order) jadi ditolak dengan body.code ORDER_NOT_ASSIGNED', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000f04';
       // Order ini dimiliki driverUserId. driver2UserId (driver lain) coba PATCH.
       await createOrderWithDriver(orderId, OrderStatusDb.PREPARING, driverUserId);
       const driver2Token = generateToken(driver2UserId, UserRole.DRIVER);
       try {
         // driver2Token != driverUserId jadi 403
-        await request(app.getHttpServer())
+        const r1 = await request(app.getHttpServer())
           .patch(`/orders/${orderId}/status`)
           .set('Authorization', `Bearer ${driver2Token}`)
-          .send({ status: 'OUT_FOR_DELIVERY', version: 1 })
-          .expect(403);
+          .send({ status: 'OUT_FOR_DELIVERY', version: 1 });
+        expect(r1.status).toBe(403);
+        expect(r1.body.code).toBe('ORDER_NOT_ASSIGNED');
         // Tetap 403 untuk target DELIVERED juga
-        await request(app.getHttpServer())
+        const r2 = await request(app.getHttpServer())
           .patch(`/orders/${orderId}/status`)
           .set('Authorization', `Bearer ${driver2Token}`)
-          .send({ status: 'DELIVERED', version: 1 })
-          .expect(403);
+          .send({ status: 'DELIVERED', version: 1 });
+        expect(r2.status).toBe(403);
+        expect(r2.body.code).toBe('ORDER_NOT_ASSIGNED');
       } finally {
         await cleanupOrder(orderId);
       }
@@ -513,6 +515,74 @@ describe('Orders (e2e) - accept/reject', () => {
           .expect(200);
         // Status pasti OUT_FOR_DELIVERY (bukan canceled/dll)
         expect(resp.body.status).toBe(OrderStatus.OUT_FOR_DELIVERY);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    // Order PREPARING milik driver1 dengan versi 3 (diatur lewat prisma
+    // setelah dibuat), driver2 PATCH dengan version 2 -> 409 ORDER_REASSIGNED.
+    // DB tidak berubah.
+    test('409 ORDER_REASSIGNED: driver lain, versi kiriman beda dengan versi order, DB tidak berubah', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f0c';
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING, driverUserId);
+      // Versi dinaikkan langsung lewat prisma, seolah order sudah pindah
+      // dari driver2 ke driver1 setelah driver2 membacanya.
+      await prisma.order.update({
+        where: { id: orderId },
+        data: { version: 3 },
+      });
+      const driver2Token = generateToken(driver2UserId, UserRole.DRIVER);
+      try {
+        const resp = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driver2Token}`)
+          .send({ status: 'OUT_FOR_DELIVERY', version: 2 });
+        expect(resp.status).toBe(409);
+        expect(resp.body.code).toBe('ORDER_REASSIGNED');
+
+        // DB: status, driver, dan versi tidak berubah dari 3
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.status).toBe(OrderStatusDb.PREPARING);
+        expect(dbOrder?.driverId).toBe(driverUserId);
+        expect(dbOrder?.version).toBe(3);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    // Kiriman ulang PATCH dengan versi lama (respons pertama hilang):
+    // permintaan pertama sukses (200, versi 2), permintaan kedua dengan
+    // versi sama (1) tetap 200 dengan body.status OUT_FOR_DELIVERY dan
+    // body.version 2; versi di DB tidak naik lagi.
+    test('200: kiriman ulang PATCH dengan versi lama tetap sukses tanpa mengubah order', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000f0d';
+      await createOrderWithDriver(orderId, OrderStatusDb.PREPARING);
+      try {
+        // Permintaan pertama: sukses, versi naik 1 -> 2
+        const r1 = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'OUT_FOR_DELIVERY', version: 1 });
+        expect(r1.status).toBe(200);
+        expect(r1.body.status).toBe(OrderStatus.OUT_FOR_DELIVERY);
+        expect(r1.body.version).toBe(2);
+
+        // Permintaan kedua dengan versi sama (1, kiriman ulang setelah
+        // batas waktu 8 detik di app): dianggap kiriman ulang, sukses
+        // dengan status dan versi server.
+        const r2 = await request(app.getHttpServer())
+          .patch(`/orders/${orderId}/status`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ status: 'OUT_FOR_DELIVERY', version: 1 });
+        expect(r2.status).toBe(200);
+        expect(r2.body.status).toBe(OrderStatus.OUT_FOR_DELIVERY);
+        expect(r2.body.version).toBe(2);
+
+        // DB: versi tetap 2 (permintaan kedua tidak menulis)
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.version).toBe(2);
+        expect(dbOrder?.status).toBe(OrderStatusDb.OUT_FOR_DELIVERY);
       } finally {
         await cleanupOrder(orderId);
       }
