@@ -248,4 +248,62 @@ describe('outbox enqueue - regression prepareCreateFromDirtyRaw with real LokiJS
     // isPendingActionStale tidak diuji di sini: decorator @date tidak aktif
     // di Jest, jadi umur aksi selalu terbaca 0.
   });
+
+  // Aksi update_status dipakai driver untuk Mulai antar dan Selesai diantar
+  // lewat outbox. Aksi ditulis seperti enqueue* lain: kolom di _raw, dibuat
+  // di dalam satu database.write, created_at terisi.
+  describe('enqueueUpdateStatus', () => {
+    it('menulis action_type update_status, payload_json, idempotency_key, status pending, dan created_at > 0', async () => {
+      const { enqueueUpdateStatus: enqueue } = require('./outbox');
+
+      const result = await enqueue('order-status-regress', 'OUT_FOR_DELIVERY');
+      expect(result.success).toBe(true);
+      expect(result.pendingActionId).toBeDefined();
+
+      const all = await db.get<PendingActionModel>('pending_actions').query().fetch();
+      const action = all.find((a) => a._getRaw('target_order_id') === 'order-status-regress');
+      expect(action).toBeDefined();
+      expect(action!._getRaw('action_type')).toBe('update_status');
+      expect(action!._getRaw('payload_json')).toBe('{"status":"OUT_FOR_DELIVERY"}');
+      expect(action!._getRaw('idempotency_key')).toBe('status:order-status-regress:OUT_FOR_DELIVERY');
+      expect(action!._getRaw('status')).toBe('pending');
+      expect(action!._getRaw('created_at')).toBeGreaterThan(0);
+      expect(action!._raw._status).toBe('synced');
+    });
+
+    it('pemanggilan kedua dengan target sama: tidak menambah baris, kembalikan id yang sama', async () => {
+      const { enqueueUpdateStatus: enqueue } = require('./outbox');
+
+      const first = await enqueue('order-dup-status', 'DELIVERED');
+      const second = await enqueue('order-dup-status', 'DELIVERED');
+
+      expect(first.success).toBe(true);
+      expect(second.success).toBe(true);
+      expect(second.pendingActionId).toBe(first.pendingActionId);
+
+      const matched = await db
+        .get<PendingActionModel>('pending_actions')
+        .query(Q.where('target_order_id', 'order-dup-status'))
+        .fetch();
+      expect(matched).toHaveLength(1);
+    });
+
+    it('target DELIVERED untuk order yang sama: membuat baris baru (idempotency_key beda)', async () => {
+      const { enqueueUpdateStatus: enqueue } = require('./outbox');
+
+      await enqueue('order-chain', 'OUT_FOR_DELIVERY');
+      await enqueue('order-chain', 'DELIVERED');
+
+      const matched = await db
+        .get<PendingActionModel>('pending_actions')
+        .query(Q.where('target_order_id', 'order-chain'))
+        .fetch();
+      expect(matched).toHaveLength(2);
+      const targets = matched.map((a) => a._getRaw('idempotency_key')).sort();
+      expect(targets).toEqual([
+        'status:order-chain:DELIVERED',
+        'status:order-chain:OUT_FOR_DELIVERY',
+      ]);
+    });
+  });
 });

@@ -1,25 +1,38 @@
 /**
- * Outbox aksi driver (reject, cancel, collect_cod), supaya aksi tetap bisa
- * dicatat tanpa sinyal.
+ * Outbox aksi driver (reject, cancel, collect_cod, update_status), supaya
+ * aksi tetap bisa dicatat tanpa sinyal.
  *
  * Aksi ditulis ke tabel pending_actions lokal, lalu dikirim lewat
- * drainPendingActions. Pengiriman berjalan berurutan dan mengambil aksi
- * 'pending' dan 'syncing' (aksi yang terputus di tengah pengiriman, misalnya
- * karena aplikasi ditutup paksa).
+ * drainPendingActions. Pengiriman berjalan berurutan per order (lihat
+ * penjaga urutan di runDrainOnce) dan mengambil aksi 'pending' dan
+ * 'syncing' (aksi yang terputus di tengah pengiriman, misalnya karena
+ * aplikasi ditutup paksa).
  *
- * Hasil tiap aksi dipilah dari jenis galatnya (UnauthorizedError, atau ApiError
- * dengan status dan code), bukan dari teks pesan:
- * - sukses: aksi dihapus; untuk collect_cod, payment dari respons ditulis ke
- *   baris lokal di batch yang sama, jadi layar detail tidak menunggu pull;
- * - 409 ORDER_REASSIGNED dan COD_ALREADY_CAPTURED: aksi dihapus dan alasannya
- *   ditulis ke last_conflict_reason order itu;
+ * Hasil tiap aksi dipilah dari jenis galatnya (UnauthorizedError, atau
+ * ApiError dengan status dan code), bukan dari teks pesan:
+ * - sukses: aksi dihapus; untuk collect_cod, payment dari respons ditulis
+ *   ke baris lokal di batch yang sama, jadi layar detail tidak menunggu
+ *   pull;
+ * - 409 ORDER_REASSIGNED dan COD_ALREADY_CAPTURED: aksi dihapus dan
+ *   alasannya ditulis ke last_conflict_reason order itu; ORDER_REASSIGNED
+ *   juga menghapus semua update_status/cancel/reject untuk order itu karena
+ *   order sudah bukan milik driver;
  * - 409 lain untuk cancel dan reject: handleVersionConflict;
- * - 4xx lain (termasuk 409 lain untuk COD): aksi menjadi 'failed' dan tidak
- *   dikirim lagi sampai driver memilih Coba lagi di layar detail. Pada COD,
- *   403 ORDER_NOT_ASSIGNED dan 404 menjadi yatim;
+ * - 4xx lain (termasuk 409 lain untuk COD dan update_status): aksi
+ *   menjadi 'failed' dan tidak dikirim lagi sampai driver memilih Coba
+ *   lagi. Pada COD, 403 ORDER_NOT_ASSIGNED dan 404 menjadi yatim;
  * - 408, 429, 5xx, galat jaringan, batas waktu, dan 401: aksi kembali
- *   'pending'. Galat jaringan, batas waktu, dan 401 juga menghentikan putaran
- *   itu.
+ *   'pending'. Galat jaringan, batas waktu, dan 401 juga menghentikan
+ *   putaran itu.
+ *
+ * Aksi update_status, cancel, dan reject untuk order yang sama dikirim
+ * urut per order (lihat runDrainOnce). update_status DELIVERED menunggu
+ * sampai COD tercatat lokal. collect_cod tidak menunggu.
+ *
+ * Aksi collect_cod yang yatim (order sudah tidak ditugaskan) menghapus
+ * semua update_status/cancel/reject untuk order itu dalam database.write
+ * yang sama, supaya Selesai diantar yang antre di belakang COD yatim
+ * tidak menunggu selamanya.
  */
 
 import { Model, Q } from '@nozbe/watermelondb';
@@ -27,12 +40,26 @@ import type { Database } from '@nozbe/watermelondb';
 import type { Payment } from '@delivery/shared';
 
 import { database } from '../db';
-import { PendingActionModel, type CancelPayload, type CollectCodPayload } from '../db/models/PendingActionModel';
+import {
+  PendingActionModel,
+  type CancelPayload,
+  type CollectCodPayload,
+  type UpdateStatusPayload,
+  readUpdateStatusTarget,
+} from '../db/models/PendingActionModel';
 import { OrderModel } from '../db/models/OrderModel';
 import { PaymentModel } from '../db/models/PaymentModel';
 import { syncEvents } from './syncEvents';
 import { getCurrentUserId } from './session';
-import { rejectOrder, cancelOrder, collectCodOrder, flagOrphanedCod, ApiError, UnauthorizedError } from './client';
+import {
+  rejectOrder,
+  cancelOrder,
+  collectCodOrder,
+  updateOrderStatus,
+  flagOrphanedCod,
+  ApiError,
+  UnauthorizedError,
+} from './client';
 import { generateCodIdempotencyKey } from './idempotency';
 import { syncCoordinator } from './coordinator';
 
@@ -50,6 +77,8 @@ export interface EnqueueResult {
  *   handleVersionConflict); aksi dihapus.
  * - 'orphaned': COD untuk order yang sudah tidak ditugaskan ke driver ini;
  *   aksi menjadi 'orphaned_needs_review'.
+ * - 'waiting': aksi dilewati penjaga urutan per order, atau update_status
+ *   DELIVERED menunggu COD; aksi tidak berubah dan putaran lanjut.
  * - 'failed': aksi tidak terkirim di putaran ini, entah kembali 'pending'
  *   (dikirim lagi nanti) atau menjadi 'failed' (menunggu Coba lagi).
  *
@@ -58,7 +87,7 @@ export interface EnqueueResult {
  */
 export interface ProcessResult {
   pendingActionId: string;
-  status: 'success' | 'conflict' | 'orphaned' | 'failed';
+  status: 'success' | 'conflict' | 'orphaned' | 'waiting' | 'failed';
   error?: string;
   stopDrain?: boolean;
 }
@@ -227,6 +256,74 @@ export async function enqueueCollectCod(
 }
 
 /**
+ * Mengantre aksi status untuk order (Mulai antar / Selesai diantar), supaya
+ * driver bisa menaikkan status tanpa sinyal. Aksi dikirim lewat outbox, urut
+ * per order (lihat runDrainOnce).
+ *
+ * Kalau sudah ada aksi untuk order itu dengan target status yang sama
+ * (idempotency_key `status:<orderId>:<status>`), tidak ada aksi baru dan id
+ * aksi yang sudah ada dikembalikan, supaya ketukan kedua pada tombol yang
+ * sama tidak membuat aksi kedua.
+ */
+export async function enqueueUpdateStatus(
+  orderId: string,
+  status: 'OUT_FOR_DELIVERY' | 'DELIVERED',
+): Promise<EnqueueResult> {
+  try {
+    const userId = await getCurrentUserId();
+    if (!userId) {
+      return { success: false, error: 'Not authenticated' };
+    }
+
+    const idempotencyKey = `status:${orderId}:${status}`;
+    const payload: UpdateStatusPayload = { status };
+
+    const pendingActionId = generateUUID();
+
+    const enqueueResult = await database.write(async () => {
+      // Cek aksi yang sama dan pembuatan aksi berada di database.write yang
+      // sama, supaya dua ketukan yang hampir bersamaan tidak membuat dua aksi.
+      const existing = await database
+        .get<PendingActionModel>('pending_actions')
+        .query(
+          Q.where('target_order_id', orderId),
+          Q.where('idempotency_key', idempotencyKey),
+        )
+        .fetch();
+      if (existing.length > 0) {
+        return existing[0].id;
+      }
+      // expected_version 0: versi dibaca dari baris lokal saat aksi dikirim,
+      // bukan saat aksi dibuat.
+      const now = Date.now();
+      const preparedRecord = database.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
+        id: pendingActionId,
+        _status: 'synced',
+        _changed: '',
+        action_type: 'update_status',
+        target_order_id: orderId,
+        expected_version: 0,
+        idempotency_key: idempotencyKey,
+        payload_json: JSON.stringify(payload),
+        status: 'pending',
+        created_at: now,
+        updated_at: now,
+      });
+      await database.batch(preparedRecord);
+      return pendingActionId;
+    });
+
+    if (enqueueResult === pendingActionId) {
+      console.log(`[outbox] enqueued update_status action for order ${orderId}, target=${status}, pendingActionId=${pendingActionId}`);
+    }
+    return { success: true, pendingActionId: enqueueResult };
+  } catch (err) {
+    console.error('[outbox] failed to enqueue update_status:', err);
+    return { success: false, error: String(err) };
+  }
+}
+
+/**
  * Check if an order has any pending actions in the outbox.
  * Used by UI to show a badge/indicator.
  */
@@ -336,6 +433,21 @@ async function runDrainOnce(db: Database): Promise<ProcessResult[]> {
   const results: ProcessResult[] = [];
 
   for (const action of pendingActions) {
+    // Penjaga urutan: aksi selain collect_cod menunggu sampai aksi yang
+    // lebih tua untuk order yang sama selesai, dan update_status DELIVERED
+    // menunggu COD tercatat. Dibaca ulang dari database (bukan dari daftar
+    // di awal putaran) supaya aksi yang lebih tua yang baru saja dihapus
+    // atau berubah di putaran ini tidak menahan.
+    const skipReason = await shouldSkipAction(action, db);
+    if (skipReason !== null) {
+      results.push({
+        pendingActionId: action.id,
+        status: 'waiting',
+        error: skipReason,
+      });
+      continue;
+    }
+
     const result = await processPendingAction(action, db);
     results.push(result);
     // Galat jaringan, batas waktu, atau 401: putaran ini berhenti, aksi sisanya
@@ -348,6 +460,74 @@ async function runDrainOnce(db: Database): Promise<ProcessResult[]> {
 
   console.log(`[outbox] Drain complete: ${results.length} actions processed`);
   return results;
+}
+
+/**
+ * Penjaga urutan per order. Mengembalikan teks alasan (ditulis ke
+ * ProcessResult.error) kalau aksi harus dilewati, atau null kalau aksi boleh
+ * diproses. Tanpa permintaan, status aksi tidak diubah, putaran lanjut ke
+ * aksi berikutnya.
+ *
+ * - collect_cod: selalu lolos. COD sudah diterima driver, server mencatat
+ *   tanpa melihat status order.
+ * - Aksi lain (reject, cancel, update_status): menunggu kalau ada aksi lain
+ *   untuk order yang sama dengan `created_at` lebih kecil. Status aksi apa
+ *   pun (pending/syncing/failed/orphaned_needs_review) ikut menahan, karena
+ *   misalnya 'failed' belum tentu permanen (driver bisa pilih Coba lagi).
+ * - update_status dengan target DELIVERED: tambahan syarat, menunggu sampai
+ *   payment order dengan method CASH dan status CAPTURED tercatat lokal.
+ */
+async function shouldSkipAction(
+  action: PendingActionModel,
+  db: Database,
+): Promise<string | null> {
+  if (action.actionType === 'collect_cod') {
+    return null;
+  }
+
+  // update_status DELIVERED: tunggu payment CASH CAPTURED.
+  if (action.actionType === 'update_status') {
+    const target = readUpdateStatusTarget(action.payloadJson);
+    if (target === 'DELIVERED') {
+      const codCaptured = await db
+        .get<PaymentModel>('payments')
+        .query(
+          Q.where('order_id', action.targetOrderId),
+          Q.where('method', 'CASH'),
+          Q.where('status', 'CAPTURED'),
+        )
+        .fetch();
+      if (codCaptured.length === 0) {
+        return 'COD belum tercatat';
+      }
+    }
+  }
+
+  // Tunggu aksi yang lebih tua untuk order yang sama.
+  const currentCreatedAt = getActionCreatedAtMs(action);
+  const olderActions = await db
+    .get<PendingActionModel>('pending_actions')
+    .query(
+      Q.where('target_order_id', action.targetOrderId),
+      Q.where('created_at', Q.lt(currentCreatedAt)),
+    )
+    .fetch();
+  if (olderActions.length > 0) {
+    return `menunggu aksi yang lebih tua untuk order ${action.targetOrderId}`;
+  }
+
+  return null;
+}
+
+/**
+ * Waktu pembuatan aksi dalam milidetik, untuk dibandingkan dengan kolom
+ * number `created_at` di query. Di model nilainya Date; nilai selain Date
+ * diubah dengan Number().
+ */
+function getActionCreatedAtMs(action: PendingActionModel): number {
+  const createdAt = action.createdAt;
+  if (createdAt instanceof Date) return createdAt.getTime();
+  return Number(createdAt);
 }
 
 /**
@@ -374,6 +554,8 @@ async function processPendingAction(
         return await processCancel(action, db);
       case 'collect_cod':
         return await processCollectCod(action, db);
+      case 'update_status':
+        return await processUpdateStatus(action, db);
       default:
         console.warn(`[outbox] Unknown action type: ${action.actionType}`);
         await markActionFailed(action, db, 'Unknown action type');
@@ -521,6 +703,17 @@ async function classifyAndHandleRejectError(
  * Tulis last_conflict_reason dan last_conflict_at ke baris order lokal lalu
  * hapus aksinya, dalam satu batch. Baris ditutup 'synced' supaya kolom lokal
  * ini tidak membuat baris ikut push.
+ *
+ * Untuk reason 'reassigned' (ORDER_REASSIGNED dari server): selain aksi
+ * yang sedang diproses, semua aksi update_status/cancel/reject lain untuk
+ * order itu ikut dihapus, karena order sudah bukan milik driver dan aksi
+ * itu tidak akan diterima server. Aksi collect_cod tidak dihapus, karena
+ * uangnya sudah diterima driver; kalau server menolaknya, aksi itu menjadi
+ * yatim lewat markActionOrphaned.
+ *
+ * Untuk reason 'cancel-cod-captured': hanya aksi yang sedang diproses yang
+ * dihapus; aksi status lain untuk order itu (misalnya update_status
+ * DELIVERED) tetap berlaku.
  */
 async function writeRejectConflictAndDelete(
   action: PendingActionModel,
@@ -536,6 +729,28 @@ async function writeRejectConflictAndDelete(
 
   await db.write(async () => {
     const ops: Model[] = [action.prepareDestroyPermanently()];
+    if (reason === 'reassigned') {
+      // Untuk 'reassigned', hapus semua update_status/cancel/reject untuk order
+      // itu (status aksi apa pun: pending, syncing, failed). Aksi collect_cod
+      // tetap utuh; bila perlu yatim, ditangani di markActionOrphaned.
+      // Aksi lain dicari dan disiapkan untuk dihapus di dalam db.write yang
+      // sama dengan batch, supaya penulisan lain (misalnya Coba lagi dari
+      // layar) tidak mengubah baris yang sama di antaranya.
+      const siblings = await db
+        .get<PendingActionModel>('pending_actions')
+        .query(Q.where('target_order_id', action.targetOrderId))
+        .fetch();
+      for (const sibling of siblings) {
+        if (sibling.id === action.id) continue;
+        if (
+          sibling.actionType === 'update_status' ||
+          sibling.actionType === 'cancel' ||
+          sibling.actionType === 'reject'
+        ) {
+          ops.push(sibling.prepareDestroyPermanently());
+        }
+      }
+    }
     if (orderRow) {
       ops.push(orderRow.prepareUpdate((r) => {
         r._setRaw('last_conflict_reason', reason);
@@ -761,6 +976,152 @@ async function classifyAndHandleCodError(
 }
 
 /**
+ * Kirim aksi update_status (Mulai antar / Selesai diantar).
+ *
+ * Sukses: baris order lokal ditulis dari respons (status, server_version,
+ * updated_at, driver_id, cancelled_by, cancel_reason) dan aksi dihapus
+ * dalam satu batch. Tanpa event orderConflict atau pool-refresh.
+ *
+ * Versi yang dikirim dibaca dari baris lokal saat kirim (expected_version
+ * aksi ini selalu 0), supaya aksi berikutnya untuk order yang sama memakai
+ * versi dari respons aksi sebelumnya.
+ */
+async function processUpdateStatus(
+  action: PendingActionModel,
+  db: Database,
+): Promise<ProcessResult> {
+  const target = readUpdateStatusTarget(action.payloadJson);
+  if (target === null) {
+    await markActionFailed(action, db, 'Invalid payload');
+    return { pendingActionId: action.id, status: 'failed', error: 'Invalid payload' };
+  }
+
+  let orderRow: OrderModel | null = null;
+  try {
+    orderRow = await db.get<OrderModel>('orders').find(action.targetOrderId);
+  } catch (err) {
+    console.warn(
+      `[outbox] Order ${action.targetOrderId} not found locally for update_status:`,
+      err,
+    );
+  }
+  if (!orderRow) {
+    await markActionFailed(action, db, 'Order not found');
+    return { pendingActionId: action.id, status: 'failed', error: 'Order not found' };
+  }
+
+  // server_version dibaca dari _raw, sama dengan penjaga versi di applyPull.
+  // Kalau bukan angka, dikirim 0: server menolaknya (400), jadi aksi menjadi
+  // 'failed' dan tampil di layar detail.
+  const rawVersion = orderRow._getRaw('server_version');
+  const currentVersion = typeof rawVersion === 'number' ? rawVersion : 0;
+
+  try {
+    const response = await updateOrderStatus(action.targetOrderId, target, currentVersion);
+    console.log(`[outbox] update_status succeeded for order ${action.targetOrderId}:`, response.status);
+
+    await db.write(async () => {
+      const ops: Model[] = [action.prepareDestroyPermanently()];
+      const updatedAtRaw = Date.parse(response.updatedAt);
+      const updatedAtMs = Number.isFinite(updatedAtRaw) ? updatedAtRaw : Date.now();
+      if (orderRow) {
+        ops.push(orderRow.prepareUpdate((r) => {
+          r._setRaw('status', response.status);
+          r._setRaw('server_version', response.version);
+          r._setRaw('updated_at', updatedAtMs);
+          r._setRaw('driver_id', response.driverId ?? null);
+          r._setRaw('cancelled_by', response.cancelledBy ?? null);
+          r._setRaw('cancel_reason', response.cancelReason ?? null);
+          r._setRaw('last_conflict_reason', null);
+          r._setRaw('last_conflict_at', null);
+          r._raw._status = 'synced';
+          r._raw._changed = '';
+        }));
+      }
+      await db.batch(...ops);
+    });
+
+    return { pendingActionId: action.id, status: 'success' };
+  } catch (err) {
+    return await classifyAndHandleUpdateStatusError(action, db, err);
+  }
+}
+
+/**
+ * Pilah galat update_status. Aturan khusus untuk aksi ini (lihat juga
+ * writeRejectConflictAndDelete untuk ORDER_REASSIGNED):
+ * - UnauthorizedError dan ApiError 401: kembali pending, stopDrain.
+ * - Galat jaringan atau batas waktu: kembali pending, stopDrain.
+ * - 408, 429, 5xx: kembali pending, lanjut.
+ * - 409 ORDER_REASSIGNED: tulis 'reassigned' ke order, hapus semua aksi
+ *   update_status/cancel/reject untuk order itu.
+ * - 409 lain (INVALID_TRANSITION, VERSION_CONFLICT, PAYMENT_NOT_CAPTURED,
+ *   atau tanpa code): 'failed', pullNow. Aksi update_status/cancel/reject
+ *   yang lebih baru untuk order itu ditahan penjaga urutan sampai driver
+ *   memilih Coba lagi atau Abaikan.
+ * - 4xx lain (400, 403 dengan/tanpa code, 404): 'failed'.
+ */
+async function classifyAndHandleUpdateStatusError(
+  action: PendingActionModel,
+  db: Database,
+  err: unknown,
+): Promise<ProcessResult> {
+  if (err instanceof UnauthorizedError) {
+    console.warn(`[outbox] Unauthorized update_status ${action.id}: ${err.message}`);
+    await resetActionForRetry(action, db, err.message);
+    return { pendingActionId: action.id, status: 'failed', error: err.message, stopDrain: true };
+  }
+
+  if (err instanceof ApiError) {
+    const { status, code } = err;
+
+    // 401: sesi berakhir, diperlakukan sama dengan UnauthorizedError di
+    // atas. Dicek sebelum cabang 4xx lain agar tidak jatuh ke 'failed'
+    // permanen.
+    if (status === 401) {
+      console.warn(`[outbox] ApiError 401 on update_status ${action.id}: ${err.message}`);
+      await resetActionForRetry(action, db, err.message);
+      return { pendingActionId: action.id, status: 'failed', error: err.message, stopDrain: true };
+    }
+
+    if (status === 409 && code === 'ORDER_REASSIGNED') {
+      console.warn(`[outbox] Order reassigned on update_status: ${action.targetOrderId}`);
+      return await writeRejectConflictAndDelete(action, db, 'reassigned');
+    }
+
+    if (status === 409) {
+      // INVALID_TRANSITION, VERSION_CONFLICT, PAYMENT_NOT_CAPTURED, atau tanpa
+      // code. Tandai gagal dan tarik data order terbaru dari server supaya
+      // baris lokal sama dengan data server.
+      console.warn(`[outbox] 409 on update_status ${action.id} (code=${code ?? 'none'})`);
+      await markActionFailed(action, db, err.message);
+      try {
+        await syncCoordinator.pullNow();
+      } catch (pullErr) {
+        console.warn('[outbox] pullNow after update_status 409 failed:', pullErr);
+      }
+      return { pendingActionId: action.id, status: 'failed', error: err.message };
+    }
+
+    if (status === 408 || status === 429 || (status >= 500 && status < 600)) {
+      console.warn(`[outbox] Transient ${status} on update_status ${action.id}: ${err.message}`);
+      await resetActionForRetry(action, db, err.message);
+      return { pendingActionId: action.id, status: 'failed', error: err.message };
+    }
+
+    // 4xx lain (400, 403 dengan/tanpa code, 404): 'failed'.
+    console.warn(`[outbox] update_status rejected with ${status} (${code ?? 'no code'})`);
+    await markActionFailed(action, db, err.message);
+    return { pendingActionId: action.id, status: 'failed', error: err.message };
+  }
+
+  const msg = err instanceof Error ? err.message : String(err);
+  console.warn(`[outbox] Unexpected update_status error for ${action.id}: ${msg}`);
+  await resetActionForRetry(action, db, msg);
+  return { pendingActionId: action.id, status: 'failed', error: msg, stopDrain: true };
+}
+
+/**
  * Pemeriksa bentuk `Payment` untuk data dari server: setiap field wajib ada
  * dan jenisnya sesuai.
  */
@@ -950,6 +1311,11 @@ async function handleVersionConflict(action: PendingActionModel, db: Database, r
  * Tandai aksi COD sebagai yatim: uangnya sudah diterima driver, tapi order
  * sudah tidak ditugaskan ke driver ini. Aksi 'orphaned_needs_review' tidak
  * dikirim lagi, dan layar detail meminta driver menghubungi support.
+ *
+ * Dalam database.write yang sama dengan penandaan yatim, semua aksi
+ * update_status, cancel, dan reject untuk order itu dihapus, karena order
+ * sudah bukan milik driver. Tanpa ini, Selesai diantar yang antre di
+ * belakang COD menunggu aksi COD yatim yang tidak akan pernah selesai.
  */
 async function markActionOrphaned(action: PendingActionModel, db: Database): Promise<void> {
   console.log(`[outbox] Marking action ${action.id} as orphaned_needs_review`);
@@ -958,6 +1324,27 @@ async function markActionOrphaned(action: PendingActionModel, db: Database): Pro
     await action.update((row) => {
       row.status = 'orphaned_needs_review';
     });
+    // Aksi lain dicari dan disiapkan untuk dihapus di dalam db.write yang
+    // sama dengan batch, supaya penulisan lain (misalnya Coba lagi dari
+    // layar) tidak mengubah baris yang sama di antaranya.
+    const siblings = await db
+      .get<PendingActionModel>('pending_actions')
+      .query(Q.where('target_order_id', action.targetOrderId))
+      .fetch();
+    const extraOps: Model[] = [];
+    for (const sibling of siblings) {
+      if (sibling.id === action.id) continue;
+      if (
+        sibling.actionType === 'update_status' ||
+        sibling.actionType === 'cancel' ||
+        sibling.actionType === 'reject'
+      ) {
+        extraOps.push(sibling.prepareDestroyPermanently());
+      }
+    }
+    if (extraOps.length > 0) {
+      await db.batch(...extraOps);
+    }
   });
 
   syncEvents.emit('pendingActionOrphaned', {
@@ -1005,9 +1392,9 @@ export async function retryFailedAction(actionId: string): Promise<void> {
 }
 
 /**
- * Untuk tombol Abaikan: hapus permanen aksi cancel atau reject yang 'failed'.
- * COD tidak bisa dibuang, karena aksi itu satu-satunya catatan di HP bahwa
- * uangnya sudah diterima.
+ * Untuk tombol Abaikan: hapus permanen aksi update_status, cancel, atau
+ * reject yang 'failed'. COD tidak bisa dibuang, karena aksi itu satu-satunya
+ * catatan di HP bahwa uangnya sudah diterima.
  */
 export async function discardFailedAction(actionId: string): Promise<void> {
   const action = await database.get<PendingActionModel>('pending_actions').find(actionId).catch(() => null);

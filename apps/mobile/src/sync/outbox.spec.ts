@@ -48,6 +48,13 @@ function attachMethods(row: any) {
       }
     }
   };
+  // Tiruan _getRaw membaca nilai kolom dari _raw, sama dengan WatermelonDB.
+  // Dipakai outbox.ts untuk membaca server_version baris order saat
+  // mengirim update_status (lihat processUpdateStatus).
+  row._getRaw = function(column: string): unknown {
+    if (!row._raw) return undefined;
+    return row._raw[column];
+  };
   row.prepareDestroyPermanently = function() {
     // Prepared destroy op, batch() detects _isDestroy dan remove from map.
     return { _isDestroy: true, _targetRow: row, id: row.id };
@@ -90,6 +97,32 @@ function makeRecord(overrides: any = {}) {
   };
 }
 
+// Respons tiruan updateOrderStatus (client.ts mengembalikan Order). Semua
+// properti wajib diisi nilai uji; tiap tes mengganti properti yang
+// diperiksanya lewat overrides.
+function makeOrderResponse(overrides: Partial<Order> = {}): Order {
+  return {
+    id: 'order-test',
+    customerId: 'customer-test',
+    driverId: 'driver-123',
+    status: 'PREPARING',
+    items: [],
+    deliveryAddress: {
+      recipientName: 'Test',
+      phone: '08123456789',
+      street: 'Test St',
+      city: 'Jakarta',
+      postalCode: '12345',
+    },
+    totalCents: 50000,
+    currency: 'IDR',
+    createdAt: '2026-10-17T10:00:00.000Z',
+    updatedAt: '2026-10-17T10:00:00.000Z',
+    version: 1,
+    ...overrides,
+  };
+}
+
 // Mocks
 jest.mock('./session', () => ({
   getCurrentUserId: jest.fn().mockResolvedValue('driver-123'),
@@ -98,14 +131,15 @@ jest.mock('./session', () => ({
 jest.mock('./client', () => {
   // requireActual untuk preserve class identity, dipakai test isVersionConflict
   // untuk instantiate ApiError langsung. rejectOrder/cancelOrder/collectCodOrder
-  // /flagOrphanedCod di-override dengan jest.fn() karena outbox.ts cuma butuh
-  // side effect-nya, bukan implementasinya.
+  // /flagOrphanedCod/updateOrderStatus diganti jest.fn() karena outbox.ts
+  // hanya butuh panggilan dan hasilnya, bukan isi fungsinya.
   const actual = jest.requireActual('./client');
   return {
     ...actual,
     rejectOrder: jest.fn(),
     cancelOrder: jest.fn(),
     collectCodOrder: jest.fn(),
+    updateOrderStatus: jest.fn(),
     flagOrphanedCod: jest.fn().mockResolvedValue(undefined),
   };
 });
@@ -167,6 +201,47 @@ jest.mock('../db', () => ({
             if (!r) throw new Error(`Payment ${id} not found`);
             return attachMethods(r);
           },
+          // Query dipakai shouldSkipAction: cari payment CASH CAPTURED untuk
+          // order ini. Kolom yang dikenal order_id, method, dan status;
+          // operator eq, oneOf, dan lt. Syarat lain melempar galat, sama
+          // dengan tiruan pending_actions.
+          query(...args: any[]) {
+            const knownColumns = new Set(['order_id', 'method', 'status']);
+            const whereConds = args.filter((a: any) => a?.type === 'where');
+            for (const c of whereConds) {
+              if (!knownColumns.has(c.left)) {
+                throw new Error(`mock outbox: kolom payment Q.where tidak dikenal: ${String(c.left)}`);
+              }
+              const op = c.comparison?.operator;
+              if (op !== 'eq' && op !== 'oneOf' && op !== 'lt') {
+                throw new Error(`mock outbox: operator Q.where tidak dikenal: ${String(op)}`);
+              }
+            }
+            function match(rec: any): boolean {
+              for (const c of whereConds) {
+                const col = c.left;
+                const comp = c.comparison;
+                const op = comp.operator;
+                const vals = comp.right?.values ?? comp.right?.value;
+                // Kolom dibaca dari _raw dulu; kalau tidak ada, dari properti baris.
+                const recVal = (rec._raw && col in rec._raw) ? rec._raw[col] : rec[col];
+                if (op === 'oneOf') {
+                  if (!Array.isArray(vals) || !vals.includes(recVal)) return false;
+                } else if (op === 'lt') {
+                  if (typeof vals !== 'number' || typeof recVal !== 'number') return false;
+                  if (!(recVal < vals)) return false;
+                } else {
+                  if (recVal !== vals) return false;
+                }
+              }
+              return true;
+            }
+            return {
+              fetch() { return [...mockState.payments.values()].filter(match).map(attachMethods); },
+              fetchCount() { return [...mockState.payments.values()].filter(match).length; },
+              extend() { return this; },
+            };
+          },
           prepareCreateFromDirtyRaw(dirtyRaw: any) {
             // Semua kunci snake_case masuk ke _raw seperti di WatermelonDB.
             // Tiruan batch memakai kolom method, amount_cents, atau kind untuk
@@ -193,34 +268,76 @@ jest.mock('../db', () => ({
           return attachMethods(r);
         },
         query(...args: any[]) {
-          // outbox.ts only ever queries pending_actions with two column
-          // patterns: Q.where('target_order_id', ...) and
-          // Q.where('status', ...). Map those DB column names to the
-          // record's (camelCase) JS property names, this is deliberately
-          // NOT a general-purpose Q parser, just these two known patterns.
+          // Tiruan Q sederhana: hanya kenal kolom yang dipakai outbox.ts.
+          // Kolom dibaca dari properti baris kalau ada, kalau tidak dari
+          // _raw (prepareCreateFromDirtyRaw menulis ke _raw). Operator yang
+          // dikenal: eq (=), oneOf (in), lt (<). Q.sortBy pertama dipakai
+          // untuk mengurutkan hasil.
           const columnToProp: Record<string, string> = {
             target_order_id: 'targetOrderId',
             status: 'status',
+            idempotency_key: 'idempotencyKey',
+            // created_at dibaca dari _raw, atau dari properti createdAt
+            // kalau _raw belum diisi (lihat valueOf).
+            created_at: '__raw__',
           };
-          // Parse Q.where conditions: { type: 'where', left: 'col', comparison: { operator, right: { value } }
-          const conds = args.filter((a: any) => a?.type === 'where');
+          // Syarat yang tidak dikenali melempar galat, bukan diabaikan,
+          // supaya tes tidak lolos karena tiruan lebih longgar dari DB.
+          const whereConds = args.filter((a: any) => a?.type === 'where');
+          const sortBys = args.filter((a: any) => a?.type === 'sortBy');
+          for (const c of whereConds) {
+            if (!(c.left in columnToProp)) {
+              throw new Error(`mock outbox: kolom Q.where tidak dikenal: ${String(c.left)}`);
+            }
+            const op = c.comparison?.operator;
+            if (op !== 'eq' && op !== 'oneOf' && op !== 'lt') {
+              throw new Error(`mock outbox: operator Q.where tidak dikenal: ${String(op)}`);
+            }
+          }
+          function valueOf(rec: any, col: string): unknown {
+            const prop = columnToProp[col] ?? col;
+            if (prop === '__raw__') {
+              // Baris dari prepareCreateFromDirtyRaw menyimpan created_at
+              // di _raw; baris dari makeRecord hanya punya createdAt.
+              const fromRaw = rec._raw?.[col];
+              if (fromRaw !== undefined) return fromRaw;
+              return rec[col === 'created_at' ? 'createdAt' : col];
+            }
+            if (prop in rec) return rec[prop];
+            return rec._raw?.[col];
+          }
           function match(rec: any): boolean {
-            if (conds.length === 0) return true; // no conditions = return all
-            for (const c of conds) {
+            for (const c of whereConds) {
               const col = c.left;
               const comp = c.comparison;
-              if (!col || !comp) continue;
-              const prop = columnToProp[col] ?? col;
+              const op = comp.operator;
               const vals = comp.right?.values ?? comp.right?.value;
-              const recVal = rec[prop];
-              if (Array.isArray(vals)) { if (!vals.includes(recVal)) return false; }
-              else if (vals !== undefined) { if (recVal !== vals) return false; }
+              const recVal = valueOf(rec, col);
+              if (op === 'oneOf') {
+                if (!Array.isArray(vals) || !vals.includes(recVal)) return false;
+              } else if (op === 'lt') {
+                if (typeof vals !== 'number' || typeof recVal !== 'number') return false;
+                if (!(recVal < vals)) return false;
+              } else { // eq
+                if (recVal !== vals) return false;
+              }
             }
             return true;
           }
+          const sortedRecords = sortBys.length > 0
+            ? [...mockState.records.values()].sort((a: any, b: any) => {
+                const sb = sortBys[0];
+                const col = sb.sortColumn ?? sb.left;
+                const dir = sb.sortOrder ?? sb.comparison?.direction;
+                const av = valueOf(a, col);
+                const bv = valueOf(b, col);
+                if (typeof av !== 'number' || typeof bv !== 'number') return 0;
+                return dir === 'desc' ? bv - av : av - bv;
+              })
+            : [...mockState.records.values()];
           return {
-            fetch() { return [...mockState.records.values()].filter(match).map(attachMethods); },
-            fetchCount() { return [...mockState.records.values()].filter(match).length; },
+            fetch() { return sortedRecords.filter(match).map(attachMethods); },
+            fetchCount() { return sortedRecords.filter(match).length; },
             extend() { return this; },
           };
         },
@@ -339,15 +456,28 @@ import {
   discardFailedAction,
   STALE_THRESHOLD_MS,
 } from './outbox';
-import { rejectOrder, cancelOrder, collectCodOrder, ApiError, UnauthorizedError } from './client';
+import { rejectOrder, cancelOrder, collectCodOrder, updateOrderStatus, ApiError, UnauthorizedError } from './client';
 import { syncEvents } from './syncEvents';
+import type { Order } from '@delivery/shared';
 
 const mockRejectOrder = rejectOrder as jest.MockedFunction<typeof rejectOrder>;
 const mockCancelOrder = cancelOrder as jest.MockedFunction<typeof cancelOrder>;
 const mockCollectCodOrder = collectCodOrder as jest.MockedFunction<typeof collectCodOrder>;
+const mockUpdateOrderStatus = updateOrderStatus as jest.MockedFunction<typeof updateOrderStatus>;
 
 describe('outbox', () => {
-  beforeEach(() => { clearMockState(); jest.clearAllMocks(); });
+  beforeEach(() => {
+    clearMockState();
+    // Panggilan semua mock dikosongkan, dan mock API dikosongkan penuh
+    // dengan mockReset (termasuk mockResolvedValueOnce dan
+    // mockRejectedValueOnce) supaya nilai yang tidak terpakai di tes
+    // sebelumnya tidak terbawa ke tes ini.
+    jest.clearAllMocks();
+    mockRejectOrder.mockReset();
+    mockCancelOrder.mockReset();
+    mockCollectCodOrder.mockReset();
+    mockUpdateOrderStatus.mockReset();
+  });
 
   describe('enqueueReject()', () => {
     test('creates pending_action row with correct fields', async () => {
@@ -2055,6 +2185,860 @@ describe('outbox', () => {
         const results = await drainPendingActions();
         expect(results[0].status).toBe('failed');
         expect(mockState.records.get('cod-no-payload-action')!.status).toBe('failed');
+      });
+    });
+
+    // Aksi update_status (Mulai antar / Selesai diantar) dikirim lewat
+    // outbox: urutan per order, penjaga DELIVERED, dan pemilahan hasil kirim
+    // (sukses, 4xx, 5xx, galat jaringan, ORDER_REASSIGNED).
+    describe('aksi update_status (Mulai antar / Selesai diantar)', () => {
+      // Sukses: baris order ditulis dari respons (status, server_version, dan
+      // lainnya), aksi hilang, _status synced dan _changed kosong.
+      // updateOrderStatus dipanggil dengan versi baris lokal saat kirim.
+      test('sukses: baris order ditulis dari respons, aksi hilang', async () => {
+        const order = {
+          id: 'order-us-success',
+          _raw: { id: 'order-us-success', _status: 'synced', server_version: 4 },
+          status: 'PREPARING',
+          serverVersion: 4,
+        };
+        mockState.orders.set('order-us-success', order);
+
+        const action = makeRecord({
+          actionType: 'update_status',
+          targetOrderId: 'order-us-success',
+          expectedVersion: 0,
+          idempotencyKey: 'status:order-us-success:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+        });
+        mockState.records.set('us-success-action', action);
+        attachMethods(action);
+
+        // Saat aksi dibuat baris lokal versi 4; sebelum aksi dikirim, aksi
+        // outbox lain sukses dan baris naik ke versi 5. Produksi membaca
+        // lewat _getRaw, jadi _raw.server_version yang dipakai, bukan
+        // serverVersion.
+        order._raw.server_version = 5;
+        order.serverVersion = 5;
+        mockUpdateOrderStatus.mockResolvedValue(makeOrderResponse({
+          id: 'order-us-success',
+          status: 'OUT_FOR_DELIVERY',
+          version: 6,
+          updatedAt: '2026-10-17T10:00:00.000Z',
+        }));
+
+        await drainPendingActions();
+
+        // updateOrderStatus dipanggil dengan versi baris lokal saat kirim
+        // (5), bukan versi saat aksi dibuat.
+        expect(mockUpdateOrderStatus).toHaveBeenCalledWith('order-us-success', 'OUT_FOR_DELIVERY', 5);
+        // Aksi hilang
+        expect(mockState.records.has('us-success-action')).toBe(false);
+        // Baris order ditulis dari respons
+        const updated = mockState.orders.get('order-us-success')!;
+        expect(updated._raw.status).toBe('OUT_FOR_DELIVERY');
+        expect(updated._raw.server_version).toBe(6);
+        expect(updated._raw._status).toBe('synced');
+        expect(updated._raw._changed).toBe('');
+        // last_conflict_reason dan last_conflict_at dikosongkan (null).
+        expect(updated._raw.last_conflict_reason).toBeNull();
+        expect(updated._raw.last_conflict_at).toBeNull();
+      });
+
+      // Tiga aksi untuk satu order secara berurutan dari sisi driver:
+      // OUT_FOR_DELIVERY, collect_cod, DELIVERED. created_at naik
+      // (driver mengetuk berurutan). Sisipkan ke tiruan dalam urutan lain untuk
+      // membuktikan urutan kirim ditentukan oleh kode, bukan urutan sisip.
+      test('rantai offline: tiga aksi untuk satu order, urut dan DELIVERED pakai versi dari respons', async () => {
+        const order = {
+          id: 'order-us-chain',
+          _raw: { id: 'order-us-chain', _status: 'synced', server_version: 1 },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        mockState.orders.set('order-us-chain', order);
+
+        const actionOutForDelivery = makeRecord({
+          id: 'chain-status-ofd',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-chain',
+          expectedVersion: 0,
+          idempotencyKey: 'status:order-us-chain:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+          createdAt: 1000,
+        });
+        const actionCod = makeRecord({
+          id: 'chain-cod-1',
+          actionType: 'collect_cod',
+          targetOrderId: 'order-us-chain',
+          idempotencyKey: 'cod:chain-1',
+          payloadJson: { amountCents: 50000 },
+          createdAt: 2000,
+        });
+        const actionDelivered = makeRecord({
+          id: 'chain-status-del',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-chain',
+          expectedVersion: 0,
+          idempotencyKey: 'status:order-us-chain:DELIVERED',
+          payloadJson: { status: 'DELIVERED' },
+          createdAt: 3000,
+        });
+        // Sisipkan dalam urutan selain created_at untuk membuktikan
+        // bahwa kode (bukan urutan sisip) yang menentukan pengiriman.
+        mockState.records.set('chain-status-del', actionDelivered);
+        mockState.records.set('chain-cod-1', actionCod);
+        mockState.records.set('chain-status-ofd', actionOutForDelivery);
+        attachMethods(actionOutForDelivery);
+        attachMethods(actionCod);
+        attachMethods(actionDelivered);
+
+        // Respons server untuk OUT_FOR_DELIVERY: versi 2.
+        mockUpdateOrderStatus.mockResolvedValueOnce(makeOrderResponse({
+          id: 'order-us-chain',
+          status: 'OUT_FOR_DELIVERY',
+          version: 2,
+          updatedAt: '2026-10-17T10:00:00.000Z',
+        }));
+        // collectCodOrder sukses: payment tercatat.
+        mockCollectCodOrder.mockResolvedValueOnce({
+          id: 'pay-chain-1',
+          orderId: 'order-us-chain',
+          idempotencyKey: 'cod:chain-1',
+          method: 'CASH',
+          status: 'CAPTURED',
+          amountCents: 50000,
+          currency: 'IDR',
+          kind: 'PAYMENT',
+          createdAt: '2026-10-17T10:00:01.000Z',
+          updatedAt: '2026-10-17T10:00:01.000Z',
+          version: 1,
+        });
+        // Respons server untuk DELIVERED: versi 3. DELIVERED dikirim dengan
+        // versi 2, yaitu versi baris lokal setelah respons OUT_FOR_DELIVERY
+        // ditulis.
+        mockUpdateOrderStatus.mockResolvedValueOnce(makeOrderResponse({
+          id: 'order-us-chain',
+          status: 'DELIVERED',
+          version: 3,
+          updatedAt: '2026-10-17T10:00:02.000Z',
+        }));
+
+        const results = await drainPendingActions();
+        // Tiga hasil: success, success, success.
+        expect(results.map((r) => r.status)).toEqual(['success', 'success', 'success']);
+
+        // Urutan panggilan: updateOrderStatus(OUT_FOR_DELIVERY),
+        // collectCodOrder, updateOrderStatus(DELIVERED).
+        const callOrder = [
+          mockUpdateOrderStatus.mock.invocationCallOrder[0],
+          mockCollectCodOrder.mock.invocationCallOrder[0],
+          mockUpdateOrderStatus.mock.invocationCallOrder[1],
+        ];
+        expect(callOrder[0]).toBeLessThan(callOrder[1]);
+        expect(callOrder[1]).toBeLessThan(callOrder[2]);
+
+        // DELIVERED dikirim dengan versi dari respons OUT_FOR_DELIVERY (2).
+        expect(mockUpdateOrderStatus).toHaveBeenNthCalledWith(2, 'order-us-chain', 'DELIVERED', 2);
+
+        // Semua aksi hilang, payment tercatat, order DELIVERED.
+        expect(mockState.records.has('chain-status-ofd')).toBe(false);
+        expect(mockState.records.has('chain-cod-1')).toBe(false);
+        expect(mockState.records.has('chain-status-del')).toBe(false);
+        expect(mockState.payments.size).toBe(1);
+        const updated = mockState.orders.get('order-us-chain')!;
+        expect(updated._raw.status).toBe('DELIVERED');
+      });
+
+      // update_status DELIVERED tanpa payment CASH CAPTURED lokal dan tanpa
+      // aksi lain: penjaga menunggu, hasil 'waiting', status aksi tetap
+      // 'pending', tidak dikirim.
+      test('DELIVERED tanpa payment CASH CAPTURED lokal dan tanpa aksi lain: tidak dikirim, hasil waiting', async () => {
+        const order = {
+          id: 'order-us-wait',
+          _raw: { id: 'order-us-wait', _status: 'synced' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 4,
+        };
+        mockState.orders.set('order-us-wait', order);
+
+        const action = makeRecord({
+          actionType: 'update_status',
+          targetOrderId: 'order-us-wait',
+          expectedVersion: 0,
+          idempotencyKey: 'status:order-us-wait:DELIVERED',
+          payloadJson: { status: 'DELIVERED' },
+        });
+        mockState.records.set('us-wait-action', action);
+        attachMethods(action);
+
+        const results = await drainPendingActions();
+        // Hasil: waiting, status aksi tetap 'pending', API tidak dipanggil.
+        expect(results[0].status).toBe('waiting');
+        expect(mockState.records.get('us-wait-action')!.status).toBe('pending');
+        expect(mockUpdateOrderStatus).not.toHaveBeenCalled();
+      });
+
+      // COD kena 503 (gangguan sementara), DELIVERED di belakangnya: COD
+      // kembali 'pending' dan DELIVERED tidak dikirim di putaran itu.
+      // Aksi order lain (di order berbeda) tetap dikirim.
+      test('COD kena 503: COD kembali pending, DELIVERED tidak dikirim di putaran itu', async () => {
+        const order1 = {
+          id: 'order-us-503',
+          _raw: { id: 'order-us-503', _status: 'synced', server_version: 3 },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 3,
+        };
+        const order2 = {
+          id: 'order-other',
+          _raw: { id: 'order-other', _status: 'synced', server_version: 1 },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        mockState.orders.set('order-us-503', order1);
+        mockState.orders.set('order-other', order2);
+
+        const codAction = makeRecord({
+          id: '503-cod',
+          actionType: 'collect_cod',
+          targetOrderId: 'order-us-503',
+          idempotencyKey: 'cod:503',
+          payloadJson: { amountCents: 50000 },
+          createdAt: 1000,
+        });
+        const deliverAction = makeRecord({
+          id: '503-deliver',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-503',
+          expectedVersion: 0,
+          idempotencyKey: 'status:order-us-503:DELIVERED',
+          payloadJson: { status: 'DELIVERED' },
+          createdAt: 2000,
+        });
+        const otherAction = makeRecord({
+          id: '503-other',
+          actionType: 'update_status',
+          targetOrderId: 'order-other',
+          expectedVersion: 0,
+          idempotencyKey: 'status:order-other:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+          createdAt: 3000,
+        });
+        mockState.records.set('503-cod', codAction);
+        mockState.records.set('503-deliver', deliverAction);
+        mockState.records.set('503-other', otherAction);
+        attachMethods(codAction);
+        attachMethods(deliverAction);
+        attachMethods(otherAction);
+
+        // COD kena 503.
+        mockCollectCodOrder.mockRejectedValueOnce(new ApiError(
+          'collectCodOrder failed: 503 - body',
+          503,
+          undefined,
+          { message: 'unavailable' },
+        ));
+        // Aksi order lain: sukses.
+        mockUpdateOrderStatus.mockResolvedValueOnce(makeOrderResponse({
+          id: 'order-other',
+          status: 'OUT_FOR_DELIVERY',
+          version: 2,
+          updatedAt: '2026-10-17T10:00:00.000Z',
+        }));
+
+        await drainPendingActions();
+
+        // COD kembali 'pending' (gangguan sementara), DELIVERED masih
+        // tersimpan 'pending' (karena COD antre di depan), aksi order
+        // lain sukses.
+        expect(mockState.records.get('503-cod')!.status).toBe('pending');
+        expect(mockState.records.get('503-deliver')!.status).toBe('pending');
+        expect(mockState.records.has('503-other')).toBe(false);
+        // DELIVERED tidak dikirim di putaran ini.
+        expect(mockUpdateOrderStatus).toHaveBeenCalledTimes(1);
+        expect(mockUpdateOrderStatus).toHaveBeenCalledWith('order-other', 'OUT_FOR_DELIVERY', 1);
+      });
+
+      // OUT_FOR_DELIVERY kena 409 INVALID_TRANSITION: aksi 'failed',
+      // pullNow dipanggil. COD yang lebih baru tetap dikirim; DELIVERED
+      // yang lebih baru tidak dikirim (penjaga menunggu aksi yang lebih
+      // tua).
+      test('OUT_FOR_DELIVERY 409 INVALID_TRANSITION: aksi failed, pullNow, COD tetap terkirim', async () => {
+        const order = {
+          id: 'order-us-409',
+          _raw: { id: 'order-us-409', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 2,
+        };
+        mockState.orders.set('order-us-409', order);
+
+        const action1 = makeRecord({
+          id: '409-status',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-409',
+          expectedVersion: 0,
+          idempotencyKey: 'status:order-us-409:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+          createdAt: 1000,
+        });
+        const action2 = makeRecord({
+          id: '409-cod',
+          actionType: 'collect_cod',
+          targetOrderId: 'order-us-409',
+          idempotencyKey: 'cod:409',
+          payloadJson: { amountCents: 50000 },
+          createdAt: 2000,
+        });
+        const action3 = makeRecord({
+          id: '409-deliver',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-409',
+          expectedVersion: 0,
+          idempotencyKey: 'status:order-us-409:DELIVERED',
+          payloadJson: { status: 'DELIVERED' },
+          createdAt: 3000,
+        });
+        mockState.records.set('409-status', action1);
+        mockState.records.set('409-cod', action2);
+        mockState.records.set('409-deliver', action3);
+        attachMethods(action1);
+        attachMethods(action2);
+        attachMethods(action3);
+
+        mockUpdateOrderStatus.mockRejectedValueOnce(new ApiError(
+          'updateOrderStatus failed: 409 - body',
+          409,
+          'INVALID_TRANSITION',
+          { code: 'INVALID_TRANSITION', message: 'm' },
+        ));
+        mockCollectCodOrder.mockResolvedValueOnce({
+          id: 'pay-409',
+          orderId: 'order-us-409',
+          idempotencyKey: 'cod:409',
+          method: 'CASH',
+          status: 'CAPTURED',
+          amountCents: 50000,
+          currency: 'IDR',
+          kind: 'PAYMENT',
+          createdAt: '2026-10-17T10:00:00.000Z',
+          updatedAt: '2026-10-17T10:00:00.000Z',
+          version: 1,
+        });
+
+        const { syncCoordinator } = require('./coordinator');
+        await drainPendingActions();
+
+        // OUT_FOR_DELIVERY 'failed', pullNow dipanggil.
+        expect(mockState.records.get('409-status')!.status).toBe('failed');
+        expect(syncCoordinator.pullNow).toHaveBeenCalled();
+        // COD tetap terkirim: collect_cod tidak ditahan penjaga urutan.
+        expect(mockState.records.has('409-cod')).toBe(false);
+        // DELIVERED tidak dikirim: penjaga menunggu aksi OUT_FOR_DELIVERY
+        // yang lebih tua dan berstatus 'failed'.
+        expect(mockState.records.get('409-deliver')!.status).toBe('pending');
+        expect(mockUpdateOrderStatus).toHaveBeenCalledTimes(1);
+      });
+
+      // OUT_FOR_DELIVERY kena 409 ORDER_REASSIGNED: aksi dan DELIVERED
+      // hilang, COD tetap ada lalu diproses sendiri. Baris order ditandai
+      // 'reassigned' dan _status synced.
+      test('update_status 409 ORDER_REASSIGNED: aksi dan DELIVERED hilang, COD tetap diproses', async () => {
+        const order = {
+          id: 'order-us-reassigned',
+          _raw: { id: 'order-us-reassigned', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 2,
+        };
+        mockState.orders.set('order-us-reassigned', order);
+
+        const action1 = makeRecord({
+          id: 'reassigned-status',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-reassigned',
+          expectedVersion: 0,
+          idempotencyKey: 'status:order-us-reassigned:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+          createdAt: 1000,
+        });
+        const action2 = makeRecord({
+          id: 'reassigned-cod',
+          actionType: 'collect_cod',
+          targetOrderId: 'order-us-reassigned',
+          idempotencyKey: 'cod:reassigned',
+          payloadJson: { amountCents: 50000 },
+          createdAt: 2000,
+        });
+        const action3 = makeRecord({
+          id: 'reassigned-deliver',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-reassigned',
+          expectedVersion: 0,
+          idempotencyKey: 'status:order-us-reassigned:DELIVERED',
+          payloadJson: { status: 'DELIVERED' },
+          createdAt: 3000,
+        });
+        mockState.records.set('reassigned-status', action1);
+        mockState.records.set('reassigned-cod', action2);
+        mockState.records.set('reassigned-deliver', action3);
+        attachMethods(action1);
+        attachMethods(action2);
+        attachMethods(action3);
+
+        mockUpdateOrderStatus.mockRejectedValueOnce(new ApiError(
+          'updateOrderStatus failed: 409 - body',
+          409,
+          'ORDER_REASSIGNED',
+          { code: 'ORDER_REASSIGNED', message: 'm' },
+        ));
+        // COD tetap dikirim setelah aksi status order itu dihapus. Di sini
+        // server masih mencatat COD; COD yang ditolak (yatim) diuji terpisah.
+        mockCollectCodOrder.mockResolvedValueOnce({
+          id: 'pay-reassigned',
+          orderId: 'order-us-reassigned',
+          idempotencyKey: 'cod:reassigned',
+          method: 'CASH',
+          status: 'CAPTURED',
+          amountCents: 50000,
+          currency: 'IDR',
+          kind: 'PAYMENT',
+          createdAt: '2026-10-17T10:00:00.000Z',
+          updatedAt: '2026-10-17T10:00:00.000Z',
+          version: 1,
+        });
+
+        await drainPendingActions();
+
+        // Aksi OUT_FOR_DELIVERY dan DELIVERED hilang.
+        expect(mockState.records.has('reassigned-status')).toBe(false);
+        expect(mockState.records.has('reassigned-deliver')).toBe(false);
+        // COD tetap ada dan diproses (sukses, payment tercatat).
+        expect(mockState.records.has('reassigned-cod')).toBe(false);
+        expect(mockState.payments.size).toBe(1);
+        // Baris order ditandai reassigned.
+        const updated = mockState.orders.get('order-us-reassigned')!;
+        expect(updated._raw.last_conflict_reason).toBe('reassigned');
+        expect(updated._raw._status).toBe('synced');
+        expect(updated._raw._changed).toBe('');
+      });
+
+      // cancel kena 409 ORDER_REASSIGNED: aksi status order itu (update_status)
+      // ikut hilang.
+      test('cancel 409 ORDER_REASSIGNED: aksi update_status untuk order itu ikut hilang', async () => {
+        const order = {
+          id: 'order-cancel-reassigned',
+          _raw: { id: 'order-cancel-reassigned', _status: 'synced' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 5,
+        };
+        mockState.orders.set('order-cancel-reassigned', order);
+
+        const cancelAction = makeRecord({
+          id: 'cancel-action',
+          actionType: 'cancel',
+          targetOrderId: 'order-cancel-reassigned',
+          expectedVersion: 5,
+          payloadJson: { reason: 'test' },
+          createdAt: 1000,
+        });
+        const statusAction = makeRecord({
+          id: 'cancel-status-action',
+          actionType: 'update_status',
+          targetOrderId: 'order-cancel-reassigned',
+          expectedVersion: 0,
+          idempotencyKey: 'status:cancel-reassigned:DELIVERED',
+          payloadJson: { status: 'DELIVERED' },
+          createdAt: 2000,
+        });
+        mockState.records.set('cancel-action', cancelAction);
+        mockState.records.set('cancel-status-action', statusAction);
+        attachMethods(cancelAction);
+        attachMethods(statusAction);
+
+        mockCancelOrder.mockRejectedValueOnce(new ApiError(
+          'cancelOrder failed: 409 - body',
+          409,
+          'ORDER_REASSIGNED',
+          { code: 'ORDER_REASSIGNED', message: 'm' },
+        ));
+
+        await drainPendingActions();
+
+        // Cancel dihapus (writeRejectConflictAndDelete).
+        expect(mockState.records.has('cancel-action')).toBe(false);
+        // Aksi update_status untuk order itu ikut dihapus.
+        expect(mockState.records.has('cancel-status-action')).toBe(false);
+        // Baris order ditandai reassigned.
+        const updated = mockState.orders.get('order-cancel-reassigned')!;
+        expect(updated._raw.last_conflict_reason).toBe('reassigned');
+      });
+
+      // COD kena 403 dengan code ORDER_NOT_ASSIGNED: COD menjadi yatim,
+      // flagOrphanedCod dipanggil, aksi DELIVERED order itu hilang.
+      test('COD 403 ORDER_NOT_ASSIGNED: COD yatim, DELIVERED hilang', async () => {
+        const order = {
+          id: 'order-orphan-chain',
+          _raw: { id: 'order-orphan-chain', _status: 'synced' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 5,
+        };
+        mockState.orders.set('order-orphan-chain', order);
+
+        const codAction = makeRecord({
+          id: 'orphan-cod',
+          actionType: 'collect_cod',
+          targetOrderId: 'order-orphan-chain',
+          idempotencyKey: 'cod:orphan',
+          payloadJson: { amountCents: 50000 },
+        });
+        const deliverAction = makeRecord({
+          id: 'orphan-deliver',
+          actionType: 'update_status',
+          targetOrderId: 'order-orphan-chain',
+          expectedVersion: 0,
+          idempotencyKey: 'status:orphan-chain:DELIVERED',
+          payloadJson: { status: 'DELIVERED' },
+        });
+        mockState.records.set('orphan-cod', codAction);
+        mockState.records.set('orphan-deliver', deliverAction);
+        attachMethods(codAction);
+        attachMethods(deliverAction);
+
+        const { flagOrphanedCod } = require('./client');
+        mockCollectCodOrder.mockRejectedValueOnce(new ApiError(
+          'collectCodOrder failed: 403 - body',
+          403,
+          'ORDER_NOT_ASSIGNED',
+          { code: 'ORDER_NOT_ASSIGNED', message: 'm' },
+        ));
+
+        await drainPendingActions();
+
+        // COD menjadi yatim.
+        expect(mockState.records.get('orphan-cod')!.status).toBe('orphaned_needs_review');
+        // DELIVERED hilang (markActionOrphaned menghapus semua update_status/cancel/reject untuk order).
+        expect(mockState.records.has('orphan-deliver')).toBe(false);
+        // flagOrphanedCod dipanggil.
+        expect(flagOrphanedCod).toHaveBeenCalled();
+      });
+
+      // update_status 400, 403, 404: 'failed' dan tidak dikirim di putaran
+      // berikutnya.
+      test('update_status 400, 403, 404: failed, tidak dikirim di putaran berikutnya', async () => {
+        const order = {
+          id: 'order-us-4xx',
+          _raw: { id: 'order-us-4xx', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        mockState.orders.set('order-us-4xx', order);
+
+        for (const status of [400, 403, 404]) {
+          const action = makeRecord({
+            id: `us-4xx-${status}`,
+            actionType: 'update_status',
+            targetOrderId: 'order-us-4xx',
+            expectedVersion: 0,
+            idempotencyKey: `status:us-4xx-${status}:OUT_FOR_DELIVERY`,
+            payloadJson: { status: 'OUT_FOR_DELIVERY' },
+          });
+          mockState.records.set(`us-4xx-${status}`, action);
+          attachMethods(action);
+
+          mockUpdateOrderStatus.mockRejectedValueOnce(new ApiError(
+            `updateOrderStatus failed: ${status} - body`,
+            status,
+            undefined,
+            { message: 'x' },
+          ));
+        }
+
+        await drainPendingActions();
+
+        for (const status of [400, 403, 404]) {
+          expect(mockState.records.get(`us-4xx-${status}`)!.status).toBe('failed');
+        }
+
+        // Putaran kedua: tidak ada yang dikirim lagi.
+        mockUpdateOrderStatus.mockClear();
+        await drainPendingActions();
+        expect(mockUpdateOrderStatus).not.toHaveBeenCalled();
+      });
+
+      // update_status 503: 'pending' dan putaran lanjut.
+      test('update_status 503: kembali pending, putaran lanjut', async () => {
+        const order = {
+          id: 'order-us-503',
+          _raw: { id: 'order-us-503', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        mockState.orders.set('order-us-503', order);
+
+        const action1 = makeRecord({
+          id: 'us-503-1',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-503',
+          expectedVersion: 0,
+          idempotencyKey: 'status:us-503:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+          createdAt: 1000,
+        });
+        const action2 = makeRecord({
+          id: 'us-503-2',
+          actionType: 'update_status',
+          targetOrderId: 'order-other-503',
+          expectedVersion: 0,
+          idempotencyKey: 'status:other-503:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+          createdAt: 2000,
+        });
+        const order2 = {
+          id: 'order-other-503',
+          _raw: { id: 'order-other-503', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        mockState.orders.set('order-other-503', order2);
+        mockState.records.set('us-503-1', action1);
+        mockState.records.set('us-503-2', action2);
+        attachMethods(action1);
+        attachMethods(action2);
+
+        mockUpdateOrderStatus.mockRejectedValueOnce(new ApiError(
+          'updateOrderStatus failed: 503 - body',
+          503,
+          undefined,
+          { message: 'unavailable' },
+        ));
+        mockUpdateOrderStatus.mockResolvedValueOnce(makeOrderResponse({
+          id: 'order-other-503',
+          status: 'OUT_FOR_DELIVERY',
+          version: 2,
+          updatedAt: '2026-10-17T10:00:00.000Z',
+        }));
+
+        await drainPendingActions();
+
+        // Aksi pertama kembali 'pending' (503 gangguan sementara, lanjut).
+        expect(mockState.records.get('us-503-1')!.status).toBe('pending');
+        // Aksi kedua sukses (putaran lanjut).
+        expect(mockState.records.has('us-503-2')).toBe(false);
+        // API dipanggil 2 kali.
+        expect(mockUpdateOrderStatus).toHaveBeenCalledTimes(2);
+      });
+
+      // Galat jaringan: aksi kembali 'pending' dan aksi berikutnya tidak
+      // dikirim di putaran itu.
+      test('update_status galat jaringan: pending dan stopDrain', async () => {
+        const order = {
+          id: 'order-us-net',
+          _raw: { id: 'order-us-net', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        mockState.orders.set('order-us-net', order);
+
+        const action1 = makeRecord({
+          id: 'us-net-1',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-net',
+          expectedVersion: 0,
+          idempotencyKey: 'status:us-net:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+        });
+        const action2 = makeRecord({
+          id: 'us-net-2',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-net-2',
+          expectedVersion: 0,
+          idempotencyKey: 'status:us-net-2:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+        });
+        const order2 = {
+          id: 'order-us-net-2',
+          _raw: { id: 'order-us-net-2', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        mockState.orders.set('order-us-net-2', order2);
+        mockState.records.set('us-net-1', action1);
+        mockState.records.set('us-net-2', action2);
+        attachMethods(action1);
+        attachMethods(action2);
+
+        mockUpdateOrderStatus.mockRejectedValueOnce(new Error('Network request failed'));
+
+        const results = await drainPendingActions();
+        // Aksi pertama: hasil 'failed' dengan stopDrain, status aksi kembali
+        // 'pending'.
+        expect(results[0].status).toBe('failed');
+        expect(results[0].stopDrain).toBe(true);
+        expect(mockState.records.get('us-net-1')!.status).toBe('pending');
+        // Aksi kedua tidak diproses.
+        expect(mockState.records.get('us-net-2')!.status).toBe('pending');
+        expect(mockUpdateOrderStatus).toHaveBeenCalledTimes(1);
+      });
+
+      // Payload tidak terbaca: 'failed'.
+      test('update_status payload tidak terbaca: failed', async () => {
+        const order = {
+          id: 'order-us-bad-payload',
+          _raw: { id: 'order-us-bad-payload', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        mockState.orders.set('order-us-bad-payload', order);
+
+        const action = makeRecord({
+          id: 'us-bad-payload',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-bad-payload',
+          expectedVersion: 0,
+          idempotencyKey: 'status:us-bad-payload:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'INVALID' }, // status tidak dikenal
+        });
+        mockState.records.set('us-bad-payload', action);
+        attachMethods(action);
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('failed');
+        expect(mockState.records.get('us-bad-payload')!.status).toBe('failed');
+        expect(mockUpdateOrderStatus).not.toHaveBeenCalled();
+      });
+
+      // Respons 200 yang membawa status yang sudah sama dengan target (kasus
+      // kirim ulang setelah respons hilang): ditangani sama dengan sukses,
+      // baris order ditulis dari respons, aksi hilang.
+      test('200 kiriman ulang (respons status sama dengan target): ditangani sama dengan sukses', async () => {
+        const order = {
+          id: 'order-us-200same',
+          _raw: { id: 'order-us-200same', _status: 'synced' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 4,
+        };
+        mockState.orders.set('order-us-200same', order);
+
+        const action = makeRecord({
+          id: 'us-200same',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-200same',
+          expectedVersion: 0,
+          idempotencyKey: 'status:us-200same:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+        });
+        mockState.records.set('us-200same', action);
+        attachMethods(action);
+
+        // Respons: status sama dengan target, versi naik.
+        mockUpdateOrderStatus.mockResolvedValueOnce(makeOrderResponse({
+          id: 'order-us-200same',
+          status: 'OUT_FOR_DELIVERY',
+          version: 5,
+          updatedAt: '2026-10-17T10:00:00.000Z',
+        }));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('success');
+        expect(mockState.records.has('us-200same')).toBe(false);
+        const updated = mockState.orders.get('order-us-200same')!;
+        expect(updated._raw.server_version).toBe(5);
+        expect(updated._raw._status).toBe('synced');
+      });
+
+      // discardFailedAction menghapus update_status 'failed'; COD 'failed'
+      // tetap tidak bisa dibuang.
+      test('discardFailedAction menghapus update_status failed; COD failed tidak', async () => {
+        const statusAction = makeRecord({
+          id: 'discard-us',
+          actionType: 'update_status',
+          targetOrderId: 'order-discard-us',
+          expectedVersion: 0,
+          idempotencyKey: 'status:discard-us:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+          status: 'failed',
+        });
+        const codAction = makeRecord({
+          id: 'discard-cod',
+          actionType: 'collect_cod',
+          targetOrderId: 'order-discard-cod',
+          idempotencyKey: 'cod:discard',
+          payloadJson: { amountCents: 1000 },
+          status: 'failed',
+        });
+        mockState.records.set('discard-us', statusAction);
+        mockState.records.set('discard-cod', codAction);
+        attachMethods(statusAction);
+        attachMethods(codAction);
+
+        await discardFailedAction('discard-us');
+        await discardFailedAction('discard-cod');
+
+        // update_status dihapus.
+        expect(mockState.records.has('discard-us')).toBe(false);
+        // COD TIDAK dihapus.
+        expect(mockState.records.has('discard-cod')).toBe(true);
+      });
+
+      // update_status kena ApiError 401: diperlakukan sama dengan
+      // UnauthorizedError. Aksi kembali 'pending' (bukan 'failed') dan
+      // putaran berhenti supaya aksi lain tidak ikut dikirim sebelum login
+      // ulang. Dicek sebelum cabang 4xx lain agar tidak jatuh ke 'failed'
+      // permanen.
+      test('update_status ApiError 401: pending dan putaran berhenti', async () => {
+        const order1 = {
+          id: 'order-us-401-1',
+          _raw: { id: 'order-us-401-1', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        const order2 = {
+          id: 'order-us-401-2',
+          _raw: { id: 'order-us-401-2', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        mockState.orders.set('order-us-401-1', order1);
+        mockState.orders.set('order-us-401-2', order2);
+
+        const action1 = makeRecord({
+          id: 'us-401-1',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-401-1',
+          expectedVersion: 0,
+          idempotencyKey: 'status:us-401-1:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+          createdAt: 1000,
+        });
+        const action2 = makeRecord({
+          id: 'us-401-2',
+          actionType: 'update_status',
+          targetOrderId: 'order-us-401-2',
+          expectedVersion: 0,
+          idempotencyKey: 'status:us-401-2:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+          createdAt: 2000,
+        });
+        mockState.records.set('us-401-1', action1);
+        mockState.records.set('us-401-2', action2);
+        attachMethods(action1);
+        attachMethods(action2);
+
+        mockUpdateOrderStatus.mockRejectedValueOnce(new ApiError(
+          'updateOrderStatus failed: 401 - body',
+          401,
+          undefined,
+          { message: 'unauthenticated' },
+        ));
+
+        const results = await drainPendingActions();
+
+        // Aksi pertama kembali 'pending' (bukan 'failed'), dengan stopDrain.
+        expect(results[0].status).toBe('failed');
+        expect(results[0].stopDrain).toBe(true);
+        expect(mockState.records.get('us-401-1')!.status).toBe('pending');
+        // Aksi kedua tidak diproses (stopDrain), status tetap 'pending'.
+        expect(mockState.records.get('us-401-2')!.status).toBe('pending');
+        expect(mockUpdateOrderStatus).toHaveBeenCalledTimes(1);
       });
     });
   });
