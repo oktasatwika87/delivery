@@ -6,7 +6,7 @@
 import Config from 'react-native-config';
 import type { SyncPushPayload, SyncPushResponse, SyncPullResponse } from '@delivery/shared';
 import { getCurrentToken } from './session';
-import type { CreateOrderInput, Order, OrderStatus } from '@delivery/shared';
+import type { CreateOrderInput, Order, OrderStatus, Payment } from '@delivery/shared';
 
 /** Base URL API dari .env (react-native-config) */
 const API_BASE = Config.API_BASE_URL;
@@ -390,7 +390,7 @@ export async function getOrderById(orderId: string): Promise<Order> {
 // Driver Actions
 
 /**
- * Response from driver action endpoints (reject, cancel, collect-cod).
+ * Respons `rejectOrder` dan `cancelOrder`.
  */
 export interface DriverActionResponse {
   id: string;
@@ -515,7 +515,7 @@ export async function collectCodOrder(
   orderId: string,
   amountCents: number,
   idempotencyKey: string
-): Promise<DriverActionResponse> {
+): Promise<Payment> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8_000);
 
@@ -535,7 +535,7 @@ export async function collectCodOrder(
       throw await buildApiError('collectCodOrder', res);
     }
 
-    return res.json() as Promise<DriverActionResponse>;
+    return res.json() as Promise<Payment>;
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {

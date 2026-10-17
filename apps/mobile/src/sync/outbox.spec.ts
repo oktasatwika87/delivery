@@ -7,6 +7,8 @@ const mockState = {
   records: new Map<string, any>(),
   // Orders collection, track state untuk assertions lastConflictReason/lastConflictAt
   orders: new Map<string, any>(),
+  // Koleksi payments, untuk memeriksa baris payment dari COD sukses dan 409 COD_ALREADY_CAPTURED
+  payments: new Map<string, any>(),
   batchOps: [] as Array<{ type: string; row: any; fn?: (r: any) => void }>,
   // Per-test query overrides
   queryOverrides: [] as Array<{ matcher: string; results: any[] }>,
@@ -15,6 +17,7 @@ const mockState = {
 function clearMockState() {
   mockState.records.clear();
   mockState.orders.clear();
+  mockState.payments.clear();
   mockState.batchOps = [];
   mockState.queryOverrides = [];
 }
@@ -28,14 +31,22 @@ function attachMethods(row: any) {
     fn(row);
     return row;
   };
-  // Commit "baris lokal driver ditulis dari respons" pakai
-  // r._setRaw('column', value) di processReject/processCancel. Mock ini
-  // tulis ke r._raw[column] supaya assertions (status, driver_id, dll)
-  // bisa baca lewat mockState.orders.get(id)._raw.column. Sama dengan
-  // produksi: OrderModel decorator _setRaw mutate internal _raw.
+  // Tiruan _setRaw meniru WatermelonDB: kalau nilai kolom berubah dan
+  // _status bukan 'created', baris ditandai 'updated' dan nama kolom
+  // ditambahkan ke _changed. Tanpa ini, tes "baris tidak kotor" akan
+  // lolos walaupun _status dan _changed tidak ditutup setelah _setRaw.
   row._setRaw = function(column: string, value: unknown) {
     if (!row._raw) row._raw = {};
+    if (row._raw[column] === value) return;
     row._raw[column] = value;
+    if (row._raw._status !== 'created') {
+      row._raw._status = 'updated';
+      const changed = row._raw._changed ? String(row._raw._changed).split(',') : [];
+      if (!changed.includes(column)) {
+        changed.push(column);
+        row._raw._changed = changed.join(',');
+      }
+    }
   };
   row.prepareDestroyPermanently = function() {
     // Prepared destroy op, batch() detects _isDestroy dan remove from map.
@@ -147,6 +158,33 @@ jest.mock('../db', () => ({
           },
         };
       }
+      if (name === 'payments') {
+        // Koleksi payments, polanya sama dengan orders. Tes bisa mengisi baris
+        // lebih dulu untuk kasus payment yang sudah dibawa pull.
+        return {
+          async find(id: string) {
+            let r = mockState.payments.get(id);
+            if (!r) throw new Error(`Payment ${id} not found`);
+            return attachMethods(r);
+          },
+          prepareCreateFromDirtyRaw(dirtyRaw: any) {
+            // Semua kunci snake_case masuk ke _raw seperti di WatermelonDB.
+            // Tiruan batch memakai kolom method, amount_cents, atau kind untuk
+            // mengenali baris payment.
+            const raw: any = {
+              id: dirtyRaw.id,
+              _status: dirtyRaw._status ?? 'synced',
+              _changed: dirtyRaw._changed ?? '',
+            };
+            for (const [k, v] of Object.entries(dirtyRaw)) {
+              if (k === 'id' || k === '_status' || k === '_changed') continue;
+              raw[k] = v;
+            }
+            const row = { id: dirtyRaw.id, _raw: raw, ...dirtyRaw };
+            return row;
+          },
+        };
+      }
       // pending_actions collection with query that filters
       return {
         async find(id: string) {
@@ -242,7 +280,7 @@ jest.mock('../db', () => ({
       for (const op of ops) {
         const prepared = op as any;
         if (prepared && prepared._isDestroy && prepared._targetRow) {
-          // destroyPermanently prepared op, remove dari records & orders
+          // Hapus permanen: baris dibuang dari records, orders, atau payments.
           for (const [key, val] of mockState.records) {
             if (val === prepared._targetRow) {
               mockState.records.delete(key);
@@ -255,8 +293,30 @@ jest.mock('../db', () => ({
               break;
             }
           }
+          for (const [key, val] of mockState.payments) {
+            if (val === prepared._targetRow) {
+              mockState.payments.delete(key);
+              break;
+            }
+          }
         } else if (prepared && prepared.id) {
-          mockState.records.set(prepared.id, prepared);
+          // Baris dimasukkan ke koleksinya berdasarkan kolom di _raw:
+          // action_type atau target_order_id untuk pending_actions; method,
+          // amount_cents, atau kind untuk payments; sisanya orders. Baris
+          // payment baru dengan id yang sudah ada ditolak, seperti database
+          // sungguhan.
+          const raw = prepared._raw ?? {};
+          if ('action_type' in raw || 'target_order_id' in raw) {
+            mockState.records.set(prepared.id, prepared);
+          } else if ('method' in raw || 'amount_cents' in raw || 'kind' in raw) {
+            const existing = mockState.payments.get(prepared.id);
+            if (existing && existing !== prepared) {
+              throw new Error(`Payment ${prepared.id} already exists`);
+            }
+            mockState.payments.set(prepared.id, prepared);
+          } else {
+            mockState.orders.set(prepared.id, prepared);
+          }
         }
       }
     },
@@ -275,9 +335,11 @@ import {
   getPendingActionAgeMs,
   hasStalePendingAction,
   isVersionConflict,
+  retryFailedAction,
+  discardFailedAction,
   STALE_THRESHOLD_MS,
 } from './outbox';
-import { rejectOrder, cancelOrder, collectCodOrder, ApiError } from './client';
+import { rejectOrder, cancelOrder, collectCodOrder, ApiError, UnauthorizedError } from './client';
 import { syncEvents } from './syncEvents';
 
 const mockRejectOrder = rejectOrder as jest.MockedFunction<typeof rejectOrder>;
@@ -495,7 +557,14 @@ describe('outbox', () => {
       const action = makeRecord({ actionType: 'reject', targetOrderId: 'order-conflict', expectedVersion: 3 });
       mockState.records.set('conflict-action', action);
       attachMethods(action);
-      mockRejectOrder.mockRejectedValue({ status: 409 });
+      mockRejectOrder.mockRejectedValue(
+        new ApiError(
+          'rejectOrder failed: 409 - body',
+          409,
+          'VERSION_CONFLICT',
+          { code: 'VERSION_CONFLICT', message: 'm' },
+        ),
+      );
       const results = await drainPendingActions();
       expect(results[0].status).toBe('conflict');
       expect(syncEvents.emit).toHaveBeenCalledWith('orderConflict', expect.objectContaining({ orderId: 'order-conflict' }));
@@ -505,7 +574,14 @@ describe('outbox', () => {
       const action = makeRecord({ actionType: 'collect_cod', targetOrderId: 'order-orphaned', idempotencyKey: 'cod:key', payloadJson: { amountCents: 30000 } });
       mockState.records.set('orphaned-action', action);
       attachMethods(action);
-      mockCollectCodOrder.mockRejectedValue(new Error('Order not found'));
+      mockCollectCodOrder.mockRejectedValue(
+        new ApiError(
+          'collectCodOrder failed: 404 - body',
+          404,
+          undefined,
+          { message: 'not found' },
+        ),
+      );
       const results = await drainPendingActions();
       expect(results[0].status).toBe('orphaned');
       expect(mockState.records.get('orphaned-action')!.status).toBe('orphaned_needs_review');
@@ -792,28 +868,39 @@ describe('outbox', () => {
       mockState.records.set('cancel-banner-action', action);
       attachMethods(action);
 
-      // Mock cancelOrder, reject dengan version conflict (409)
-      mockCancelOrder.mockRejectedValue({ status: 409 });
+      // cancelOrder ditolak 409 VERSION_CONFLICT
+      mockCancelOrder.mockRejectedValue(
+        new ApiError(
+          'cancelOrder failed: 409 - body',
+          409,
+          'VERSION_CONFLICT',
+          { code: 'VERSION_CONFLICT', message: 'm' },
+        ),
+      );
 
       await drainPendingActions();
 
       // Order row harus ter-update dengan reason cancelled-by-server
       const updatedOrder = mockState.orders.get('order-cancel-banner-test')!;
-      expect(updatedOrder.lastConflictReason).toBe('cancelled-by-server');
-      expect(updatedOrder.lastConflictAt).toBeDefined();
-      expect(typeof updatedOrder.lastConflictAt).toBe('number');
+      expect(updatedOrder._raw.last_conflict_reason).toBe('cancelled-by-server');
+      expect(updatedOrder._raw.last_conflict_at).toBeDefined();
+      expect(typeof updatedOrder._raw.last_conflict_at).toBe('number');
+      // Baris ditutup _status 'synced' dan _changed kosong, jadi tidak ikut push.
+      expect(updatedOrder._raw._status).toBe('synced');
+      expect(updatedOrder._raw._changed).toBe('');
 
       // Pending action harus ter-delete
       expect(mockState.records.has('cancel-banner-action')).toBe(false);
 
-      // Conflict event harus tetap ter-emit (LastConflictBanner trigger UI)
-      expect(syncEvents.emit).toHaveBeenCalledWith('orderConflict', expect.objectContaining({
-        orderId: 'order-cancel-banner-test',
-        reason: 'order-status-conflict',
-      }));
+      // Untuk cancel, orderConflict tidak dipancarkan; banner tersimpan sudah
+      // cukup.
+      const orderConflictCalls = (syncEvents.emit as jest.Mock).mock.calls.filter(
+        ([event]) => event === 'orderConflict',
+      );
+      expect(orderConflictCalls).toHaveLength(0);
     });
 
-    test('reject conflict, TIDAK tulis lastConflictReason / lastConflictAt', async () => {
+    test('reject 409 VERSION_CONFLICT: last_conflict_reason tidak ditulis', async () => {
       // Setup order lokal
       const order = {
         id: 'order-reject-banner-test',
@@ -832,21 +919,28 @@ describe('outbox', () => {
       mockState.records.set('reject-banner-action', action);
       attachMethods(action);
 
-      // Mock rejectOrder, reject dengan version conflict (409)
-      mockRejectOrder.mockRejectedValue({ status: 409 });
+      // rejectOrder ditolak 409 VERSION_CONFLICT
+      mockRejectOrder.mockRejectedValue(
+        new ApiError(
+          'rejectOrder failed: 409 - body',
+          409,
+          'VERSION_CONFLICT',
+          { code: 'VERSION_CONFLICT', message: 'm' },
+        ),
+      );
 
       await drainPendingActions();
 
-      // lastConflictReason/lastConflictAt harus undefined (tidak di-write)
+      // last_conflict_reason dan last_conflict_at tidak ditulis
       const updatedOrder = mockState.orders.get('order-reject-banner-test')!;
-      expect(updatedOrder.lastConflictReason).toBeUndefined();
-      expect(updatedOrder.lastConflictAt).toBeUndefined();
+      expect(updatedOrder._raw.last_conflict_reason).toBeUndefined();
+      expect(updatedOrder._raw.last_conflict_at).toBeUndefined();
 
       // Pending action tetap ter-delete (handleVersionConflict tetap berjalan)
       expect(mockState.records.has('reject-banner-action')).toBe(false);
     });
 
-    test('collect_cod conflict, TIDAK tulis lastConflictReason / lastConflictAt', async () => {
+    test('collect_cod 409 bukan yatim, TIDAK tulis last_conflict_reason', async () => {
       // Setup order lokal
       const order = {
         id: 'order-cod-banner-test',
@@ -866,18 +960,23 @@ describe('outbox', () => {
       mockState.records.set('cod-banner-action', action);
       attachMethods(action);
 
-      // Mock collectCodOrder, reject dengan version conflict (409)
-      // Note: processCollectCod treat 409 sebagai orphaned_needs_review,
-      // BUKAN handleVersionConflict. Verifikasi bahwa path ini juga tidak
-      // menulis banner signal.
-      mockCollectCodOrder.mockRejectedValue({ status: 409 });
+      // 409 VERSION_CONFLICT pada COD bukan yatim, jadi 'failed'.
+      mockCollectCodOrder.mockRejectedValue(
+        new ApiError(
+          'collectCodOrder failed: 409 - body',
+          409,
+          'VERSION_CONFLICT',
+          { code: 'VERSION_CONFLICT', message: 'm' },
+        ),
+      );
 
       await drainPendingActions();
 
-      // lastConflictReason/lastConflictAt harus undefined (tidak di-write)
+      // last_conflict_reason tidak ditulis
       const updatedOrder = mockState.orders.get('order-cod-banner-test')!;
-      expect(updatedOrder.lastConflictReason).toBeUndefined();
-      expect(updatedOrder.lastConflictAt).toBeUndefined();
+      expect(updatedOrder._raw.last_conflict_reason).toBeUndefined();
+      // Status 'failed', bukan 'orphaned_needs_review'
+      expect(mockState.records.get('cod-banner-action')!.status).toBe('failed');
     });
   });
 
@@ -1050,20 +1149,17 @@ describe('outbox', () => {
 
       // handleVersionConflict terpanggil:
       // - pending_action terhapus
-      // - order.lastConflictReason = 'cancelled-by-server'
-      // - order.lastConflictAt terisi
+      // - order._raw.last_conflict_reason = 'cancelled-by-server'
+      // - order._raw.last_conflict_at terisi
       expect(mockState.records.has('cancel-apierror-action')).toBe(false);
 
       const updatedOrder = mockState.orders.get('order-cancel-apierror-test')!;
-      expect(updatedOrder.lastConflictReason).toBe('cancelled-by-server');
-      expect(updatedOrder.lastConflictAt).toBeDefined();
-      expect(typeof updatedOrder.lastConflictAt).toBe('number');
-
-      // Conflict event tetap ter-emit (OrderConflictBanner trigger UI)
-      expect(syncEvents.emit).toHaveBeenCalledWith('orderConflict', expect.objectContaining({
-        orderId: 'order-cancel-apierror-test',
-        reason: 'order-status-conflict',
-      }));
+      expect(updatedOrder._raw.last_conflict_reason).toBe('cancelled-by-server');
+      expect(updatedOrder._raw.last_conflict_at).toBeDefined();
+      expect(typeof updatedOrder._raw.last_conflict_at).toBe('number');
+      // Baris ditutup _status 'synced' dan _changed kosong
+      expect(updatedOrder._raw._status).toBe('synced');
+      expect(updatedOrder._raw._changed).toBe('');
     });
   });
 
@@ -1189,16 +1285,777 @@ describe('outbox', () => {
       mockState.records.set('cancel-409-action', action);
       attachMethods(action);
 
-      mockCancelOrder.mockRejectedValue({ status: 409 });
+      mockCancelOrder.mockRejectedValue(new ApiError(
+          'cancelOrder failed: 409 - body',
+          409,
+          'VERSION_CONFLICT',
+          { code: 'VERSION_CONFLICT', message: 'm' },
+        ));
 
       const results = await drainPendingActions();
       expect(results[0].status).toBe('conflict');
       // Pending action terhapus (handleVersionConflict delete)
       expect(mockState.records.has('cancel-409-action')).toBe(false);
-      // Baris order TIDAK ditulis oleh jalur sukses, status tetap PREPARING
-      const unchangedOrder = mockState.orders.get('order-cancel-409')!;
-      expect(unchangedOrder._raw.status).toBe('PREPARING');
-      expect(unchangedOrder._raw.driver_id).toBe('driver-123');
+      // last_conflict_reason ditulis
+      const updatedOrder = mockState.orders.get('order-cancel-409')!;
+      expect(updatedOrder._raw.last_conflict_reason).toBe('cancelled-by-server');
+      // status dan driver_id tidak diubah: handleVersionConflict hanya menulis
+      // last_conflict_reason.
+      expect(updatedOrder._raw.status).toBe('PREPARING');
+      expect(updatedOrder._raw.driver_id).toBe('driver-123');
+    });
+
+    // ============ pemilahan hasil kirim ============
+
+    describe('409 ORDER_REASSIGNED dan COD_ALREADY_CAPTURED: aksi dihapus, alasan ditulis ke order', () => {
+      test('reject 409 ORDER_REASSIGNED: aksi dihapus, order dapat last_conflict_reason "reassigned"', async () => {
+        const order = {
+          id: 'order-reassigned-reject',
+          _raw: { id: 'order-reassigned-reject', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 3,
+        };
+        mockState.orders.set('order-reassigned-reject', order);
+
+        const action = makeRecord({
+          actionType: 'reject',
+          targetOrderId: 'order-reassigned-reject',
+          expectedVersion: 3,
+        });
+        mockState.records.set('reassigned-reject-action', action);
+        attachMethods(action);
+
+        mockRejectOrder.mockRejectedValue(new ApiError(
+          'rejectOrder failed: 409 - body',
+          409,
+          'ORDER_REASSIGNED',
+          { code: 'ORDER_REASSIGNED', message: 'Order reassigned' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('conflict');
+        // Aksi dihapus
+        expect(mockState.records.has('reassigned-reject-action')).toBe(false);
+        // Order dapat last_conflict_reason
+        const updated = mockState.orders.get('order-reassigned-reject')!;
+        expect(updated._raw.last_conflict_reason).toBe('reassigned');
+        expect(typeof updated._raw.last_conflict_at).toBe('number');
+        // Baris ditutup _status synced dan _changed kosong
+        expect(updated._raw._status).toBe('synced');
+        expect(updated._raw._changed).toBe('');
+      });
+
+      test('cancel 409 ORDER_REASSIGNED: aksi dihapus, order dapat last_conflict_reason "reassigned"', async () => {
+        const order = {
+          id: 'order-reassigned-cancel',
+          _raw: { id: 'order-reassigned-cancel', _status: 'synced' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 7,
+        };
+        mockState.orders.set('order-reassigned-cancel', order);
+
+        const action = makeRecord({
+          actionType: 'cancel',
+          targetOrderId: 'order-reassigned-cancel',
+          expectedVersion: 7,
+          payloadJson: { reason: 'test' },
+        });
+        mockState.records.set('reassigned-cancel-action', action);
+        attachMethods(action);
+
+        mockCancelOrder.mockRejectedValue(new ApiError(
+          'cancelOrder failed: 409 - body',
+          409,
+          'ORDER_REASSIGNED',
+          { code: 'ORDER_REASSIGNED', message: 'm' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('conflict');
+        expect(mockState.records.has('reassigned-cancel-action')).toBe(false);
+        const updated = mockState.orders.get('order-reassigned-cancel')!;
+        expect(updated._raw.last_conflict_reason).toBe('reassigned');
+        expect(typeof updated._raw.last_conflict_at).toBe('number');
+      });
+
+      test('cancel 409 COD_ALREADY_CAPTURED: last_conflict_reason "cancel-cod-captured"', async () => {
+        const order = {
+          id: 'order-cancel-cod-captured',
+          _raw: { id: 'order-cancel-cod-captured', _status: 'synced' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 8,
+        };
+        mockState.orders.set('order-cancel-cod-captured', order);
+
+        const action = makeRecord({
+          actionType: 'cancel',
+          targetOrderId: 'order-cancel-cod-captured',
+          expectedVersion: 8,
+          payloadJson: { reason: 'test' },
+        });
+        mockState.records.set('cancel-cod-captured-action', action);
+        attachMethods(action);
+
+        mockCancelOrder.mockRejectedValue(new ApiError(
+          'cancelOrder failed: 409 - body',
+          409,
+          'COD_ALREADY_CAPTURED',
+          { code: 'COD_ALREADY_CAPTURED', message: 'm' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('conflict');
+        expect(mockState.records.has('cancel-cod-captured-action')).toBe(false);
+        const updated = mockState.orders.get('order-cancel-cod-captured')!;
+        expect(updated._raw.last_conflict_reason).toBe('cancel-cod-captured');
+        expect(typeof updated._raw.last_conflict_at).toBe('number');
+      });
+
+      test('reject 409 COD_ALREADY_CAPTURED: aksi dihapus, order dapat last_conflict_reason "cancel-cod-captured"', async () => {
+        const order = {
+          id: 'order-reject-cod-captured',
+          _raw: { id: 'order-reject-cod-captured', _status: 'synced' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 8,
+        };
+        mockState.orders.set('order-reject-cod-captured', order);
+
+        const action = makeRecord({
+          actionType: 'reject',
+          targetOrderId: 'order-reject-cod-captured',
+          expectedVersion: 8,
+        });
+        mockState.records.set('reject-cod-captured-action', action);
+        attachMethods(action);
+
+        mockRejectOrder.mockRejectedValue(new ApiError(
+          'rejectOrder failed: 409 - body',
+          409,
+          'COD_ALREADY_CAPTURED',
+          { code: 'COD_ALREADY_CAPTURED', message: 'm' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('conflict');
+        expect(mockState.records.has('reject-cod-captured-action')).toBe(false);
+        const updated = mockState.orders.get('order-reject-cod-captured')!;
+        expect(updated._raw.last_conflict_reason).toBe('cancel-cod-captured');
+        expect(typeof updated._raw.last_conflict_at).toBe('number');
+        expect(updated._raw._status).toBe('synced');
+        expect(updated._raw._changed).toBe('');
+      });
+    });
+
+    describe('4xx non-409: status failed, tidak dikirim ulang', () => {
+      test('cancel 400: status failed, aksi tidak dihapus dan tidak dikirim lagi di putaran berikutnya', async () => {
+        const action = makeRecord({ actionType: 'cancel', targetOrderId: 'order-cancel-400', payloadJson: { reason: 'r' } });
+        mockState.records.set('cancel-400-action', action);
+        attachMethods(action);
+
+        mockCancelOrder.mockRejectedValue(new ApiError(
+          'cancelOrder failed: 400 - body',
+          400,
+          'VALIDATION',
+          { code: 'VALIDATION', message: 'bad' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('failed');
+        expect(mockState.records.get('cancel-400-action')!.status).toBe('failed');
+
+        await drainPendingActions();
+        expect(mockCancelOrder).toHaveBeenCalledTimes(1);
+      });
+
+      test('cancel 403 tanpa code: failed, bukan yatim, dan tidak dikirim lagi di putaran berikutnya', async () => {
+        const action = makeRecord({ actionType: 'cancel', targetOrderId: 'order-cancel-403', payloadJson: { reason: 'r' } });
+        mockState.records.set('cancel-403-action', action);
+        attachMethods(action);
+
+        mockCancelOrder.mockRejectedValue(new ApiError(
+          'cancelOrder failed: 403 - body',
+          403,
+          undefined,
+          { message: 'forbidden' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('failed');
+        expect(mockState.records.get('cancel-403-action')!.status).toBe('failed');
+
+        await drainPendingActions();
+        expect(mockCancelOrder).toHaveBeenCalledTimes(1);
+      });
+
+      test('cancel 403 ORDER_NOT_ASSIGNED: failed, bukan yatim', async () => {
+        const action = makeRecord({ actionType: 'cancel', targetOrderId: 'order-cancel-403-own', payloadJson: { reason: 'r' } });
+        mockState.records.set('cancel-403-own-action', action);
+        attachMethods(action);
+
+        mockCancelOrder.mockRejectedValue(new ApiError(
+          'cancelOrder failed: 403 - body',
+          403,
+          'ORDER_NOT_ASSIGNED',
+          { code: 'ORDER_NOT_ASSIGNED', message: 'not assigned' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('failed');
+        expect(mockState.records.get('cancel-403-own-action')!.status).toBe('failed');
+      });
+
+      test('cancel 401: aksi kembali pending dan putaran berhenti', async () => {
+        const action1 = makeRecord({ actionType: 'cancel', targetOrderId: 'order-cancel-401', payloadJson: { reason: 'r' } });
+        const action2 = makeRecord({ actionType: 'reject', targetOrderId: 'order-reject-401', expectedVersion: 1 });
+        mockState.records.set('cancel-401-action', action1);
+        mockState.records.set('reject-401-action', action2);
+        attachMethods(action1);
+        attachMethods(action2);
+
+        mockCancelOrder.mockRejectedValue(new UnauthorizedError('Sesi berakhir, silakan login ulang'));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('failed');
+        expect(results[0].stopDrain).toBe(true);
+        expect(mockRejectOrder).not.toHaveBeenCalled();
+        expect(mockState.records.get('reject-401-action')!.status).toBe('pending');
+        expect(mockState.records.get('cancel-401-action')!.status).toBe('pending');
+      });
+    });
+
+    describe('gangguan sementara: kembali pending', () => {
+      test('cancel 503: aksi kembali pending', async () => {
+        const action = makeRecord({ actionType: 'cancel', targetOrderId: 'order-cancel-503', payloadJson: { reason: 'r' } });
+        mockState.records.set('cancel-503-action', action);
+        attachMethods(action);
+
+        mockCancelOrder.mockRejectedValue(new ApiError(
+          'cancelOrder failed: 503 - body',
+          503,
+          undefined,
+          { message: 'unavailable' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('failed');
+        expect(mockState.records.get('cancel-503-action')!.status).toBe('pending');
+      });
+
+      test('galat jaringan pada aksi pertama: aksi kedua tidak dikirim di putaran itu', async () => {
+        const action1 = makeRecord({ actionType: 'cancel', targetOrderId: 'order-net-1', payloadJson: { reason: 'r' } });
+        const action2 = makeRecord({ actionType: 'reject', targetOrderId: 'order-net-2', expectedVersion: 1 });
+        mockState.records.set('net-1-action', action1);
+        mockState.records.set('net-2-action', action2);
+        attachMethods(action1);
+        attachMethods(action2);
+
+        mockCancelOrder.mockRejectedValue(new Error('Network request failed'));
+
+        const results = await drainPendingActions();
+        // Aksi pertama failed dengan stopDrain
+        expect(results[0].status).toBe('failed');
+        expect(results[0].stopDrain).toBe(true);
+        // Aksi kedua TIDAK diproses (stopDrain)
+        expect(mockRejectOrder).not.toHaveBeenCalled();
+        // Aksi kedua tetap 'pending' untuk putaran berikutnya
+        expect(mockState.records.get('net-2-action')!.status).toBe('pending');
+      });
+    });
+
+    describe('COD sukses: baris payment ditulis dari respons', () => {
+      test('baris payment dibuat dari respons dengan _status synced dan _changed kosong, aksi hilang di batch yang sama', async () => {
+        const action = makeRecord({
+          actionType: 'collect_cod',
+          targetOrderId: 'order-cod-success',
+          idempotencyKey: 'cod:stable',
+          payloadJson: { amountCents: 50000 },
+        });
+        mockState.records.set('cod-success-action', action);
+        attachMethods(action);
+
+        mockCollectCodOrder.mockResolvedValue({
+          id: 'payment-new-1',
+          orderId: 'order-cod-success',
+          idempotencyKey: 'cod:stable',
+          method: 'CASH',
+          status: 'CAPTURED',
+          amountCents: 50000,
+          currency: 'IDR',
+          kind: 'PAYMENT',
+          createdAt: '2026-10-17T10:00:00.000Z',
+          updatedAt: '2026-10-17T10:00:00.000Z',
+          version: 1,
+        });
+
+        await drainPendingActions();
+        // Aksi hilang
+        expect(mockState.records.has('cod-success-action')).toBe(false);
+        // Baris payment dibuat
+        const payment = mockState.payments.get('payment-new-1');
+        expect(payment).toBeDefined();
+        expect(payment._raw.id).toBe('payment-new-1');
+        expect(payment._raw.order_id).toBe('order-cod-success');
+        expect(payment._raw.status).toBe('CAPTURED');
+        expect(payment._raw.method).toBe('CASH');
+        expect(payment._raw.amount_cents).toBe(50000);
+        expect(payment._raw._status).toBe('synced');
+        expect(payment._raw._changed).toBe('');
+      });
+
+      test('kalau baris payment sudah ada, diperbarui (tidak duplikat)', async () => {
+        const action = makeRecord({
+          actionType: 'collect_cod',
+          targetOrderId: 'order-cod-dup',
+          idempotencyKey: 'cod:stable',
+          payloadJson: { amountCents: 50000 },
+        });
+        mockState.records.set('cod-dup-action', action);
+        attachMethods(action);
+
+        // Payment sudah ada di mockState.payments
+        const existing = {
+          id: 'payment-existing-1',
+          _raw: { id: 'payment-existing-1', _status: 'synced', _changed: '', status: 'PENDING' },
+        };
+        mockState.payments.set('payment-existing-1', existing);
+        attachMethods(existing);
+
+        mockCollectCodOrder.mockResolvedValue({
+          id: 'payment-existing-1',
+          orderId: 'order-cod-dup',
+          idempotencyKey: 'cod:stable',
+          method: 'CASH',
+          status: 'CAPTURED',
+          amountCents: 50000,
+          currency: 'IDR',
+          kind: 'PAYMENT',
+          createdAt: '2026-10-17T10:00:00.000Z',
+          updatedAt: '2026-10-17T10:00:00.000Z',
+          version: 2,
+        });
+
+        await drainPendingActions();
+        // Aksi hilang
+        expect(mockState.records.has('cod-dup-action')).toBe(false);
+        // Baris yang sama diperbarui dari respons, tidak dibuat baru
+        const payment = mockState.payments.get('payment-existing-1')!;
+        expect(payment).toBe(existing);
+        expect(payment._raw.status).toBe('CAPTURED');
+        expect(payment._raw.server_version).toBe(2);
+        expect(payment._raw._status).toBe('synced');
+        expect(payment._raw._changed).toBe('');
+        // Map.size masih 1 untuk payments
+        expect(mockState.payments.size).toBe(1);
+      });
+    });
+
+    describe('COD 409 COD_ALREADY_CAPTURED: tulis payment dari body, last_conflict_reason "cod-already-captured"', () => {
+      test('dengan payment di body: payment ditulis, aksi hilang, order ditandai cod-already-captured', async () => {
+        const order = {
+          id: 'order-cod-already',
+          _raw: { id: 'order-cod-already', _status: 'synced' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 9,
+        };
+        mockState.orders.set('order-cod-already', order);
+
+        const action = makeRecord({
+          actionType: 'collect_cod',
+          targetOrderId: 'order-cod-already',
+          idempotencyKey: 'cod:late',
+          payloadJson: { amountCents: 50000 },
+        });
+        mockState.records.set('cod-already-action', action);
+        attachMethods(action);
+
+        mockCollectCodOrder.mockRejectedValue(new ApiError(
+          'collectCodOrder failed: 409 - body',
+          409,
+          'COD_ALREADY_CAPTURED',
+          {
+            code: 'COD_ALREADY_CAPTURED',
+            message: 'm',
+            payment: {
+              id: 'payment-server-1',
+              orderId: 'order-cod-already',
+              idempotencyKey: 'cod:server-key',
+              method: 'CASH',
+              status: 'CAPTURED',
+              amountCents: 50000,
+              currency: 'IDR',
+              kind: 'PAYMENT',
+              externalRef: null,
+              createdAt: '2026-10-17T10:00:00.000Z',
+              updatedAt: '2026-10-17T10:00:00.000Z',
+              version: 1,
+            },
+          },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('conflict');
+        // Aksi hilang
+        expect(mockState.records.has('cod-already-action')).toBe(false);
+        // Baris payment ditulis dari body
+        const payment = mockState.payments.get('payment-server-1');
+        expect(payment).toBeDefined();
+        expect(payment._raw.order_id).toBe('order-cod-already');
+        // Order ditandai
+        const updated = mockState.orders.get('order-cod-already')!;
+        expect(updated._raw.last_conflict_reason).toBe('cod-already-captured');
+        expect(typeof updated._raw.last_conflict_at).toBe('number');
+      });
+
+      test('COD 409 COD_ALREADY_CAPTURED saat baris payment sudah ada: baris diperbarui, aksi hilang, order ditandai cod-already-captured', async () => {
+        const order = {
+          id: 'order-cod-already-existing-pay',
+          _raw: { id: 'order-cod-already-existing-pay', _status: 'synced' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 9,
+        };
+        mockState.orders.set('order-cod-already-existing-pay', order);
+
+        const action = makeRecord({
+          actionType: 'collect_cod',
+          targetOrderId: 'order-cod-already-existing-pay',
+          idempotencyKey: 'cod:late',
+          payloadJson: { amountCents: 50000 },
+        });
+        mockState.records.set('cod-already-existing-pay-action', action);
+        attachMethods(action);
+
+        const existing = {
+          id: 'payment-server-1',
+          _raw: { id: 'payment-server-1', _status: 'synced', _changed: '', status: 'PENDING' },
+        };
+        mockState.payments.set('payment-server-1', existing);
+        attachMethods(existing);
+
+        mockCollectCodOrder.mockRejectedValue(new ApiError(
+          'collectCodOrder failed: 409 - body',
+          409,
+          'COD_ALREADY_CAPTURED',
+          {
+            code: 'COD_ALREADY_CAPTURED',
+            message: 'm',
+            payment: {
+              id: 'payment-server-1',
+              orderId: 'order-cod-already-existing-pay',
+              idempotencyKey: 'cod:server-key',
+              method: 'CASH',
+              status: 'CAPTURED',
+              amountCents: 50000,
+              currency: 'IDR',
+              kind: 'PAYMENT',
+              externalRef: null,
+              createdAt: '2026-10-17T10:00:00.000Z',
+              updatedAt: '2026-10-17T10:00:00.000Z',
+              version: 3,
+            },
+          },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('conflict');
+        expect(mockState.records.has('cod-already-existing-pay-action')).toBe(false);
+        const payment = mockState.payments.get('payment-server-1')!;
+        expect(payment).toBe(existing);
+        expect(payment._raw.status).toBe('CAPTURED');
+        expect(payment._raw.server_version).toBe(3);
+        expect(payment._raw._status).toBe('synced');
+        expect(payment._raw._changed).toBe('');
+        expect(mockState.payments.size).toBe(1);
+        const updated = mockState.orders.get('order-cod-already-existing-pay')!;
+        expect(updated._raw.last_conflict_reason).toBe('cod-already-captured');
+        expect(typeof updated._raw.last_conflict_at).toBe('number');
+      });
+
+      test('tanpa payment di body: aksi hilang, tanpa baris payment', async () => {
+        const order = {
+          id: 'order-cod-already-no-pay',
+          _raw: { id: 'order-cod-already-no-pay', _status: 'synced' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 9,
+        };
+        mockState.orders.set('order-cod-already-no-pay', order);
+
+        const action = makeRecord({
+          actionType: 'collect_cod',
+          targetOrderId: 'order-cod-already-no-pay',
+          idempotencyKey: 'cod:no-pay',
+          payloadJson: { amountCents: 50000 },
+        });
+        mockState.records.set('cod-already-no-pay-action', action);
+        attachMethods(action);
+
+        mockCollectCodOrder.mockRejectedValue(new ApiError(
+          'collectCodOrder failed: 409 - body',
+          409,
+          'COD_ALREADY_CAPTURED',
+          { code: 'COD_ALREADY_CAPTURED', message: 'm' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('conflict');
+        // Aksi hilang
+        expect(mockState.records.has('cod-already-no-pay-action')).toBe(false);
+        // Tidak ada baris payment ditulis
+        expect(mockState.payments.size).toBe(0);
+        // Order tetap ditandai
+        const updated = mockState.orders.get('order-cod-already-no-pay')!;
+        expect(updated._raw.last_conflict_reason).toBe('cod-already-captured');
+      });
+    });
+
+    describe('COD 403/404: yatim', () => {
+      test('COD 403 dengan code ORDER_NOT_ASSIGNED: orphaned_needs_review', async () => {
+        const action = makeRecord({
+          actionType: 'collect_cod',
+          targetOrderId: 'order-cod-403',
+          idempotencyKey: 'cod:403',
+          payloadJson: { amountCents: 50000 },
+        });
+        mockState.records.set('cod-403-action', action);
+        attachMethods(action);
+
+        mockCollectCodOrder.mockRejectedValue(new ApiError(
+          'collectCodOrder failed: 403 - body',
+          403,
+          'ORDER_NOT_ASSIGNED',
+          { code: 'ORDER_NOT_ASSIGNED', message: 'not assigned' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('orphaned');
+        expect(mockState.records.get('cod-403-action')!.status).toBe('orphaned_needs_review');
+      });
+
+      test('COD 403 tanpa code: failed (bukan yatim)', async () => {
+        const action = makeRecord({
+          actionType: 'collect_cod',
+          targetOrderId: 'order-cod-403nc',
+          idempotencyKey: 'cod:403nc',
+          payloadJson: { amountCents: 50000 },
+        });
+        mockState.records.set('cod-403nc-action', action);
+        attachMethods(action);
+
+        mockCollectCodOrder.mockRejectedValue(new ApiError(
+          'collectCodOrder failed: 403 - body',
+          403,
+          undefined,
+          { message: 'forbidden' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('failed');
+        expect(mockState.records.get('cod-403nc-action')!.status).toBe('failed');
+      });
+
+      test('COD 404: orphaned_needs_review', async () => {
+        const action = makeRecord({
+          actionType: 'collect_cod',
+          targetOrderId: 'order-cod-404',
+          idempotencyKey: 'cod:404',
+          payloadJson: { amountCents: 50000 },
+        });
+        mockState.records.set('cod-404-action', action);
+        attachMethods(action);
+
+        mockCollectCodOrder.mockRejectedValue(new ApiError(
+          'collectCodOrder failed: 404 - body',
+          404,
+          undefined,
+          { message: 'not found' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('orphaned');
+        expect(mockState.records.get('cod-404-action')!.status).toBe('orphaned_needs_review');
+      });
+
+      test('COD 400: failed', async () => {
+        const action = makeRecord({
+          actionType: 'collect_cod',
+          targetOrderId: 'order-cod-400',
+          idempotencyKey: 'cod:400',
+          payloadJson: { amountCents: 50000 },
+        });
+        mockState.records.set('cod-400-action', action);
+        attachMethods(action);
+
+        mockCollectCodOrder.mockRejectedValue(new ApiError(
+          'collectCodOrder failed: 400 - body',
+          400,
+          'VALIDATION',
+          { code: 'VALIDATION', message: 'bad' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('failed');
+        expect(mockState.records.get('cod-400-action')!.status).toBe('failed');
+      });
+    });
+
+    describe('sukses cancel/reject: orderConflict TIDAK dipancarkan', () => {
+      test('reject sukses: pool-refresh tetap, orderConflict TIDAK dipancarkan', async () => {
+        const order = {
+          id: 'order-reject-success-noconflict',
+          _raw: { id: 'order-reject-success-noconflict', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        mockState.orders.set('order-reject-success-noconflict', order);
+
+        const action = makeRecord({
+          actionType: 'reject',
+          targetOrderId: 'order-reject-success-noconflict',
+          expectedVersion: 1,
+        });
+        mockState.records.set('reject-success-noconflict-action', action);
+        attachMethods(action);
+
+        mockRejectOrder.mockResolvedValue({
+          id: 'order-reject-success-noconflict',
+          status: 'ASSIGNED',
+          version: 2,
+        });
+
+        await drainPendingActions();
+        // pool-refresh tetap
+        expect(syncEvents.emit).toHaveBeenCalledWith('pool-refresh', expect.objectContaining({
+          orderId: 'order-reject-success-noconflict',
+        }));
+        // orderConflict TIDAK dipancarkan
+        const orderConflictCalls = (syncEvents.emit as jest.Mock).mock.calls.filter(
+          ([event]) => event === 'orderConflict',
+        );
+        expect(orderConflictCalls).toHaveLength(0);
+      });
+
+      test('cancel sukses: pool-refresh tetap, orderConflict TIDAK dipancarkan', async () => {
+        const order = {
+          id: 'order-cancel-success-noconflict',
+          _raw: { id: 'order-cancel-success-noconflict', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 1,
+        };
+        mockState.orders.set('order-cancel-success-noconflict', order);
+
+        const action = makeRecord({
+          actionType: 'cancel',
+          targetOrderId: 'order-cancel-success-noconflict',
+          expectedVersion: 1,
+          payloadJson: { reason: 'r' },
+        });
+        mockState.records.set('cancel-success-noconflict-action', action);
+        attachMethods(action);
+
+        mockCancelOrder.mockResolvedValue({
+          id: 'order-cancel-success-noconflict',
+          status: 'ASSIGNED',
+          version: 2,
+          cancelledBy: 'driver-123',
+          cancelReason: 'r',
+        });
+
+        await drainPendingActions();
+        expect(syncEvents.emit).toHaveBeenCalledWith('pool-refresh', expect.objectContaining({
+          orderId: 'order-cancel-success-noconflict',
+        }));
+        const orderConflictCalls = (syncEvents.emit as jest.Mock).mock.calls.filter(
+          ([event]) => event === 'orderConflict',
+        );
+        expect(orderConflictCalls).toHaveLength(0);
+      });
+    });
+
+    describe('retryFailedAction / discardFailedAction', () => {
+      // retryFailedAction mengubah aksi ke 'pending' lalu memanggil
+      // drainPendingActions, jadi yang diperiksa adalah aksi itu ikut dikirim.
+      test('retryFailedAction: aksi failed dikirim lagi', async () => {
+        const action = makeRecord({ id: 'retry-action-id', actionType: 'cancel', targetOrderId: 'order-retry', payloadJson: { reason: 'r' }, status: 'failed' });
+        mockState.records.set('retry-action-id', action);
+        attachMethods(action);
+
+        // cancelOrder sukses supaya pengiriman selesai.
+        mockCancelOrder.mockResolvedValue({ id: 'order-retry', status: 'ASSIGNED', version: 2 });
+
+        await retryFailedAction('retry-action-id');
+
+        // cancelOrder terpanggil: aksi ini ikut dikirim.
+        expect(mockCancelOrder).toHaveBeenCalled();
+        // Aksi sudah terhapus (sukses).
+        expect(mockState.records.has('retry-action-id')).toBe(false);
+      });
+
+      test('retryFailedAction: aksi yang bukan failed tidak diubah dan tidak dikirim', async () => {
+        const action = makeRecord({ id: 'retry-noop-id', actionType: 'cancel', targetOrderId: 'order-retry-noop', payloadJson: { reason: 'r' }, status: 'pending' });
+        mockState.records.set('retry-noop-id', action);
+        attachMethods(action);
+
+        await retryFailedAction('retry-noop-id');
+
+        // cancelOrder tidak terpanggil
+        expect(mockCancelOrder).not.toHaveBeenCalled();
+        // Aksi tetap 'pending', tidak diubah
+        expect(mockState.records.get('retry-noop-id')!.status).toBe('pending');
+      });
+
+      test('discardFailedAction: aksi failed cancel -> dihapus', async () => {
+        const action = makeRecord({ id: 'discard-action-id', actionType: 'cancel', targetOrderId: 'order-discard', payloadJson: { reason: 'r' }, status: 'failed' });
+        mockState.records.set('discard-action-id', action);
+        attachMethods(action);
+
+        await discardFailedAction('discard-action-id');
+
+        expect(mockState.records.has('discard-action-id')).toBe(false);
+      });
+
+      test('discardFailedAction: aksi failed reject -> dihapus', async () => {
+        const action = makeRecord({ id: 'discard-reject-id', actionType: 'reject', targetOrderId: 'order-discard-reject', expectedVersion: 1, status: 'failed' });
+        mockState.records.set('discard-reject-id', action);
+        attachMethods(action);
+
+        await discardFailedAction('discard-reject-id');
+
+        expect(mockState.records.has('discard-reject-id')).toBe(false);
+      });
+
+      test('discardFailedAction: aksi COD failed TIDAK dihapus', async () => {
+        const action = makeRecord({
+          id: 'cod-discard-id',
+          actionType: 'collect_cod',
+          targetOrderId: 'order-cod-discard',
+          idempotencyKey: 'cod:x',
+          payloadJson: { amountCents: 1000 },
+          status: 'failed',
+        });
+        mockState.records.set('cod-discard-id', action);
+        attachMethods(action);
+
+        await discardFailedAction('cod-discard-id');
+
+        // COD TIDAK bisa dibuang
+        expect(mockState.records.has('cod-discard-id')).toBe(true);
+      });
+    });
+
+    describe('payloadJson kosong: failed', () => {
+      test('COD dengan payloadJson null: failed (tidak diulang terus)', async () => {
+        const action = makeRecord({
+          actionType: 'collect_cod',
+          targetOrderId: 'order-cod-no-payload',
+          idempotencyKey: 'cod:nopayload',
+          payloadJson: null,
+        });
+        mockState.records.set('cod-no-payload-action', action);
+        attachMethods(action);
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('failed');
+        expect(mockState.records.get('cod-no-payload-action')!.status).toBe('failed');
+      });
     });
   });
 });

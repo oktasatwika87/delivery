@@ -10,12 +10,15 @@ import { field, text, date, readonly, json } from '@nozbe/watermelondb/decorator
 export type ActionType = 'reject' | 'cancel' | 'collect_cod';
 
 /**
- * Status of a pending action in the outbox.
- * - pending: waiting to be processed
- * - syncing: currently being sent to server
- * - failed: permanent failure (version conflict, etc.)
- * - orphaned_needs_review: COD collected but order was reassigned/cancelled
- *   before the collection was synced (requires manual resolution)
+ * Status aksi di outbox.
+ *
+ * - 'pending': menunggu dikirim.
+ * - 'syncing': sedang dikirim. Kalau aplikasi mati di tengah pengiriman, aksi
+ *   tertinggal 'syncing' dan dikirim lagi di putaran berikutnya.
+ * - 'failed': ditolak server (4xx), tidak dikirim lagi sampai driver memilih
+ *   Coba lagi di layar detail.
+ * - 'orphaned_needs_review': COD untuk order yang sudah tidak ditugaskan ke
+ *   driver ini; diselesaikan lewat support.
  */
 export type PendingActionStatus = 'pending' | 'syncing' | 'failed' | 'orphaned_needs_review';
 

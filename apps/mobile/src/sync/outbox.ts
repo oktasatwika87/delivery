@@ -1,37 +1,38 @@
 /**
- * Pending Actions Outbox, offline-first driver action queue.
+ * Outbox aksi driver (reject, cancel, collect_cod), supaya aksi tetap bisa
+ * dicatat tanpa sinyal.
  *
- * Architecture:
- * - When driver taps reject/cancel/COD collect while offline:
- *   1. Optimistically update local order state
- *   2. Insert row into pending_actions table
- *   3. Return immediately (don't wait for network)
+ * Aksi ditulis ke tabel pending_actions lokal, lalu dikirim lewat
+ * drainPendingActions. Pengiriman berjalan berurutan dan mengambil aksi
+ * 'pending' dan 'syncing' (aksi yang terputus di tengah pengiriman, misalnya
+ * karena aplikasi ditutup paksa).
  *
- * - When device comes online:
- *   1. Process pending_actions FIFO (oldest first)
- *   2. Submit to existing backend endpoints
- *   3. Handle response: success/conflict/orphaned
- *
- * Response handling:
- * - Success (2xx): delete pending_action row + (untuk reject/cancel)
- *   tulis baris lokal order dari response dalam single batch supaya
- *   pool fetch berikutnya pickup order yang baru ASSIGNED + driverId null
- *   lagi
- * - Conflict (version mismatch): pull fresh order data, delete pending_action,
- *   emit conflict notification to UI
- * - Orphaned COD (special): mark status = 'orphaned_needs_review', don't delete,
- *   don't auto-retry (requires manual business decision per support)
+ * Hasil tiap aksi dipilah dari jenis galatnya (UnauthorizedError, atau ApiError
+ * dengan status dan code), bukan dari teks pesan:
+ * - sukses: aksi dihapus; untuk collect_cod, payment dari respons ditulis ke
+ *   baris lokal di batch yang sama, jadi layar detail tidak menunggu pull;
+ * - 409 ORDER_REASSIGNED dan COD_ALREADY_CAPTURED: aksi dihapus dan alasannya
+ *   ditulis ke last_conflict_reason order itu;
+ * - 409 lain untuk cancel dan reject: handleVersionConflict;
+ * - 4xx lain (termasuk 409 lain untuk COD): aksi menjadi 'failed' dan tidak
+ *   dikirim lagi sampai driver memilih Coba lagi di layar detail. Pada COD,
+ *   403 ORDER_NOT_ASSIGNED dan 404 menjadi yatim;
+ * - 408, 429, 5xx, galat jaringan, batas waktu, dan 401: aksi kembali
+ *   'pending'. Galat jaringan, batas waktu, dan 401 juga menghentikan putaran
+ *   itu.
  */
 
 import { Model, Q } from '@nozbe/watermelondb';
 import type { Database } from '@nozbe/watermelondb';
+import type { Payment } from '@delivery/shared';
 
 import { database } from '../db';
 import { PendingActionModel, type CancelPayload, type CollectCodPayload } from '../db/models/PendingActionModel';
 import { OrderModel } from '../db/models/OrderModel';
+import { PaymentModel } from '../db/models/PaymentModel';
 import { syncEvents } from './syncEvents';
 import { getCurrentUserId } from './session';
-import { rejectOrder, cancelOrder, collectCodOrder, flagOrphanedCod } from './client';
+import { rejectOrder, cancelOrder, collectCodOrder, flagOrphanedCod, ApiError, UnauthorizedError } from './client';
 import { generateCodIdempotencyKey } from './idempotency';
 import { syncCoordinator } from './coordinator';
 
@@ -42,12 +43,24 @@ export interface EnqueueResult {
 }
 
 /**
- * Result of processing a single pending action.
+ * Hasil pemrosesan satu aksi.
+ *
+ * - 'success': aksi diterima server dan dihapus.
+ * - 'conflict': 409 yang ditangani (alasan ditulis ke order, atau
+ *   handleVersionConflict); aksi dihapus.
+ * - 'orphaned': COD untuk order yang sudah tidak ditugaskan ke driver ini;
+ *   aksi menjadi 'orphaned_needs_review'.
+ * - 'failed': aksi tidak terkirim di putaran ini, entah kembali 'pending'
+ *   (dikirim lagi nanti) atau menjadi 'failed' (menunggu Coba lagi).
+ *
+ * `stopDrain` true berarti putaran berhenti setelah aksi ini (galat jaringan,
+ * batas waktu, atau 401); aksi sisanya tetap 'pending'.
  */
 export interface ProcessResult {
   pendingActionId: string;
   status: 'success' | 'conflict' | 'orphaned' | 'failed';
   error?: string;
+  stopDrain?: boolean;
 }
 
 /**
@@ -325,6 +338,12 @@ async function runDrainOnce(db: Database): Promise<ProcessResult[]> {
   for (const action of pendingActions) {
     const result = await processPendingAction(action, db);
     results.push(result);
+    // Galat jaringan, batas waktu, atau 401: putaran ini berhenti, aksi sisanya
+    // tetap 'pending' untuk putaran berikutnya.
+    if (result.stopDrain) {
+      console.log(`[outbox] Drain stopped after action ${action.id}, ${pendingActions.length - results.length} actions left pending`);
+      break;
+    }
   }
 
   console.log(`[outbox] Drain complete: ${results.length} actions processed`);
@@ -356,8 +375,8 @@ async function processPendingAction(
       case 'collect_cod':
         return await processCollectCod(action, db);
       default:
-        console.warn(`[outbox] Unknown action type: ${(action as any).actionType}`);
-        await resetActionForRetry(action, db, 'Unknown action type');
+        console.warn(`[outbox] Unknown action type: ${action.actionType}`);
+        await markActionFailed(action, db, 'Unknown action type');
         return {
           pendingActionId: action.id,
           status: 'failed',
@@ -365,26 +384,29 @@ async function processPendingAction(
         };
     }
   } catch (err) {
-    console.error(`[outbox] Error processing action ${action.id}:`, err);
-    await resetActionForRetry(action, db, String(err));
+    // Galat tak terduga di luar pemilah: aksi dikembalikan ke 'pending' supaya
+    // tidak hilang.
+    console.error(`[outbox] Unexpected error processing action ${action.id}:`, err);
+    const msg = err instanceof Error ? err.message : String(err);
+    try {
+      await resetActionForRetry(action, db, msg);
+    } catch (fallbackErr) {
+      console.error(`[outbox] resetActionForRetry failed for ${action.id}:`, fallbackErr);
+    }
     return {
       pendingActionId: action.id,
       status: 'failed',
-      error: String(err),
+      error: msg,
     };
   }
 }
 
 /**
- * Process a reject action.
+ * Kirim aksi reject.
  *
- * Setelah server balikin response sukses, tulis baris lokal dari response
- * dalam single batch dengan delete pending_action. Tanpa ini, order row
- * lokal masih punya status lama (mis. PREPARING/ASSIGNED with driverId set),
- * pool fetch berikutnya filter berdasarkan (status=ASSIGNED + driverId null),
- * jadi order tidak muncul lagi di pool setelah driver reject offline. Setelah
- * perbaikan ini, baris lokal reflect server (status=ASSIGNED + driverId null
- * + version baru) sehingga order muncul kembali di pool fetch berikutnya.
+ * Sukses: baris order lokal ditulis dari respons dan aksi dihapus dalam satu
+ * batch, supaya order itu kembali terbaca sebagai order pool. Galat dipilah di
+ * classifyAndHandleRejectError.
  */
 async function processReject(action: PendingActionModel, db: Database): Promise<ProcessResult> {
   try {
@@ -406,8 +428,6 @@ async function processReject(action: PendingActionModel, db: Database): Promise<
     }
 
     // Single batch: delete pending_action + (kalau ada) update order row lokal.
-    // db.write() + db.batch() atomic (lihat handleVersionConflict untuk
-    // pattern paralel).
     await db.write(async () => {
       const ops: Model[] = [action.prepareDestroyPermanently()];
       if (orderRow) {
@@ -415,18 +435,10 @@ async function processReject(action: PendingActionModel, db: Database): Promise<
           r._setRaw('status', response.status);
           r._setRaw('driver_id', null);
           r._setRaw('server_version', response.version);
-          // Reject bukan pembatalan, clear cancel signal lama supaya
-          // banner "Alasan Pembatalan" tidak muncul lagi untuk order ini.
           r._setRaw('cancelled_by', null);
           r._setRaw('cancel_reason', null);
-          // Clear persisted banner signal, driver sudah synced successfully,
-          // jadi banner conflict lama sudah tidak relevan.
           r._setRaw('last_conflict_reason', null);
           r._setRaw('last_conflict_at', null);
-          // Sinkronkan internal WatermelonDB state supaya _status='synced'
-          // dan _changed kosong. Direct _raw mutation karena _setRaw
-          // bypass internal fields (lihat OrdersScreen.tsx comment
-          // "prepareUpdate+batch", pola yang sama).
           r._raw._status = 'synced';
           r._raw._changed = '';
         }));
@@ -434,42 +446,113 @@ async function processReject(action: PendingActionModel, db: Database): Promise<
       await db.batch(...ops);
     });
 
-    // Emit pool-refresh supaya OrdersScreen fetch ulang dan pickup order
-    // yang baru ASSIGNED + driverId null (= pool-eligible lagi).
+    // pool-refresh membuat OrdersScreen mengambil ulang daftar Tersedia, karena
+    // order ini sekarang ASSIGNED tanpa driver. orderConflict tidak dipancarkan:
+    // banner "Status order diperbarui server" hanya untuk perubahan dari luar,
+    // bukan untuk aksi driver sendiri yang berhasil.
     syncEvents.emit('pool-refresh', { source: 'reject-success', orderId: action.targetOrderId });
 
-    // Tetap emit orderConflict juga, ada UI yang listen untuk refresh
-    // detail panel (lihat syncEvents taxonomy). OrderTrackingScreen
-    // customer-side tidak terpengaruh (event ini driver-targeted).
-    syncEvents.emit('orderConflict', {
-      orderId: action.targetOrderId,
-      reason: 'rejected-oc',
-      serverStatus: response.status,
-      serverChangedAt: new Date().toISOString(),
-    });
-
     return { pendingActionId: action.id, status: 'success' };
-  } catch (err: any) {
-    const errorMsg = String(err);
-    if (isVersionConflict(err)) {
-      console.warn(`[outbox] Version conflict for reject on order ${action.targetOrderId}`);
-      await handleVersionConflict(action, db, 'Order sudah berubah di server');
-      return { pendingActionId: action.id, status: 'conflict', error: 'Version conflict' };
-    }
-    console.error(`[outbox] Reject failed for order ${action.targetOrderId}:`, errorMsg);
-    await resetActionForRetry(action, db, errorMsg);
-    return { pendingActionId: action.id, status: 'failed', error: errorMsg };
+  } catch (err) {
+    return await classifyAndHandleRejectError(action, db, err);
   }
 }
 
 /**
- * Process a cancel action.
- *
- * Setelah server balikin response sukses, tulis baris lokal dari response
- * dalam single batch dengan delete pending_action. Pola paralel dengan
- * processReject di atas, bedanya cancel menyimpan cancelledBy + cancelReason
- * ke baris lokal supaya UI bisa tampilkan alasan pembatalan di
- * OrderDetailScreen.
+ * Pilah galat reject. Aturannya ada di komentar kepala file ini.
+ */
+async function classifyAndHandleRejectError(
+  action: PendingActionModel,
+  db: Database,
+  err: unknown,
+): Promise<ProcessResult> {
+  // 401: sesi berakhir. Aksi kembali 'pending' dan putaran berhenti, supaya aksi
+  // lain tidak ikut dikirim sebelum login ulang.
+  if (err instanceof UnauthorizedError) {
+    console.warn(`[outbox] Unauthorized reject ${action.id}: ${err.message}`);
+    await resetActionForRetry(action, db, err.message);
+    return { pendingActionId: action.id, status: 'failed', error: err.message, stopDrain: true };
+  }
+  if (err instanceof ApiError) {
+    const { status, code } = err;
+
+    // Order sudah pindah ke driver lain atau kembali ke pool.
+    if (status === 409 && code === 'ORDER_REASSIGNED') {
+      console.warn(`[outbox] Order reassigned: ${action.targetOrderId}`);
+      return await writeRejectConflictAndDelete(action, db, 'reassigned');
+    }
+
+    if (status === 409 && code === 'COD_ALREADY_CAPTURED') {
+      console.warn(`[outbox] Reject after COD captured: ${action.targetOrderId}`);
+      return await writeRejectConflictAndDelete(action, db, 'cancel-cod-captured');
+    }
+
+    // 409 lain (VERSION_CONFLICT, ORDER_NOT_CANCELLABLE, atau tanpa code).
+    if (status === 409) {
+      console.warn(`[outbox] 409 on reject for ${action.targetOrderId} (code=${code ?? 'none'})`);
+      await handleVersionConflict(action, db, 'Order sudah berubah di server');
+      return { pendingActionId: action.id, status: 'conflict', error: 'Order conflict' };
+    }
+
+    // 408, 429, 5xx: gangguan sementara, aksi kembali 'pending' dan putaran
+    // lanjut.
+    if (status === 408 || status === 429 || (status >= 500 && status < 600)) {
+      console.warn(`[outbox] Transient ${status} on reject ${action.id}: ${err.message}`);
+      await resetActionForRetry(action, db, err.message);
+      return { pendingActionId: action.id, status: 'failed', error: err.message };
+    }
+
+    // 4xx lain: aksi menjadi 'failed' dan tidak dikirim lagi sampai driver
+    // memilih Coba lagi.
+    console.warn(`[outbox] Reject rejected with ${status} (${code ?? 'no code'})`);
+    await markActionFailed(action, db, err.message);
+    return { pendingActionId: action.id, status: 'failed', error: err.message };
+  }
+
+  // Selain itu dianggap galat jaringan atau batas waktu: aksi kembali 'pending'
+  // dan putaran berhenti.
+  const msg = err instanceof Error ? err.message : String(err);
+  console.warn(`[outbox] Unexpected reject error for ${action.id}: ${msg}`);
+  await resetActionForRetry(action, db, msg);
+  return { pendingActionId: action.id, status: 'failed', error: msg, stopDrain: true };
+}
+
+/**
+ * Tulis last_conflict_reason dan last_conflict_at ke baris order lokal lalu
+ * hapus aksinya, dalam satu batch. Baris ditutup 'synced' supaya kolom lokal
+ * ini tidak membuat baris ikut push.
+ */
+async function writeRejectConflictAndDelete(
+  action: PendingActionModel,
+  db: Database,
+  reason: 'reassigned' | 'cancel-cod-captured',
+): Promise<ProcessResult> {
+  let orderRow: OrderModel | null = null;
+  try {
+    orderRow = await db.get<OrderModel>('orders').find(action.targetOrderId);
+  } catch (err) {
+    console.warn(`[outbox] Order ${action.targetOrderId} not found locally for ${reason} write:`, err);
+  }
+
+  await db.write(async () => {
+    const ops: Model[] = [action.prepareDestroyPermanently()];
+    if (orderRow) {
+      ops.push(orderRow.prepareUpdate((r) => {
+        r._setRaw('last_conflict_reason', reason);
+        r._setRaw('last_conflict_at', Date.now());
+        r._raw._status = 'synced';
+        r._raw._changed = '';
+      }));
+    }
+    await db.batch(...ops);
+  });
+
+  return { pendingActionId: action.id, status: 'conflict', error: reason };
+}
+
+/**
+ * Kirim aksi cancel. Sama dengan processReject, ditambah cancelledBy dan
+ * cancelReason dari respons.
  */
 async function processCancel(action: PendingActionModel, db: Database): Promise<ProcessResult> {
   try {
@@ -477,7 +560,6 @@ async function processCancel(action: PendingActionModel, db: Database): Promise<
     const response = await cancelOrder(action.targetOrderId, action.expectedVersion, payload?.reason);
     console.log(`[outbox] Cancel succeeded for order ${action.targetOrderId}:`, response);
 
-    // Lookup order lokal, lihat processReject untuk rationale.
     let orderRow: OrderModel | null = null;
     try {
       orderRow = await db.get<OrderModel>('orders').find(action.targetOrderId);
@@ -495,14 +577,10 @@ async function processCancel(action: PendingActionModel, db: Database): Promise<
           r._setRaw('status', response.status);
           r._setRaw('driver_id', null);
           r._setRaw('server_version', response.version);
-          // Cancel menyimpan cancelledBy + cancelReason. response fields
-          // typed `unknown` (DriverActionResponse index signature), jadi
-          // narrow ke string via typeof, bukan `as any`.
           const cancelledBy = typeof response.cancelledBy === 'string' ? response.cancelledBy : null;
           const cancelReason = typeof response.cancelReason === 'string' ? response.cancelReason : null;
           r._setRaw('cancelled_by', cancelledBy);
           r._setRaw('cancel_reason', cancelReason);
-          // Clear persisted banner signal, driver sudah synced successfully.
           r._setRaw('last_conflict_reason', null);
           r._setRaw('last_conflict_at', null);
           r._raw._status = 'synced';
@@ -512,39 +590,69 @@ async function processCancel(action: PendingActionModel, db: Database): Promise<
       await db.batch(...ops);
     });
 
-    // pool-refresh supaya OrdersScreen fetch ulang dan pickup order
-    // (yang sekarang ASSIGNED + driverId null lagi setelah cancel).
+    // Sama seperti processReject: pool-refresh dipancarkan, orderConflict tidak.
     syncEvents.emit('pool-refresh', { source: 'cancel-success', orderId: action.targetOrderId });
 
-    syncEvents.emit('orderConflict', {
-      orderId: action.targetOrderId,
-      reason: 'order-status-conflict',
-      serverStatus: response.status,
-      serverChangedAt: new Date().toISOString(),
-    });
-
     return { pendingActionId: action.id, status: 'success' };
-  } catch (err: any) {
-    const errorMsg = String(err);
-    if (isVersionConflict(err)) {
-      console.warn(`[outbox] Version conflict for cancel on order ${action.targetOrderId}`);
-      await handleVersionConflict(action, db, 'Order sudah berubah di server');
-      return { pendingActionId: action.id, status: 'conflict', error: 'Version conflict' };
-    }
-    console.error(`[outbox] Cancel failed for order ${action.targetOrderId}:`, errorMsg);
-    await resetActionForRetry(action, db, errorMsg);
-    return { pendingActionId: action.id, status: 'failed', error: errorMsg };
+  } catch (err) {
+    return await classifyAndHandleCancelError(action, db, err);
   }
 }
 
 /**
- * Process a COD collection action.
- * Special handling for orphaned COD (order was reassigned/cancelled before sync).
+ * Pilah galat cancel, aturannya sama dengan reject.
+ */
+async function classifyAndHandleCancelError(
+  action: PendingActionModel,
+  db: Database,
+  err: unknown,
+): Promise<ProcessResult> {
+  if (err instanceof UnauthorizedError) {
+    await resetActionForRetry(action, db, err.message);
+    return { pendingActionId: action.id, status: 'failed', error: err.message, stopDrain: true };
+  }
+
+  if (err instanceof ApiError) {
+    const { status, code } = err;
+
+    if (status === 409 && code === 'ORDER_REASSIGNED') {
+      return await writeRejectConflictAndDelete(action, db, 'reassigned');
+    }
+
+    if (status === 409 && code === 'COD_ALREADY_CAPTURED') {
+      return await writeRejectConflictAndDelete(action, db, 'cancel-cod-captured');
+    }
+
+    if (status === 409) {
+      await handleVersionConflict(action, db, 'Order sudah berubah di server');
+      return { pendingActionId: action.id, status: 'conflict', error: 'Order conflict' };
+    }
+
+    if (status === 408 || status === 429 || (status >= 500 && status < 600)) {
+      await resetActionForRetry(action, db, err.message);
+      return { pendingActionId: action.id, status: 'failed', error: err.message };
+    }
+
+    await markActionFailed(action, db, err.message);
+    return { pendingActionId: action.id, status: 'failed', error: err.message };
+  }
+
+  const msg = err instanceof Error ? err.message : String(err);
+  await resetActionForRetry(action, db, msg);
+  return { pendingActionId: action.id, status: 'failed', error: msg, stopDrain: true };
+}
+
+/**
+ * Kirim aksi collect_cod.
+ *
+ * Sukses: payment dari respons ditulis ke baris lokal (dibuat atau diperbarui)
+ * dan aksi dihapus dalam satu batch, jadi tombol Selesai diantar langsung tampil
+ * tanpa menunggu pull. Galat dipilah di classifyAndHandleCodError.
  */
 async function processCollectCod(action: PendingActionModel, db: Database): Promise<ProcessResult> {
   const payload = action.payloadJson as CollectCodPayload | null;
   if (!payload) {
-    await resetActionForRetry(action, db, 'Missing payload');
+    await markActionFailed(action, db, 'Missing payload');
     return { pendingActionId: action.id, status: 'failed', error: 'Missing payload' };
   }
 
@@ -552,51 +660,209 @@ async function processCollectCod(action: PendingActionModel, db: Database): Prom
     const response = await collectCodOrder(
       action.targetOrderId,
       payload.amountCents,
-      action.idempotencyKey
+      action.idempotencyKey,
     );
-    console.log(`[outbox] COD collection succeeded for order ${action.targetOrderId}:`, response);
+    console.log(`[outbox] COD collection succeeded for order ${action.targetOrderId}`);
 
-    // Success: delete the pending action
-    await deletePendingAction(action, db);
-
+    const payment = isPayment(response)
+      ? response
+      : null;
+    await deleteActionAndWritePayment(action, db, payment);
     return { pendingActionId: action.id, status: 'success' };
-  } catch (err: any) {
-    const errorMsg = String(err);
-
-    // Check if this is an orphaned COD situation
-    // Orphaned = order was reassigned/cancelled while driver collected COD offline
-    if (isOrphanedCod(err)) {
-      console.warn(`[outbox] Orphaned COD detected for order ${action.targetOrderId}`);
-      await markActionOrphaned(action, db);
-
-      // Fire-and-forget: notify server so support gets email
-      // If this also fails, local orphan status is the fallback
-      if (payload) {
-        flagOrphanedCod(action.targetOrderId, payload.amountCents, action.idempotencyKey)
-          .catch((e) => console.warn('[outbox] flagOrphanedCod non-fatal error:', e.message));
-      }
-
-      return { pendingActionId: action.id, status: 'orphaned', error: 'Order reassigned/cancelled' };
-    }
-
-    // Check for version conflict (treat same as orphaned for COD)
-    if (isVersionConflict(err)) {
-      console.warn(`[outbox] Version conflict for COD on order ${action.targetOrderId}, treating as orphaned`);
-      await markActionOrphaned(action, db);
-
-      // Fire-and-forget: notify server so support gets email
-      if (payload) {
-        flagOrphanedCod(action.targetOrderId, payload.amountCents, action.idempotencyKey)
-          .catch((e) => console.warn('[outbox] flagOrphanedCod non-fatal error:', e.message));
-      }
-
-      return { pendingActionId: action.id, status: 'orphaned', error: 'Version conflict (order changed)' };
-    }
-
-    console.error(`[outbox] COD collection failed for order ${action.targetOrderId}:`, errorMsg);
-    await resetActionForRetry(action, db, errorMsg);
-    return { pendingActionId: action.id, status: 'failed', error: errorMsg };
+  } catch (err) {
+    return await classifyAndHandleCodError(action, db, err, payload);
   }
+}
+
+/**
+ * Pilah galat collect_cod. Berbeda dengan cancel dan reject: 403
+ * ORDER_NOT_ASSIGNED dan 404 menjadi yatim, dan 409 lain menjadi 'failed'.
+ */
+async function classifyAndHandleCodError(
+  action: PendingActionModel,
+  db: Database,
+  err: unknown,
+  payload: CollectCodPayload,
+): Promise<ProcessResult> {
+  // Yatim: 403 ORDER_NOT_ASSIGNED atau 404. 403 tanpa code (misalnya token yang
+  // bukan driver) tidak dianggap yatim.
+  if (err instanceof ApiError) {
+    const { status, code } = err;
+
+    if ((status === 403 && code === 'ORDER_NOT_ASSIGNED') || status === 404) {
+      console.warn(`[outbox] Orphaned COD for ${action.targetOrderId}: ${status} ${code ?? ''}`);
+      await markActionOrphaned(action, db);
+      flagOrphanedCod(action.targetOrderId, payload.amountCents, action.idempotencyKey)
+        .catch((e) => console.warn('[outbox] flagOrphanedCod non-fatal error:', e.message));
+      return { pendingActionId: action.id, status: 'orphaned', error: `Order ${status === 404 ? 'not found' : 'not assigned'}` };
+    }
+
+    if (status === 409 && code === 'COD_ALREADY_CAPTURED') {
+      // COD order ini sudah tercatat dengan kunci lain. Payment di `err.body`
+      // ditulis kalau bentuknya benar; aksi dihapus dan alasannya ditulis ke order.
+      const payment = extractPaymentFromBody(err.body);
+      await db.write(async () => {
+        const ops: Model[] = [action.prepareDestroyPermanently()];
+        if (payment) {
+          ops.push(await prepareUpsertPaymentOp(db, payment));
+        }
+        let orderRow: OrderModel | null = null;
+        try {
+          orderRow = await db.get<OrderModel>('orders').find(action.targetOrderId);
+        } catch (lookupErr) {
+          console.warn(`[outbox] Order ${action.targetOrderId} not found locally for cod-already-captured:`, lookupErr);
+        }
+        if (orderRow) {
+          ops.push(orderRow.prepareUpdate((r) => {
+            r._setRaw('last_conflict_reason', 'cod-already-captured');
+            r._setRaw('last_conflict_at', Date.now());
+            r._raw._status = 'synced';
+            r._raw._changed = '';
+          }));
+        }
+        await db.batch(...ops);
+      });
+      return { pendingActionId: action.id, status: 'conflict', error: 'cod-already-captured' };
+    }
+
+    if (status === 409) {
+      // 409 lain, misalnya IDEMPOTENCY_KEY_CONFLICT.
+      await markActionFailed(action, db, err.message);
+      return { pendingActionId: action.id, status: 'failed', error: err.message };
+    }
+
+    if (status === 408 || status === 429 || (status >= 500 && status < 600)) {
+      await resetActionForRetry(action, db, err.message);
+      return { pendingActionId: action.id, status: 'failed', error: err.message };
+    }
+
+    if (status === 401) {
+      // Jaga-jaga kalau 401 datang sebagai ApiError: perlakuannya sama dengan
+      // UnauthorizedError di bawah.
+      await resetActionForRetry(action, db, err.message);
+      return { pendingActionId: action.id, status: 'failed', error: err.message, stopDrain: true };
+    }
+
+    // 4xx lain (400, 403 tanpa code, dst): 'failed'.
+    await markActionFailed(action, db, err.message);
+    return { pendingActionId: action.id, status: 'failed', error: err.message };
+  }
+
+  // 401: aksi kembali 'pending' dan putaran berhenti.
+  if (err instanceof UnauthorizedError) {
+    await resetActionForRetry(action, db, err.message);
+    return { pendingActionId: action.id, status: 'failed', error: err.message, stopDrain: true };
+  }
+
+  // Selain itu dianggap galat jaringan atau batas waktu.
+  const msg = err instanceof Error ? err.message : String(err);
+  await resetActionForRetry(action, db, msg);
+  return { pendingActionId: action.id, status: 'failed', error: msg, stopDrain: true };
+}
+
+/**
+ * Pemeriksa bentuk `Payment` untuk data dari server: setiap field wajib ada
+ * dan jenisnya sesuai.
+ */
+function isPayment(value: unknown): value is Payment {
+  if (!value || typeof value !== 'object') return false;
+  if (!('id' in value) || typeof value.id !== 'string') return false;
+  if (!('orderId' in value) || typeof value.orderId !== 'string') return false;
+  if (!('idempotencyKey' in value) || typeof value.idempotencyKey !== 'string') return false;
+  if (!('method' in value) || typeof value.method !== 'string') return false;
+  if (!('status' in value) || typeof value.status !== 'string') return false;
+  if (!('amountCents' in value) || typeof value.amountCents !== 'number') return false;
+  if (!('currency' in value) || typeof value.currency !== 'string') return false;
+  if (!('kind' in value) || typeof value.kind !== 'string') return false;
+  if (!('createdAt' in value) || typeof value.createdAt !== 'string') return false;
+  if (!('updatedAt' in value) || typeof value.updatedAt !== 'string') return false;
+  if (!('version' in value) || typeof value.version !== 'number') return false;
+  return true;
+}
+
+/**
+ * Baris payment lokal untuk prepareCreateFromDirtyRaw: kunci snake_case sesuai
+ * kolom tabel payments, waktu dari server dalam milidetik.
+ */
+function buildPaymentRaw(payment: Payment): Record<string, unknown> {
+  const createdAtMs = Date.parse(payment.createdAt);
+  const updatedAtMs = Date.parse(payment.updatedAt);
+  return {
+    id: payment.id,
+    _status: 'synced',
+    _changed: '',
+    order_id: payment.orderId,
+    idempotency_key: payment.idempotencyKey,
+    method: payment.method,
+    status: payment.status,
+    amount_cents: payment.amountCents,
+    currency: payment.currency,
+    kind: payment.kind,
+    external_ref: payment.externalRef ?? null,
+    server_version: payment.version,
+    created_at: Number.isFinite(createdAtMs) ? createdAtMs : Date.now(),
+    updated_at: Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now(),
+  };
+}
+
+/**
+ * Ambil payment dari body ApiError, kalau ada dan bentuknya benar.
+ */
+function extractPaymentFromBody(body: unknown): Payment | null {
+  if (!body || typeof body !== 'object' || !('payment' in body)) return null;
+  return isPayment(body.payment) ? body.payment : null;
+}
+
+/**
+ * Siapkan penulisan baris payment dari data server; dipanggil di dalam
+ * database.write. Baris yang sudah ada (misalnya sudah dibawa pull karena
+ * respons COD sempat hilang) diperbarui: membuat baris dengan id yang sama
+ * ditolak database dan membuat aksinya terus diulang.
+ */
+async function prepareUpsertPaymentOp(
+  db: Database,
+  payment: Payment,
+): Promise<Model> {
+  const existing = await db.get<PaymentModel>('payments')
+    .find(payment.id)
+    .catch(() => null);
+  if (existing) {
+    return existing.prepareUpdate((r) => {
+      const createdAtMs = Date.parse(payment.createdAt);
+      const updatedAtMs = Date.parse(payment.updatedAt);
+      r._setRaw('order_id', payment.orderId);
+      r._setRaw('idempotency_key', payment.idempotencyKey);
+      r._setRaw('method', payment.method);
+      r._setRaw('status', payment.status);
+      r._setRaw('amount_cents', payment.amountCents);
+      r._setRaw('currency', payment.currency);
+      r._setRaw('kind', payment.kind);
+      r._setRaw('external_ref', payment.externalRef ?? null);
+      r._setRaw('server_version', payment.version);
+      r._setRaw('created_at', Number.isFinite(createdAtMs) ? createdAtMs : Date.now());
+      r._setRaw('updated_at', Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now());
+      r._raw._status = 'synced';
+      r._raw._changed = '';
+    });
+  }
+  return db.get<PaymentModel>('payments').prepareCreateFromDirtyRaw(buildPaymentRaw(payment));
+}
+
+/**
+ * Hapus aksi dan tulis payment (kalau bentuknya benar) dalam satu batch.
+ */
+async function deleteActionAndWritePayment(
+  action: PendingActionModel,
+  db: Database,
+  payment: Payment | null,
+): Promise<void> {
+  await db.write(async () => {
+    const ops: Model[] = [action.prepareDestroyPermanently()];
+    if (payment) {
+      ops.push(await prepareUpsertPaymentOp(db, payment));
+    }
+    await db.batch(...ops);
+  });
 }
 
 /**
@@ -623,46 +889,21 @@ export function isVersionConflict(err: any): boolean {
 }
 
 /**
- * Check if an error indicates orphaned COD (order reassigned to another driver or cancelled).
- */
-function isOrphanedCod(err: any): boolean {
-  if (!err) return false;
-  const msg = String(err).toLowerCase();
-  return (
-    msg.includes('not found') ||
-    msg.includes('already assigned') ||
-    msg.includes('reassign') ||
-    msg.includes('cancelled') ||
-    msg.includes('not your order') ||
-    msg.includes('not the assigned driver')
-  );
-}
-
-/**
- * Handle version conflict: pull fresh order data, delete pending action, notify UI.
+ * 409 lain untuk cancel dan reject: aksi dihapus, lalu data order diambil ulang
+ * lewat pullNow.
  *
- * Untuk pending action bertipe 'cancel', tulis juga persisted banner signal
- * (lastConflictReason + lastConflictAt) ke order row lokal, banner
- * LastConflictBanner baca field ini untuk surface cancel-offline conflict
- * ke driver (Skenario A, Temuan 1).
- *
- * Aksi 'reject' / 'collect_cod' TIDAK menulis field ini. Reason
- * 'cancelled-by-server' spesifik untuk skenario cancel-offline (driver tap
- * Batal offline, server sudah reassign/close/cancel sebelum mobile sempat
- * sync), bukan untuk cancel online biasa.
+ * Untuk cancel, last_conflict_reason 'cancelled-by-server' ditulis ke baris
+ * order dan baris ditutup 'synced', supaya kolom lokal itu tidak membuat baris
+ * ikut push. orderConflict hanya dipancarkan untuk reject; cancel cukup memakai
+ * banner tersimpan.
  */
 async function handleVersionConflict(action: PendingActionModel, db: Database, reason: string): Promise<void> {
   console.log(`[outbox] Handling version conflict for action ${action.id}`);
 
-  // Untuk pending action bertipe cancel: lookup order row lebih dulu
-  // (read-only, di luar transaction) supaya bisa di-batch dengan delete
-  // pending_action di bawah. Kalau order tidak ada di lokal (sangat
-  // jarang, server data di-pull duluan sebelum sync berikutnya), log
-  // warning dan lanjut tanpa tulis banner signal.
-  let cancelOrder: OrderModel | null = null;
+  let cancelOrderRow: OrderModel | null = null;
   if (action.actionType === 'cancel') {
     try {
-      cancelOrder = await db.get<OrderModel>('orders').find(action.targetOrderId);
+      cancelOrderRow = await db.get<OrderModel>('orders').find(action.targetOrderId);
     } catch (err) {
       console.warn(
         `[outbox] Order ${action.targetOrderId} not found locally for cancel conflict write:`,
@@ -671,15 +912,14 @@ async function handleVersionConflict(action: PendingActionModel, db: Database, r
     }
   }
 
-  // Single batch: delete pending_action + (kalau cancel) tulis banner signal.
-  // Tidak buka transaksi terpisah untuk lastConflictReason/lastConflictAt,
-  // gabung dengan delete pending_action (sesuai spec Temuan 1).
   await db.write(async () => {
     const ops: Model[] = [action.prepareDestroyPermanently()];
-    if (cancelOrder) {
-      ops.push(cancelOrder.prepareUpdate((o: any) => {
-        o.lastConflictReason = 'cancelled-by-server';
-        o.lastConflictAt = Date.now();
+    if (cancelOrderRow) {
+      ops.push(cancelOrderRow.prepareUpdate((r) => {
+        r._setRaw('last_conflict_reason', 'cancelled-by-server');
+        r._setRaw('last_conflict_at', Date.now());
+        r._raw._status = 'synced';
+        r._raw._changed = '';
       }));
     }
     await db.batch(...ops);
@@ -694,19 +934,22 @@ async function handleVersionConflict(action: PendingActionModel, db: Database, r
     console.warn('[outbox] Failed to pull after conflict:', err);
   }
 
-  // Emit conflict event
-  syncEvents.emit('orderConflict', {
-    orderId: action.targetOrderId,
-    reason: 'order-status-conflict',
-    serverStatus: 'unknown',
-    serverChangedAt: new Date().toISOString(),
-    ackReason: reason,
-  });
+  // Hanya reject; cancel sudah punya banner tersimpan.
+  if (action.actionType !== 'cancel') {
+    syncEvents.emit('orderConflict', {
+      orderId: action.targetOrderId,
+      reason: 'order-status-conflict',
+      serverStatus: 'unknown',
+      serverChangedAt: new Date().toISOString(),
+      ackReason: reason,
+    });
+  }
 }
 
 /**
- * Mark a pending action as orphaned (COD collected but order changed).
- * Unlike regular failure, orphaned actions are kept for manual review.
+ * Tandai aksi COD sebagai yatim: uangnya sudah diterima driver, tapi order
+ * sudah tidak ditugaskan ke driver ini. Aksi 'orphaned_needs_review' tidak
+ * dikirim lagi, dan layar detail meminta driver menghubungi support.
  */
 async function markActionOrphaned(action: PendingActionModel, db: Database): Promise<void> {
   console.log(`[outbox] Marking action ${action.id} as orphaned_needs_review`);
@@ -717,7 +960,6 @@ async function markActionOrphaned(action: PendingActionModel, db: Database): Pro
     });
   });
 
-  // Emit notification for UI
   syncEvents.emit('pendingActionOrphaned', {
     pendingActionId: action.id,
     orderId: action.targetOrderId,
@@ -727,30 +969,72 @@ async function markActionOrphaned(action: PendingActionModel, db: Database): Pro
 }
 
 /**
- * Reset a failed action back to 'pending' so it will be retried
- * on the next drain trigger (reconnect or after enqueue).
- *
- * Outbox actions (reject/cancel/collectCod) represent physical driver actions
- * that must eventually sync, we NEVER give up on them automatically.
- * Unlike regular field sync which respects MAX_SYNC_ATTEMPTS, outbox actions
- * keep retrying indefinitely until they succeed or the device goes away.
+ * Tandai aksi 'failed': tidak dikirim lagi sampai driver memilih Coba lagi
+ * (atau Abaikan, untuk cancel dan reject) di layar detail.
  */
-async function resetActionForRetry(action: PendingActionModel, db: Database, error: string): Promise<void> {
-  console.warn(`[outbox] Action ${action.id} failed: ${error}. Will retry on next drain.`);
-
+async function markActionFailed(action: PendingActionModel, db: Database, error: string): Promise<void> {
+  console.warn(`[outbox] Action ${action.id} permanently failed: ${error}. Will not auto-retry.`);
   await db.write(async () => {
     await action.update((row) => {
-      row.status = 'pending';
+      row.status = 'failed';
     });
   });
 }
 
 /**
- * Delete a pending action from the database.
+ * Untuk tombol Coba lagi: aksi 'failed' dikembalikan ke 'pending', lalu antrean
+ * langsung dikirim. Kunci idempotensi tidak berubah, jadi COD tidak bisa
+ * tercatat dua kali. Aksi berstatus lain tidak diubah.
  */
-async function deletePendingAction(action: PendingActionModel, db: Database): Promise<void> {
-  await db.write(async () => {
+export async function retryFailedAction(actionId: string): Promise<void> {
+  const action = await database.get<PendingActionModel>('pending_actions').find(actionId).catch(() => null);
+  if (!action) {
+    console.warn(`[outbox] retryFailedAction: action ${actionId} not found`);
+    return;
+  }
+  if (action.status !== 'failed') {
+    return;
+  }
+  await database.write(async () => {
+    await action.update((row) => {
+      row.status = 'pending';
+    });
+  });
+  // Kirim sekarang, tidak menunggu sinkron berkala.
+  await drainPendingActions();
+}
+
+/**
+ * Untuk tombol Abaikan: hapus permanen aksi cancel atau reject yang 'failed'.
+ * COD tidak bisa dibuang, karena aksi itu satu-satunya catatan di HP bahwa
+ * uangnya sudah diterima.
+ */
+export async function discardFailedAction(actionId: string): Promise<void> {
+  const action = await database.get<PendingActionModel>('pending_actions').find(actionId).catch(() => null);
+  if (!action) {
+    console.warn(`[outbox] discardFailedAction: action ${actionId} not found`);
+    return;
+  }
+  if (action.status !== 'failed') return;
+  if (action.actionType === 'collect_cod') {
+    console.warn(`[outbox] discardFailedAction: COD action ${actionId} cannot be discarded`);
+    return;
+  }
+  await database.write(async () => {
     await action.destroyPermanently();
+  });
+}
+
+/**
+ * Kembalikan aksi ke 'pending' supaya dikirim lagi di putaran berikutnya
+ * (galat jaringan, batas waktu, 401, 408, 429, 5xx, atau galat tak terduga).
+ */
+async function resetActionForRetry(action: PendingActionModel, db: Database, error: string): Promise<void> {
+  console.log(`[outbox] Action ${action.id} will retry: ${error}`);
+  await db.write(async () => {
+    await action.update((row) => {
+      row.status = 'pending';
+    });
   });
 }
 
