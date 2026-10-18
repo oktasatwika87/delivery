@@ -17,6 +17,7 @@ import { of } from 'rxjs';
 
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
+import { PendingActionModel } from '../db/models/PendingActionModel';
 import { getCurrentUserId } from '../sync/session';
 import { fetchAvailableOrders, UnauthorizedError, acceptOrder, ApiError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
@@ -120,8 +121,10 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
     // Kalau dipisah, tulisan Terima (handleAccept) bisa masuk di antaranya
     // dan order yang baru diterima terhapus atau tertimpa lagi jadi ASSIGNED.
     await database.write(async () => {
-      // Pool row = driver_id empty (null or ''), _status 'synced', no pending action.
-      // Non-pool rows and rows with pending actions are never touched by fetchPool.
+      // Baris pool: status ASSIGNED, driver_id null, deleted_at kosong. Baris
+      // pool yang punya aksi outbox tidak diubah atau dihapus. Baris lain
+      // yang ada di daftar server hanya dijadikan baris pool kalau sudah
+      // lepas (lihat di bawah).
       const poolRows: OrderModel[] = await database
         .get<OrderModel>('orders')
         .query(
@@ -131,10 +134,15 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
         )
         .fetch();
 
-      // Collect pending action order IDs to exclude from updates.
+      // Baris yang punya aksi outbox berstatus apa pun tidak disentuh,
+      // termasuk aksi 'failed' dan 'orphaned_needs_review'.
+      const pendingActionsCollection = database.get<PendingActionModel>('pending_actions');
       const pendingIds = new Set<string>();
       for (const row of poolRows) {
-        if (await hasPendingAction(row.id)) {
+        const count = await pendingActionsCollection
+          .query(Q.where('target_order_id', row.id))
+          .fetchCount();
+        if (count > 0) {
           pendingIds.add(row.id);
         }
       }
@@ -164,6 +172,8 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
             r._raw._changed = '';
             // updated_at tetap Date.now(), sama seperti buildPoolRow.
             // created_at, items_json, address_json, customer_id tidak diubah.
+            // last_conflict_* tidak diubah, supaya banner dan kotak
+            // pemberitahuan tidak hilang karena fetchPool.
           }),
         );
       }
@@ -174,8 +184,39 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
         if (poolRows.some((r) => r.id === item.orderId)) continue;
         // Cek juga baris non-pool untuk mencegah pembuatan ganda
         // (misalnya baris yang sudah punya driver_id terisi dari seed).
+        // Baris lain yang sudah lepas (driver_id kosong, _status synced,
+        // deleted_at kosong, tanpa aksi outbox) dijadikan baris pool dengan
+        // data server terbaru.
         const alreadyExists = await database.get<OrderModel>('orders').find(item.orderId).catch(() => null);
-        if (alreadyExists) continue;
+        if (alreadyExists) {
+          // Aksi berstatus apa pun menghalangi: order dengan COD yang gagal
+          // atau yatim tidak boleh muncul di Tersedia, karena uangnya masih
+          // harus diselesaikan.
+          const existingDriverId = alreadyExists._getRaw('driver_id');
+          const driverIsEmpty = existingDriverId === null || existingDriverId === '';
+          if (!driverIsEmpty) continue;
+          if (alreadyExists._getRaw('deleted_at') !== null) continue;
+          if (alreadyExists._getRaw('_status') !== 'synced') continue;
+          // Sama seperti poolRows di atas: hitung semua baris pending_actions
+          // untuk order ini, status apa pun.
+          const existingCount = await pendingActionsCollection
+            .query(Q.where('target_order_id', item.orderId))
+            .fetchCount();
+          if (existingCount > 0) continue;
+          batch.push(
+            alreadyExists.prepareUpdate((r) => {
+              r._setRaw('server_version', item.version);
+              r._setRaw('total_cents', item.totalCents);
+              r._setRaw('currency', item.currency);
+              // Status pool selalu ASSIGNED; order masuk daftar Tersedia.
+              r._setRaw('status', 'ASSIGNED');
+              r._raw._status = 'synced';
+              r._raw._changed = '';
+              // last_conflict_* tidak diubah: banner masih berlaku.
+            }),
+          );
+          continue;
+        }
         const row = buildPoolRow(
           {
             orderId: item.orderId,
@@ -413,6 +454,11 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
               r._setRaw('cancelled_by', response.cancelledBy ?? null);
               r._setRaw('cancel_reason', response.cancelReason ?? null);
               r._setRaw('updated_at', Date.parse(response.updatedAt));
+              // Bersihkan banner tersimpan (last_conflict_reason/at) kalau ada:
+              // Terima sukses artinya baris bukan lagi 'released'/'reassigned',
+              // sehingga banner LastConflictBanner harus hilang.
+              r._setRaw('last_conflict_reason', null);
+              r._setRaw('last_conflict_at', null);
               // created_at tidak diubah
               r._raw._status = 'synced';
               r._raw._changed = '';

@@ -138,6 +138,7 @@ jest.mock('../sync/outbox', () => ({
 const mockOrdersCollection = {
   query: jest.fn().mockReturnValue({
     fetch: jest.fn().mockResolvedValue([]),
+    fetchCount: jest.fn().mockResolvedValue(0),
     observe: jest.fn().mockReturnValue({
       subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
     }),
@@ -521,6 +522,7 @@ describe('Accept order online gating', () => {
     // Reset pool query mock
     mockOrdersCollection.query = jest.fn().mockReturnValue({
       fetch: jest.fn().mockResolvedValue([]),
+      fetchCount: jest.fn().mockResolvedValue(0),
       observe: jest.fn().mockReturnValue({
         subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
       }),
@@ -541,6 +543,7 @@ describe('Accept order online gating', () => {
     };
     mockOrdersCollection.query = jest.fn().mockReturnValue({
       fetch: jest.fn().mockResolvedValue([poolOrderMock]),
+      fetchCount: jest.fn().mockResolvedValue(0),
       observe: jest.fn().mockReturnValue({
         subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
       }),
@@ -596,6 +599,7 @@ describe('Accept order online gating', () => {
     };
     mockOrdersCollection.query = jest.fn().mockReturnValue({
       fetch: jest.fn().mockResolvedValue([poolOrderMock]),
+      fetchCount: jest.fn().mockResolvedValue(0),
       observe: jest.fn().mockReturnValue({
         subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
       }),
@@ -779,6 +783,7 @@ describe('Terima order menulis data lengkap dari respons', () => {
     (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
     mockOrdersCollection.query = jest.fn().mockReturnValue({
       fetch: jest.fn().mockResolvedValue([]),
+      fetchCount: jest.fn().mockResolvedValue(0),
       observe: jest.fn().mockReturnValue({
         subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
       }),
@@ -795,6 +800,7 @@ describe('Terima order menulis data lengkap dari respons', () => {
     const poolOrder = makeAcceptablePoolOrder('pool-accept-gps', 3);
     mockOrdersCollection.query = jest.fn().mockReturnValue({
       fetch: jest.fn().mockResolvedValue([poolOrder]),
+      fetchCount: jest.fn().mockResolvedValue(0),
       observe: jest.fn().mockReturnValue({
         subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
       }),
@@ -866,6 +872,7 @@ describe('Terima order menulis data lengkap dari respons', () => {
     const poolOrder = makeAcceptablePoolOrder('pool-accept-no-gps', 3);
     mockOrdersCollection.query = jest.fn().mockReturnValue({
       fetch: jest.fn().mockResolvedValue([poolOrder]),
+      fetchCount: jest.fn().mockResolvedValue(0),
       observe: jest.fn().mockReturnValue({
         subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
       }),

@@ -23,6 +23,7 @@ import type { Model } from '@nozbe/watermelondb';
 
 import { schema } from '../db/schema';
 import { OrderModel } from '../db/models/OrderModel';
+import { PendingActionModel } from '../db/models/PendingActionModel';
 import { OrdersScreenBase } from './OrdersScreen';
 import { ApiError } from '../sync/client';
 import type { AvailableOrderItem } from '../sync/client';
@@ -134,7 +135,7 @@ function buildTestDatabase(): Database {
   });
   return new Database({
     adapter,
-    modelClasses: [OrderModel],
+    modelClasses: [OrderModel, PendingActionModel],
   });
 }
 
@@ -652,10 +653,25 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
         updated_at: 1_500_000_000_000,
       });
 
-      // Mock hasPendingAction = true untuk row ini
-      const outbox = jest.requireMock('../sync/outbox') as { hasPendingAction: jest.Mock };
-      outbox.hasPendingAction.mockImplementation(async (orderId: string) => {
-        return orderId === pendingRowId;
+      // Satu aksi 'pending' untuk baris ini di pending_actions. fetchPool
+      // tidak menyentuh baris yang punya aksi outbox berstatus apa pun.
+      await db.write(async () => {
+        const prepared = db
+          .get<PendingActionModel>('pending_actions')
+          .prepareCreateFromDirtyRaw({
+            id: 'pa-t4-pending',
+            _status: 'synced',
+            _changed: '',
+            action_type: 'update_status',
+            target_order_id: pendingRowId,
+            expected_version: 2,
+            idempotency_key: 'status:t4-pending:OUT_FOR_DELIVERY',
+            payload_json: '{"status":"OUT_FOR_DELIVERY"}',
+            status: 'pending',
+            created_at: 1_500_000_000_000,
+            updated_at: 1_500_000_000_000,
+          });
+        await db.batch(prepared);
       });
 
       // Server kirim data baru untuk row ini
@@ -961,6 +977,510 @@ describe('fetchPool - terima serentak tidak menghapus atau menimpa order', () =>
     expect(row._getRaw('status')).toBe('PREPARING');
     expect(row._getRaw('driver_id')).toBe('driver-racer');
     expect(row._getRaw('server_version')).toBe(5);
+  });
+});
+
+// fetchPool untuk baris lepas yang sudah ada di DB: baris dengan driver_id
+// null, 'synced', dan tanpa aksi dijadikan baris pool kalau ordernya ada lagi
+// di daftar Tersedia. Baris dengan driver_id terisi tetap tidak disentuh.
+describe('fetchPool - baris lepas (driver_id null, last_conflict_reason terisi) jadi baris pool', () => {
+  let db: Database;
+  let releaseClient: { fetchAvailableOrders: jest.Mock };
+  let releaseOutbox: { hasPendingAction: jest.Mock };
+
+  beforeEach(() => {
+    db = buildTestDatabase();
+    jest.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS);
+    releaseClient = jest.requireMock('../sync/client') as { fetchAvailableOrders: jest.Mock };
+    releaseOutbox = jest.requireMock('../sync/outbox') as { hasPendingAction: jest.Mock };
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  async function seedOrderRowRaw(
+    rowId: string,
+    fields: Record<string, unknown>,
+  ): Promise<void> {
+    await db.write(async () => {
+      const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+        id: rowId,
+        _status: 'synced',
+        _changed: '',
+        ...fields,
+      });
+      await db.batch(prepared);
+    });
+  }
+
+  async function seedPendingActionRaw(
+    rowId: string,
+    fields: Record<string, unknown>,
+  ): Promise<void> {
+    await db.write(async () => {
+      const prepared = db
+        .get<PendingActionModel>('pending_actions')
+        .prepareCreateFromDirtyRaw({
+          id: rowId,
+          _status: 'synced',
+          _changed: '',
+          ...fields,
+        });
+      await db.batch(prepared);
+    });
+  }
+
+  it('baris lepas (driver_id null, PREPARING, synced, tanpa aksi) jadi baris pool dengan data server, last_conflict_reason tetap', async () => {
+    const releasedRowId = 'pool-released-1';
+    await seedOrderRowRaw(releasedRowId, {
+      customer_id: 'cust-rel-1',
+      driver_id: null,
+      status: 'PREPARING',
+      items_json: '[]',
+      address_json: '{}',
+      total_cents: 12000,
+      currency: 'IDR',
+      notes: null,
+      server_version: 6,
+      deleted_at: null,
+      failed_sync_attempts: 0,
+      cancelled_by: null,
+      cancel_reason: null,
+      last_conflict_reason: 'released',
+      last_conflict_at: 1700000000000,
+      created_at: 1_600_000_000_000,
+      updated_at: 1_600_000_000_000,
+    });
+
+    releaseOutbox.hasPendingAction.mockResolvedValue(false);
+    releaseClient.fetchAvailableOrders.mockResolvedValue({
+      items: [
+        {
+          orderId: releasedRowId,
+          totalCents: 25000,
+          currency: 'SGD',
+          itemsCount: 2,
+          createdAt: '2026-02-01T08:00:00.000Z',
+          version: 9,
+        },
+      ],
+      hasMore: true,
+    });
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
+    });
+    await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+
+    const row = await db.get<OrderModel>('orders').find(releasedRowId);
+    // Kolom pool: status ASSIGNED, server_version, total_cents, currency dari server
+    expect(row._getRaw('status')).toBe('ASSIGNED');
+    expect(row._getRaw('server_version')).toBe(9);
+    expect(row._getRaw('total_cents')).toBe(25000);
+    expect(row._getRaw('currency')).toBe('SGD');
+    // _status synced, _changed kosong
+    expect(row._raw._status).toBe('synced');
+    expect(row._raw._changed).toBe('');
+    // last_conflict_reason tidak diubah (banner masih tampil)
+    expect(row._getRaw('last_conflict_reason')).toBe('released');
+  });
+
+  it('baris lepas dengan aksi cancel berstatus failed: tidak disentuh', async () => {
+    const releasedRowId = 'pool-released-pending';
+    await seedOrderRowRaw(releasedRowId, {
+      customer_id: 'cust-rel-2',
+      driver_id: null,
+      status: 'PREPARING',
+      items_json: '[]',
+      address_json: '{}',
+      total_cents: 12000,
+      currency: 'IDR',
+      notes: null,
+      server_version: 6,
+      deleted_at: null,
+      failed_sync_attempts: 0,
+      cancelled_by: null,
+      cancel_reason: null,
+      last_conflict_reason: 'released',
+      last_conflict_at: 1700000000000,
+      created_at: 1_600_000_000_000,
+      updated_at: 1_600_000_000_000,
+    });
+    // Ada aksi cancel berstatus 'failed' untuk order ini.
+    await seedPendingActionRaw('pa-failed-rel', {
+      action_type: 'cancel',
+      target_order_id: releasedRowId,
+      expected_version: 6,
+      idempotency_key: 'cancel:rel-2:uuid',
+      payload_json: '{}',
+      status: 'failed',
+      created_at: 1700000000000,
+      updated_at: 1700000000000,
+    });
+
+    releaseOutbox.hasPendingAction.mockResolvedValue(false);
+    releaseClient.fetchAvailableOrders.mockResolvedValue({
+      items: [
+        {
+          orderId: releasedRowId,
+          totalCents: 25000,
+          currency: 'SGD',
+          itemsCount: 2,
+          createdAt: '2026-02-01T08:00:00.000Z',
+          version: 9,
+        },
+      ],
+      hasMore: true,
+    });
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
+    });
+    await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+
+    const row = await db.get<OrderModel>('orders').find(releasedRowId);
+    // status tidak jadi ASSIGNED, total_cents tidak ditimpa
+    expect(row._getRaw('status')).toBe('PREPARING');
+    expect(row._getRaw('total_cents')).toBe(12000);
+    expect(row._getRaw('server_version')).toBe(6);
+    expect(row._getRaw('last_conflict_reason')).toBe('released');
+  });
+
+  it('baris lepas dengan aksi collect_cod berstatus orphaned_needs_review: tidak disentuh', async () => {
+    // COD yatim: server menolak COD karena order sudah bukan milik driver,
+    // padahal uangnya sudah diterima. Order ini tidak dijadikan baris pool,
+    // karena uangnya masih harus diselesaikan.
+    const releasedRowId = 'pool-released-orphaned-cod';
+    await seedOrderRowRaw(releasedRowId, {
+      customer_id: 'cust-rel-cod',
+      driver_id: null,
+      status: 'OUT_FOR_DELIVERY',
+      items_json: '[]',
+      address_json: '{}',
+      total_cents: 18000,
+      currency: 'IDR',
+      notes: null,
+      server_version: 6,
+      deleted_at: null,
+      failed_sync_attempts: 0,
+      cancelled_by: null,
+      cancel_reason: null,
+      last_conflict_reason: 'released',
+      last_conflict_at: 1700000000000,
+      created_at: 1_600_000_000_000,
+      updated_at: 1_600_000_000_000,
+    });
+    await seedPendingActionRaw('pa-orphaned-cod', {
+      action_type: 'collect_cod',
+      target_order_id: releasedRowId,
+      expected_version: 6,
+      idempotency_key: 'cod:rel-cod:uuid',
+      payload_json: '{"amountCents":18000}',
+      status: 'orphaned_needs_review',
+      created_at: 1700000000000,
+      updated_at: 1700000000000,
+    });
+
+    releaseOutbox.hasPendingAction.mockResolvedValue(false);
+    releaseClient.fetchAvailableOrders.mockResolvedValue({
+      items: [
+        {
+          orderId: releasedRowId,
+          totalCents: 30000,
+          currency: 'SGD',
+          itemsCount: 2,
+          createdAt: '2026-02-01T08:00:00.000Z',
+          version: 9,
+        },
+      ],
+      hasMore: true,
+    });
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
+    });
+    await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+
+    const row = await db.get<OrderModel>('orders').find(releasedRowId);
+    // status tidak jadi ASSIGNED, total_cents tidak ditimpa
+    expect(row._getRaw('status')).toBe('OUT_FOR_DELIVERY');
+    expect(row._getRaw('total_cents')).toBe(18000);
+    expect(row._getRaw('server_version')).toBe(6);
+    expect(row._getRaw('last_conflict_reason')).toBe('released');
+  });
+
+  it('baris lepas dengan _status "updated": tidak disentuh', async () => {
+    const releasedRowId = 'pool-released-updated';
+    await db.write(async () => {
+      const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+        id: releasedRowId,
+        _status: 'updated',
+        _changed: 'total_cents',
+        customer_id: 'cust-rel-3',
+        driver_id: null,
+        status: 'PREPARING',
+        items_json: '[]',
+        address_json: '{}',
+        total_cents: 12000,
+        currency: 'IDR',
+        notes: null,
+        server_version: 6,
+        deleted_at: null,
+        failed_sync_attempts: 0,
+        cancelled_by: null,
+        cancel_reason: null,
+        last_conflict_reason: 'released',
+        last_conflict_at: 1700000000000,
+        created_at: 1_600_000_000_000,
+        updated_at: 1_600_000_000_000,
+      });
+      await db.batch(prepared);
+    });
+
+    releaseOutbox.hasPendingAction.mockResolvedValue(false);
+    releaseClient.fetchAvailableOrders.mockResolvedValue({
+      items: [
+        {
+          orderId: releasedRowId,
+          totalCents: 25000,
+          currency: 'SGD',
+          itemsCount: 2,
+          createdAt: '2026-02-01T08:00:00.000Z',
+          version: 9,
+        },
+      ],
+      hasMore: true,
+    });
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
+    });
+    await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+
+    const row = await db.get<OrderModel>('orders').find(releasedRowId);
+    // Tidak disentuh: status tetap PREPARING, _status tetap 'updated'
+    expect(row._getRaw('status')).toBe('PREPARING');
+    expect(row._getRaw('total_cents')).toBe(12000);
+    expect(row._raw._status).toBe('updated');
+    expect(row._getRaw('last_conflict_reason')).toBe('released');
+  });
+
+  it('baris bukan pool (driver_id terisi, status PREPARING) tidak disentuh', async () => {
+    // Baris bukan pool, driver_id terisi. fetchPool tidak menyentuh baris
+    // ini (syarat pool: driver_id null).
+    const ownedRowId = 'pool-not-mine';
+    await seedOrderRowRaw(ownedRowId, {
+      customer_id: 'cust-not-mine',
+      driver_id: 'driver-other',
+      status: 'PREPARING',
+      items_json: '[]',
+      address_json: '{}',
+      total_cents: 88000,
+      currency: 'IDR',
+      notes: null,
+      server_version: 5,
+      deleted_at: null,
+      failed_sync_attempts: 0,
+      cancelled_by: null,
+      cancel_reason: null,
+      last_conflict_reason: null,
+      last_conflict_at: null,
+      created_at: 1_700_000_000_000,
+      updated_at: 1_700_000_000_000,
+    });
+
+    releaseOutbox.hasPendingAction.mockResolvedValue(false);
+    releaseClient.fetchAvailableOrders.mockResolvedValue({
+      items: [
+        {
+          orderId: ownedRowId,
+          totalCents: 99000,
+          currency: 'IDR',
+          itemsCount: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          version: 7,
+        },
+      ],
+      hasMore: true,
+    });
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
+    });
+    await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+
+    const row = await db.get<OrderModel>('orders').find(ownedRowId);
+    // Tidak disentuh, total_cents tetap
+    expect(row._getRaw('driver_id')).toBe('driver-other');
+    expect(row._getRaw('total_cents')).toBe(88000);
+    expect(row._getRaw('server_version')).toBe(5);
+  });
+
+  it('baris status CONFIRMED dengan driver_id null tidak disentuh (bukan pool)', async () => {
+    // Baris CONFIRMED dengan driver_id null bukan baris pool, jadi fetchPool
+    // tidak mengubah atau menghapusnya.
+    const confirmedRowId = 'pool-confirmed-rel';
+    await seedOrderRowRaw(confirmedRowId, {
+      customer_id: 'cust-conf-rel',
+      driver_id: null,
+      status: 'CONFIRMED',
+      items_json: '[]',
+      address_json: '{}',
+      total_cents: 44000,
+      currency: 'IDR',
+      notes: null,
+      server_version: 4,
+      deleted_at: null,
+      failed_sync_attempts: 0,
+      cancelled_by: null,
+      cancel_reason: null,
+      last_conflict_reason: null,
+      last_conflict_at: null,
+      created_at: 1_500_000_000_000,
+      updated_at: 1_500_000_000_000,
+    });
+
+    releaseOutbox.hasPendingAction.mockResolvedValue(false);
+    releaseClient.fetchAvailableOrders.mockResolvedValue({
+      items: [],
+      hasMore: false,
+    });
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
+    });
+    await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+
+    const row = await db.get<OrderModel>('orders').find(confirmedRowId);
+    // Tetap persis seperti sebelumnya, tidak dihapus (status bukan ASSIGNED)
+    expect(row._getRaw('status')).toBe('CONFIRMED');
+    expect(row._getRaw('total_cents')).toBe(44000);
+    expect(row._getRaw('server_version')).toBe(4);
+    expect(await rowExistsInAdapterLocal(confirmedRowId, db)).toBe(true);
+  });
+});
+
+async function rowExistsInAdapterLocal(rowId: string, db: Database): Promise<boolean> {
+  const all = await db.get<OrderModel>('orders').query().fetch();
+  return all.some((r) => r.id === rowId);
+}
+
+// handleAccept sukses pada baris yang punya last_conflict_reason:
+// last_conflict_reason dan last_conflict_at jadi null (banner hilang).
+describe('handleAccept - last_conflict_reason dan last_conflict_at dikosongkan pada sukses', () => {
+  let db: Database;
+  let releaseClient: { fetchAvailableOrders: jest.Mock; acceptOrder: jest.Mock };
+  let releaseSession: { getCurrentUserId: jest.Mock };
+
+  beforeEach(() => {
+    db = buildTestDatabase();
+    jest.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS);
+    releaseClient = jest.requireMock('../sync/client') as {
+      fetchAvailableOrders: jest.Mock;
+      acceptOrder: jest.Mock;
+    };
+    releaseSession = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('acceptOrder sukses: last_conflict_reason dan last_conflict_at jadi null', async () => {
+    const rowId = 'pool-accept-rel';
+    await db.write(async () => {
+      const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+        id: rowId,
+        _status: 'synced',
+        _changed: '',
+        customer_id: 'cust-AC-rel',
+        driver_id: null,
+        status: 'ASSIGNED',
+        items_json: '[]',
+        address_json: '{}',
+        total_cents: 23000,
+        currency: 'IDR',
+        notes: null,
+        server_version: 3,
+        deleted_at: null,
+        failed_sync_attempts: 0,
+        cancelled_by: null,
+        cancel_reason: null,
+        // Baris yang sudah ditandai lepas oleh pull.
+        last_conflict_reason: 'released',
+        last_conflict_at: 1700000000000,
+        created_at: 1_600_000_000_000,
+        updated_at: 1_600_000_000_000,
+      });
+      await db.batch(prepared);
+    });
+
+    releaseClient.fetchAvailableOrders.mockResolvedValue({
+      items: [
+        {
+          orderId: rowId,
+          totalCents: 23000,
+          currency: 'IDR',
+          itemsCount: 1,
+          createdAt: new Date(1_600_000_000_000).toISOString(),
+          version: 3,
+        },
+      ],
+      hasMore: true,
+    });
+    releaseClient.acceptOrder = jest.fn().mockResolvedValue({
+      id: rowId,
+      customerId: 'cust-AC-rel',
+      driverId: 'driver-AC-rel',
+      status: 'PREPARING',
+      items: [
+        { id: 'item-AC-rel', productId: 'prod-AC-rel', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 23000 },
+      ],
+      deliveryAddress: {
+        recipientName: 'Citra',
+        phone: '081234567890',
+        street: 'Jl. Sudirman No. 1',
+        city: 'Jakarta',
+        postalCode: '10110',
+        coordinates: [106.85, -6.2],
+      },
+      totalCents: 23000,
+      currency: 'IDR',
+      notes: null,
+      createdAt: '2026-01-15T03:04:05.678Z',
+      updatedAt: '2026-01-15T03:05:00.000Z',
+      version: 4,
+      cancelledBy: null,
+      cancelReason: null,
+    });
+    releaseSession.getCurrentUserId.mockResolvedValue('driver-AC-rel');
+
+    const { handleAcceptRef } = require('../screens/OrdersScreen') as {
+      handleAcceptRef: { current: ((order: OrderModel) => Promise<void>) | null };
+    };
+
+    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    await waitFor(() => {
+      expect(handleAcceptRef.current).not.toBeNull();
+    });
+
+    const order = await db.get<OrderModel>('orders').find(rowId);
+    await handleAcceptRef.current!(order);
+
+    const updatedRow = await db.get<OrderModel>('orders').find(rowId);
+    // last_conflict_reason dan last_conflict_at jadi null
+    expect(updatedRow._getRaw('last_conflict_reason')).toBeNull();
+    expect(updatedRow._getRaw('last_conflict_at')).toBeNull();
+    // Status dari respons server
+    expect(updatedRow._getRaw('status')).toBe('PREPARING');
+    expect(updatedRow._getRaw('driver_id')).toBe('driver-AC-rel');
   });
 });
 
