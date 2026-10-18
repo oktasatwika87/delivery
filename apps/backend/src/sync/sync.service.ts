@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   Order,
   Payment,
+  ReleasedOrder,
   SyncPullResponse,
   SyncPushPayload,
   SyncPushResponse,
@@ -14,6 +15,36 @@ import type {
 
 import { ChatGateway } from '../chat/chat.gateway';
 import { ChatService } from '../chat/chat.service';
+
+/** Bentuk UUID, huruf besar atau kecil, sama dengan id di seluruh backend. */
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Batas jumlah id yang diterima dari satu kali pull. */
+const HELD_ORDER_IDS_MAX = 100;
+
+/**
+ * Mengubah query `heldOrderIds` (id dipisah koma) jadi daftar id yang sah.
+ * Tidak pernah melempar galat: pull tidak boleh gagal karena parameter ini,
+ * walaupun HP mengirim bentuk yang salah. Dipakai untuk memberi tahu driver
+ * bahwa order yang masih dipegangnya sudah bukan miliknya lagi.
+ */
+export function parseHeldOrderIds(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  const parts = value.split(',');
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    if (!UUID_REGEX.test(trimmed)) continue;
+    const normalized = trimmed.toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+    if (result.length >= HELD_ORDER_IDS_MAX) break;
+  }
+  return result;
+}
 
 @Injectable()
 export class SyncService {
@@ -32,7 +63,12 @@ export class SyncService {
     return { acks };
   }
 
-  async pullSince(deviceId: string, userId: string, since: string | null): Promise<SyncPullResponse> {
+  async pullSince(
+    deviceId: string,
+    userId: string,
+    since: string | null,
+    heldOrderIds: string[] = [],
+  ): Promise<SyncPullResponse> {
     const sinceDate = since ? new Date(since) : new Date(0);
 
     // Dapatkan order IDs di mana user adalah customer ATAU driver
@@ -67,6 +103,22 @@ export class SyncService {
         },
       }),
     ]);
+
+    // Order yang menurut HP masih dipegang pemanggil tapi di server sudah
+    // bukan miliknya. Hanya id dan versi yang dikirim, karena pemanggil
+    // sudah tidak berhak melihat data order itu. Disaring di kode, bukan
+    // dengan NOT di Prisma: perbandingan dengan driverId null hasilnya NULL
+    // di SQL, jadi order di pool ikut tersaring keluar.
+    let releasedOrders: ReleasedOrder[] = [];
+    if (heldOrderIds.length > 0) {
+      const heldRows = await this.prisma.order.findMany({
+        where: { id: { in: heldOrderIds } },
+        select: { id: true, version: true, customerId: true, driverId: true },
+      });
+      releasedOrders = heldRows
+        .filter((row) => row.driverId !== userId && row.customerId !== userId)
+        .map((row) => ({ id: row.id, version: row.version }));
+    }
 
     const records: SyncRecordPull[] = [
       ...orders.map((o) => ({
@@ -123,6 +175,7 @@ export class SyncService {
     return {
       nextCursor: lastUpdatedAt ? lastUpdatedAt.toISOString() : since,
       records,
+      releasedOrders,
       serverTime: new Date().toISOString(),
     };
   }

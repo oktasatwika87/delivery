@@ -4,7 +4,7 @@ import type { SyncPullResponse, SyncPushPayload, SyncPushResponse } from '@deliv
 
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
-import { SyncService } from './sync.service';
+import { SyncService, parseHeldOrderIds } from './sync.service';
 
 @Controller('sync')
 @UseGuards(JwtAuthGuard)
@@ -30,10 +30,16 @@ export class SyncController {
     @Query('deviceId') deviceId: string,
     @CurrentUser('id') userId: string,
     @Query('since') since?: string,
+    @Query('heldOrderIds') heldOrderIds?: unknown,
   ): Promise<SyncPullResponse> {
     if (!deviceId?.trim()) {
       throw new BadRequestException('Parameter query deviceId wajib diisi dan tidak boleh kosong');
     }
-    return this.service.pullSince(deviceId, userId, since ?? null);
+    return this.service.pullSince(
+      deviceId,
+      userId,
+      since ?? null,
+      parseHeldOrderIds(heldOrderIds),
+    );
   }
 }

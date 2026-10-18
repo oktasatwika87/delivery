@@ -27,7 +27,7 @@ import { PrismaClient, OrderStatusDb } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 
 import { AppModule } from '../src/app.module';
-import { UserRole, OrderStatus } from '@delivery/shared';
+import { UserRole, OrderStatus, ReleasedOrder } from '@delivery/shared';
 
 describe('Orders (e2e) - accept/reject', () => {
   let app: INestApplication;
@@ -1692,6 +1692,84 @@ describe('Orders (e2e) - accept/reject', () => {
         await prisma.payment.deleteMany({ where: { id: paymentId } }).catch(() => {});
         await cleanupOrder();
       }
+    });
+  });
+
+  // Pull melaporkan order yang sudah lepas dari driver. driver1 mengirim
+  // order A (masih miliknya, tidak dilaporkan), B (di pool, driverId null,
+  // dilaporkan), dan C (milik driver2, dilaporkan).
+  describe('GET /sync/pull dengan heldOrderIds', () => {
+    const heldDeviceId = 'e2e-device-held';
+    const orderAId = 'e2e00000-0000-0000-0000-0000000003a1';
+    const orderBId = 'e2e00000-0000-0000-0000-0000000003b1';
+    const orderCId = 'e2e00000-0000-0000-0000-0000000003c1';
+
+    async function seedOrder(
+      id: string,
+      status: OrderStatusDb,
+      driverIdValue: string | null,
+      version: number,
+    ) {
+      return prisma.order.upsert({
+        where: { id },
+        create: {
+          id,
+          customerId: customerUserId,
+          driverId: driverIdValue,
+          status,
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version,
+        },
+        update: {},
+      });
+    }
+
+    afterAll(async () => {
+      // Hapus cursor perangkat uji, lalu pembayaran dan order dengan id uji.
+      await prisma.syncCursor.deleteMany({ where: { deviceId: heldDeviceId } }).catch(() => {});
+      await prisma.payment.deleteMany({
+        where: { orderId: { in: [orderAId, orderBId, orderCId] } },
+      }).catch(() => {});
+      for (const id of [orderAId, orderBId, orderCId]) {
+        await prisma.order.delete({ where: { id } }).catch(() => {});
+      }
+    });
+
+    test('200: releasedOrders berisi order di pool dan order driver lain, dengan versinya', async () => {
+      await seedOrder(orderAId, OrderStatusDb.PREPARING, driverUserId, 3);
+      await seedOrder(orderBId, OrderStatusDb.ASSIGNED, null, 5);
+      await seedOrder(orderCId, OrderStatusDb.PREPARING, driver2UserId, 7);
+
+      const resp = await request(app.getHttpServer())
+        .get(
+          `/sync/pull?deviceId=${heldDeviceId}&heldOrderIds=${orderAId},${orderBId},${orderCId}`,
+        )
+        .set('Authorization', `Bearer ${driverToken}`)
+        .expect(200);
+
+      // B dan C dilaporkan (versi ikut DB). A tidak (milik driver1).
+      expect(resp.body.releasedOrders).toHaveLength(2);
+      const releasedIds = resp.body.releasedOrders.map((r: { id: string }) => r.id).sort();
+      expect(releasedIds).toEqual([orderBId, orderCId].sort());
+      const releasedOrders: ReleasedOrder[] = resp.body.releasedOrders;
+      for (const r of releasedOrders) {
+        if (r.id === orderBId) expect(r.version).toBe(5);
+        if (r.id === orderCId) expect(r.version).toBe(7);
+      }
+    });
+
+    test('200: heldOrderIds dengan entri bukan UUID dan entri kosong, releasedOrders kosong', async () => {
+      // Entri bukan UUID dan entri kosong dibuang tanpa galat. A bukan order
+      // lepas, jadi tidak ada yang dilaporkan.
+      const resp = await request(app.getHttpServer())
+        .get(`/sync/pull?deviceId=${heldDeviceId}&heldOrderIds=bukan-uuid,,${orderAId}`)
+        .set('Authorization', `Bearer ${driverToken}`)
+        .expect(200);
+
+      expect(resp.body.releasedOrders).toEqual([]);
     });
   });
 });

@@ -75,11 +75,27 @@ export interface SyncRecordPull {
   deleted: boolean;
 }
 
+/**
+ * Order yang menurut HP masih dipegang driver tapi di server sudah bukan
+ * miliknya lagi. Hanya id dan versi: driver lama tidak boleh tahu driver
+ * baru, status, alamat, item, atau pembayaran order itu.
+ */
+export interface ReleasedOrder {
+  id: string;
+  version: number;
+}
+
 /** Response dari backend ke mobile untuk satu kali pull. */
 export interface SyncPullResponse {
   /** Cursor baru untuk pull berikutnya (null jika sudah up-to-date). */
   nextCursor: string | null;
   records: SyncRecordPull[];
+  /**
+   * Order yang sebelumnya dipegang driver/customer ini tapi sekarang sudah
+   * bukan miliknya. Server selalu mengisinya (bisa kosong). Lihat
+   * `ReleasedOrder`.
+   */
+  releasedOrders?: ReleasedOrder[];
   /** Server time saat ini, dipakai client untuk jam-jitter correction. */
   serverTime: string;
 }

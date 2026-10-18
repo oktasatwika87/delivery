@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ForbiddenException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
-import { SyncService } from './sync.service';
+import { SyncService, parseHeldOrderIds } from './sync.service';
 import { ChatService } from '../chat/chat.service';
 import { ChatGateway } from '../chat/chat.gateway';
 
@@ -1472,5 +1472,226 @@ describe('SyncService.pullSince', () => {
       expect(orderData.cancelledBy).toBeUndefined();
       expect(orderData.cancelReason).toBeUndefined();
     });
+  });
+});
+
+// parseHeldOrderIds: fungsi murni untuk pull. Mengubah query `heldOrderIds`
+// (id dipisah koma) jadi daftar id yang sah, tanpa pernah melempar galat.
+describe('parseHeldOrderIds', () => {
+  it('mengembalikan daftar kosong untuk nilai yang bukan string, termasuk query dengan kunci berulang', () => {
+    expect(parseHeldOrderIds(undefined)).toEqual([]);
+    expect(parseHeldOrderIds(null)).toEqual([]);
+    expect(parseHeldOrderIds(42)).toEqual([]);
+    expect(parseHeldOrderIds({})).toEqual([]);
+    // Untuk `heldOrderIds=a&heldOrderIds=b`, Express membaca nilainya sebagai
+    // daftar, bukan string. Bentuk itu dianggap tidak ada, supaya tidak perlu
+    // menebak maksud pengirim.
+    expect(parseHeldOrderIds(['a', 'b'])).toEqual([]);
+  });
+
+  it('membuang entri kosong dan entri yang bukan UUID', () => {
+    const valid = '00000000-0000-4000-8000-000000000001';
+    expect(parseHeldOrderIds(`,,${valid},bukan-uuid, ,`)).toEqual([valid]);
+  });
+
+  it('membuang duplikat', () => {
+    const id = '00000000-0000-4000-8000-000000000002';
+    expect(parseHeldOrderIds(`${id},${id},${id}`)).toEqual([id]);
+  });
+
+  it('UUID huruf besar diterima dan diubah ke huruf kecil', () => {
+    // UUID_REGEX tidak membedakan huruf besar dan kecil.
+    const upper = 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE';
+    const result = parseHeldOrderIds(upper);
+    expect(result).toEqual([upper.toLowerCase()]);
+  });
+
+  it('membatasi ke paling banyak 100 id pertama', () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 101; i += 1) {
+      // Buat 101 UUID yang sah.
+      const hex = i.toString(16).padStart(12, '0');
+      ids.push(`00000000-0000-4000-8000-${hex}`);
+    }
+    const result = parseHeldOrderIds(ids.join(','));
+    expect(result).toHaveLength(100);
+  });
+});
+
+// pullSince dengan heldOrderIds: memberi tahu HP driver lama bahwa order
+// yang masih dipegangnya sudah bukan miliknya, beserta nomor versinya.
+// Order yang customer atau driver-nya pemanggil, dan id yang tidak ada di
+// server, tidak dilaporkan. Order di pool (driverId null) tetap dilaporkan,
+// karena driver lama perlu tahu order itu sudah lepas.
+describe('SyncService.pullSince dengan heldOrderIds', () => {
+  let service: SyncService;
+  let prisma: PrismaClient;
+
+  const driver1 = 'driver1-uuid';
+  const driver2 = 'driver2-uuid';
+
+  // Order A: PREPARING milik driver1 (pemanggil), tidak dilaporkan.
+  // Order B: ASSIGNED, driverId null (sudah kembali ke pool), dilaporkan.
+  // Order C: PREPARING milik driver2, dilaporkan.
+  // Order D: PREPARING milik driver2 dengan customerId driver1, tidak dilaporkan.
+  const orderOwnedByCaller = {
+    id: 'a0000000-0000-4000-8000-000000000001',
+    customerId: 'someone-else',
+    driverId: driver1,
+    status: 'PREPARING',
+    version: 3,
+  };
+  const orderInPool = {
+    id: 'b0000000-0000-4000-8000-000000000002',
+    customerId: 'someone-else',
+    driverId: null,
+    status: 'ASSIGNED',
+    version: 5,
+  };
+  const orderOwnedByOther = {
+    id: 'c0000000-0000-4000-8000-000000000003',
+    customerId: 'someone-else',
+    driverId: driver2,
+    status: 'PREPARING',
+    version: 7,
+  };
+  const orderWhereCallerIsCustomer = {
+    id: 'd0000000-0000-4000-8000-000000000004',
+    customerId: driver1,
+    driverId: driver2,
+    status: 'PREPARING',
+    version: 9,
+  };
+
+  // Baris lengkap untuk tiruan findMany data utama pull. Kolom dari select
+  // (id, version, customerId, driverId) saja tidak cukup, karena
+  // orderToDomain juga butuh itemsJson, addressJson, dan lainnya.
+  const fullOrderOwnedByCaller = {
+    ...orderOwnedByCaller,
+    itemsJson: [],
+    addressJson: { recipientName: 'X', phone: '0812', street: 'Jl X', city: 'Jakarta', postalCode: '12345' },
+    totalCents: 50000,
+    currency: 'IDR',
+    notes: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+  };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        SyncService,
+        {
+          provide: PrismaClient,
+          useValue: {
+            order: {
+              findMany: jest.fn(),
+              findUnique: jest.fn(),
+              upsert: jest.fn(),
+              update: jest.fn(),
+            },
+            payment: { findMany: jest.fn() },
+            chatMessage: { findMany: jest.fn() },
+            syncCursor: { upsert: jest.fn() },
+            user: { updateMany: jest.fn() },
+          },
+        },
+        { provide: ChatService, useValue: { send: jest.fn() } },
+        { provide: ChatGateway, useValue: { emitNewMessage: jest.fn() } },
+      ],
+    }).compile();
+
+    service = module.get<SyncService>(SyncService);
+    prisma = module.get(PrismaClient);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('tanpa heldOrderIds: releasedOrders kosong dan tidak ada query tambahan', async () => {
+    // findMany order dipanggil dua kali: userOrders, lalu data order.
+    (prisma.order.findMany as jest.Mock)
+      .mockResolvedValueOnce([orderOwnedByCaller])  // userOrders (select id)
+      .mockResolvedValueOnce([fullOrderOwnedByCaller]); // data order
+    (prisma.payment.findMany as jest.Mock).mockResolvedValueOnce([]);
+    (prisma.chatMessage.findMany as jest.Mock).mockResolvedValueOnce([]);
+
+    const result = await service.pullSince('device-held', driver1, null, []);
+
+    expect(result.releasedOrders).toEqual([]);
+    // Dua panggilan, userOrders dan data order. Tidak ada panggilan ketiga.
+    expect(prisma.order.findMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('dengan heldOrderIds: order di pool dan milik driver lain dilaporkan, order pemanggil sebagai driver atau customer tidak', async () => {
+    // findMany kedua untuk data utama, findMany ketiga untuk heldOrderIds.
+    // Tiruan DB hanya mengembalikan order yang ada, jadi id yang tidak ada
+    // otomatis tidak dilaporkan.
+    (prisma.order.findMany as jest.Mock)
+      .mockResolvedValueOnce([])               // userOrders (driver1 tidak punya order aktif di sini)
+      .mockResolvedValueOnce([])               // data order (driver1 juga tidak melihat order)
+      .mockResolvedValueOnce([                  // query heldOrderIds
+        orderOwnedByCaller,
+        orderInPool,
+        orderOwnedByOther,
+        orderWhereCallerIsCustomer,
+      ]);
+    (prisma.payment.findMany as jest.Mock).mockResolvedValueOnce([]);
+    (prisma.chatMessage.findMany as jest.Mock).mockResolvedValueOnce([]);
+
+    const result = await service.pullSince(
+      'device-held',
+      driver1,
+      null,
+      [orderOwnedByCaller.id, orderInPool.id, orderOwnedByOther.id, orderWhereCallerIsCustomer.id],
+    );
+
+    // Hanya B (pool) dan C (driver lain) yang dilaporkan. Versi ikut dari DB.
+    expect(result.releasedOrders).toEqual([
+      { id: orderInPool.id, version: orderInPool.version },
+      { id: orderOwnedByOther.id, version: orderOwnedByOther.version },
+    ]);
+  });
+
+  it('id yang tidak dikembalikan query (mis. tidak ada di DB) tidak dilaporkan', async () => {
+    (prisma.order.findMany as jest.Mock)
+      .mockResolvedValueOnce([])               // userOrders
+      .mockResolvedValueOnce([])               // data order
+      .mockResolvedValueOnce([                  // heldOrderIds, hanya B dan C
+        orderInPool,
+        orderOwnedByOther,
+      ]);
+    (prisma.payment.findMany as jest.Mock).mockResolvedValueOnce([]);
+    (prisma.chatMessage.findMany as jest.Mock).mockResolvedValueOnce([]);
+
+    const held = [
+      orderInPool.id,
+      orderOwnedByOther.id,
+      // id ini tidak ada di hasil query, jadi diabaikan
+      '00000000-0000-4000-8000-000000000099',
+    ];
+    const result = await service.pullSince('device-held', driver1, null, held);
+
+    expect(result.releasedOrders).toHaveLength(2);
+    expect(result.releasedOrders.map((r) => r.id).sort()).toEqual(
+      [orderInPool.id, orderOwnedByOther.id].sort(),
+    );
+  });
+
+  it('heldOrderIds kosong: query heldOrderIds tidak dijalankan', async () => {
+    (prisma.order.findMany as jest.Mock)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    (prisma.payment.findMany as jest.Mock).mockResolvedValueOnce([]);
+    (prisma.chatMessage.findMany as jest.Mock).mockResolvedValueOnce([]);
+
+    // Argumen keempat sengaja diisi daftar kosong.
+    const result = await service.pullSince('device-held', driver1, null, []);
+
+    expect(result.releasedOrders).toEqual([]);
+    // 2 findMany: tidak ada panggilan ketiga untuk heldOrderIds.
+    expect(prisma.order.findMany).toHaveBeenCalledTimes(2);
   });
 });
