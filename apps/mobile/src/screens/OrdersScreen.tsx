@@ -24,6 +24,12 @@ import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
 import { hasPendingAction, hasStalePendingAction } from '../sync/outbox';
 import { buildPoolRow } from './buildPoolRow';
+import {
+  ReleasedOrdersNotice,
+  dismissReleasedOrders,
+  releasedOrdersQuery,
+  type ReleasedOrderItem,
+} from './ReleasedOrdersNotice';
 import { locationService } from '../map/location';
 import { networkMonitor } from '../map/networkMonitor';
 import { RouteService } from '../map/routeService';
@@ -37,6 +43,7 @@ interface SectionData {
 interface Props {
   database: Database;
   myOrders: OrderModel[];
+  releasedOrders?: OrderModel[];
 }
 
 // Exported (in addition to the default HOC-wrapped OrdersScreen below) so
@@ -45,7 +52,7 @@ interface Props {
 // an identity function in OrdersScreen.spec.tsx and doesn't actually compute
 // myOrders, so testing badge/render behavior through the wrapped export isn't
 // possible without a much more elaborate observable mock.
-export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Element {
+export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Props): React.JSX.Element {
   // Reset ref setiap render agar tidak ada referensi stale dari render sebelumnya.
   handleAcceptRef.current = null;
   fetchPoolRef.current = null;
@@ -546,6 +553,16 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
     </View>
   );
 
+  // Data biasa untuk ReleasedOrdersNotice. last_conflict_at dibaca mentah
+  // dalam milidetik; nilai yang bukan angka dianggap null.
+  const releasedItems: ReleasedOrderItem[] = releasedOrders.map((row) => {
+    const raw = row._getRaw('last_conflict_at');
+    return {
+      id: row.id,
+      lastConflictAt: typeof raw === 'number' ? raw : null,
+    };
+  });
+
   return (
     <>
       {removedNotice.visible && (
@@ -556,6 +573,11 @@ export function OrdersScreenBase({ database, myOrders }: Props): React.JSX.Eleme
           </Text>
         </View>
       )}
+      <ReleasedOrdersNotice
+        items={releasedItems}
+        onOpen={(orderId) => navigation.navigate('OrderDetail', { orderId })}
+        onDismiss={(orderIds) => { void dismissReleasedOrders(database, orderIds); }}
+      />
       <SectionList
       sections={sections}
       keyExtractor={(o) => o.id}
@@ -592,6 +614,11 @@ const OrdersScreenWithObservables = withDatabase(
               Q.sortBy('updated_at', Q.desc),
             )
             .observe()
+        : of<OrderModel[]>([]),
+      // Baris order dengan driver_id null dan last_conflict_reason 'released'
+      // atau 'reassigned', untuk kotak pemberitahuan order yang lepas.
+      releasedOrders: currentUserId
+        ? releasedOrdersQuery(database)
         : of<OrderModel[]>([]),
     }),
   )(OrdersScreenBase),

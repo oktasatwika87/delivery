@@ -133,10 +133,20 @@ function LastConflictBanner({ order, isDismissed, onDismiss }: LastConflictBanne
   const isExpired = !order.lastConflictAt ||
     (Date.now() - new Date(order.lastConflictAt).getTime()) > CONFLICT_BANNER_TTL_MS;
 
+  // 'released' dan 'reassigned' hanya relevan kalau baris sudah bukan milik
+  // driver: driver_id kosong (null, undefined, atau ''). Kalau masih
+  // terisi, alasan itu tidak berlaku untuk order ini dan banner disembunyikan.
+  const driverIsEmpty = !order.driverId;
+  const reasonRequiresUnowned =
+    order.lastConflictReason === 'released' || order.lastConflictReason === 'reassigned';
+
   if (isDismissed || isExpired || !order.lastConflictReason) return null;
+  if (reasonRequiresUnowned && !driverIsEmpty) return null;
 
   const getMessage = (): string => {
     switch (order.lastConflictReason) {
+      case 'released':
+        return 'Order ini sudah tidak ditugaskan ke Anda, biasanya karena HP Anda lama tidak tersambung. Kalau order ini ada lagi di daftar Tersedia, Anda bisa menerimanya lagi.';
       case 'reassigned':
         return 'Order ini sudah dipindahkan ke driver lain, jadi aksi Anda tidak diproses.';
       case 'cancelled-by-server':

@@ -1800,14 +1800,53 @@ describe('LastConflictBanner menampilkan teks per alasan', () => {
     });
   }
 
-  test('reassigned: tampil banner', async () => {
+  test('reassigned: tampil banner (driverId null)', async () => {
     setLastConflict('reassigned');
-    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: null });
     const { getByText } = renderScreen();
     await waitFor(() => {
       expect(
         getByText(/Order ini sudah dipindahkan ke driver lain, jadi aksi Anda tidak diproses/),
       ).toBeTruthy();
+    });
+  });
+
+  // 'reassigned' dengan driverId terisi berarti order sudah dipegang lagi,
+  // jadi banner lama tidak tampil.
+  test('reassigned dengan driverId terisi: banner tidak tampil', async () => {
+    setLastConflict('reassigned');
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText(/Order ini sudah dipindahkan ke driver lain, jadi aksi Anda tidak diproses/)).toBeNull();
+    });
+  });
+
+  test('released dengan driverId null: tampil banner', async () => {
+    setLastConflict('released');
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: null });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(
+        getByText(
+          /Order ini sudah tidak ditugaskan ke Anda, biasanya karena HP Anda lama tidak tersambung\. Kalau order ini ada lagi di daftar Tersedia, Anda bisa menerimanya lagi\./,
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  // 'released' dengan driverId terisi berarti order sudah dipegang lagi,
+  // jadi banner tidak tampil.
+  test('released dengan driverId terisi: banner tidak tampil', async () => {
+    setLastConflict('released');
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(
+        queryByText(
+          /Order ini sudah tidak ditugaskan ke Anda, biasanya karena HP Anda lama tidak tersambung/,
+        ),
+      ).toBeNull();
     });
   });
 
