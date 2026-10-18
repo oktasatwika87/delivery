@@ -54,11 +54,20 @@ export async function pushBatch(payload: SyncPushPayload): Promise<SyncPushRespo
   }
 }
 
-export async function pullBatch(deviceId: string, cursor: string | null): Promise<SyncPullResponse> {
+export async function pullBatch(
+  deviceId: string,
+  cursor: string | null,
+  heldOrderIds: string[] = [],
+): Promise<SyncPullResponse> {
   // Build query string manually, URL/URLSearchParams not available in React Native
   let queryString = `deviceId=${encodeURIComponent(deviceId)}`;
   if (cursor) {
     queryString += `&since=${encodeURIComponent(cursor)}`;
+  }
+  // Daftar id order yang masih dipegang driver di HP, dipakai server untuk
+  // melaporkan mana yang sebenarnya sudah bukan milik driver (releasedOrders).
+  if (heldOrderIds.length > 0) {
+    queryString += `&heldOrderIds=${encodeURIComponent(heldOrderIds.join(','))}`;
   }
   const url = `${API_BASE}/sync/pull?${queryString}`;
 

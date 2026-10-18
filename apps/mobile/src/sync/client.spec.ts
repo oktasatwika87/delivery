@@ -7,6 +7,51 @@ import type { CreateOrderInput, Order } from '@delivery/shared';
 // Import module under test (top-level import for jest)
 import * as clientModule from './client';
 
+describe('pullBatch dengan heldOrderIds', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = jest.fn();
+    jest.doMock('./session', () => ({
+      getCurrentToken: jest.fn().mockResolvedValue('test-token'),
+    }));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    jest.clearAllMocks();
+    jest.resetModules();
+  });
+
+  it('tidak mengirim parameter heldOrderIds ketika daftar kosong', async () => {
+    const { pullBatch } = clientModule;
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () => Promise.resolve({ nextCursor: null, records: [], serverTime: new Date().toISOString() }),
+    });
+
+    await pullBatch('device-1', null, []);
+
+    const url = (globalThis.fetch as jest.Mock).mock.calls[0][0] as string;
+    expect(url).not.toContain('heldOrderIds');
+  });
+
+  it('mengirim heldOrderIds hasil encodeURIComponent ketika daftar berisi id', async () => {
+    const { pullBatch } = clientModule;
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () => Promise.resolve({ nextCursor: null, records: [], serverTime: new Date().toISOString() }),
+    });
+
+    await pullBatch('device-1', null, ['order-1', 'order-2']);
+
+    const url = (globalThis.fetch as jest.Mock).mock.calls[0][0] as string;
+    expect(url).toContain('heldOrderIds=order-1%2Corder-2');
+  });
+});
+
 describe('createOrder', () => {
   const originalFetch = globalThis.fetch;
 

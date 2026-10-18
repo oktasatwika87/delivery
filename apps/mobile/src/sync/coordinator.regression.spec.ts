@@ -32,6 +32,7 @@ import { schema } from '../db/schema';
 import { OrderModel } from '../db/models/OrderModel';
 import { PaymentModel } from '../db/models/PaymentModel';
 import { ChatMessageModel } from '../db/models/ChatMessageModel';
+import { PendingActionModel } from '../db/models/PendingActionModel';
 import { SyncCoordinator } from './coordinator';
 
 // Mock jaringan: pullBatch dikontrol per tes, fungsi lain memakai yang asli.
@@ -58,6 +59,12 @@ jest.mock('./session', () => ({
 
 jest.mock('../map/networkMonitor', () => ({
   networkMonitor: { getStatus: () => 'online', subscribe: () => () => {} },
+}));
+
+jest.mock('./cursor', () => ({
+  loadCursor: jest.fn().mockResolvedValue(null),
+  saveCursor: jest.fn().mockResolvedValue(undefined),
+  getCursorSync: jest.fn().mockReturnValue(null),
 }));
 
 // Adapter LokiJS sinkron di memori, dibuat baru per tes untuk isolasi.
@@ -834,5 +841,361 @@ describe('jalur pull - regresi buildRawRowForCreate dengan adapter LokiJS asli',
       expect(createdAt).toBeGreaterThan(0);
       expect(updatedAt).toBeGreaterThan(0);
     });
+  });
+});
+
+// =================================================================
+// heldOrderIds dan releasedOrders
+// =================================================================
+
+// DB LokiJS untuk blok tes ini juga memuat PendingActionModel, karena
+// penandaan lepas membaca dan menghapus pending_actions. Id akun yang login
+// berasal dari tiruan session: 'driver-regression-pull'.
+
+const RELEASE_TEST_USER = 'driver-regression-pull';
+
+const RELEASED_BASE_ROW: Record<string, unknown> = {
+  customer_id: 'cust-release-1',
+  driver_id: RELEASE_TEST_USER,
+  status: 'ASSIGNED',
+  items_json: '[]',
+  address_json: '{}',
+  total_cents: 50000,
+  currency: 'IDR',
+  notes: null,
+  server_version: 5,
+  deleted_at: null,
+  failed_sync_attempts: 0,
+  cancelled_by: null,
+  cancel_reason: null,
+  last_conflict_reason: null,
+  last_conflict_at: null,
+  created_at: 1700000000000,
+  updated_at: 1700000000000,
+};
+
+// Respons pull berisi releasedOrders dan, kalau perlu, records.
+function makeReleasedResponse(
+  released: Array<{ id: string; version: number }>,
+  records: Order[] = [],
+  nextCursor: string | null = 'cursor-after-release',
+): SyncPullResponse {
+  return {
+    nextCursor,
+    records: records.map((o) => ({
+      entityType: 'order',
+      id: o.id,
+      serverVersion: o.version,
+      serverChangedAt: '2026-02-15T10:00:00.000Z',
+      deleted: false,
+      data: o,
+    })),
+    releasedOrders: released,
+    serverTime: '2026-02-15T10:00:00.000Z',
+  };
+}
+
+describe('heldOrderIds dan releasedOrders', () => {
+  let db: Database;
+  let coordinator: SyncCoordinator;
+  let pullBatchMock: jest.Mock;
+
+  beforeEach(() => {
+    jest.resetModules();
+    const adapter = new LokiJSAdapter({
+      schema,
+      useWebWorker: false,
+      useIncrementalIndexedDB: false,
+      onSetUpError: (e: Error) => { throw e; },
+    });
+    db = new Database({
+      adapter,
+      modelClasses: [OrderModel, PaymentModel, ChatMessageModel, PendingActionModel],
+    });
+    const client = jest.requireMock<{ pullBatch: jest.Mock }>('./client');
+    pullBatchMock = client.pullBatch;
+    pullBatchMock.mockReset();
+    coordinator = jest.requireActual<typeof import('./coordinator')>('./coordinator').syncCoordinator;
+  });
+
+  afterEach(() => {
+    if (coordinator) coordinator.stop();
+  });
+
+  it('argumen ketiga pullBatch hanya berisi id baris aktif milik akun yang login (bukan DELIVERED, bukan milik driver lain, bukan baris pool, bukan baris terhapus)', async () => {
+    // Baris aktif milik akun ini, ikut.
+    await seedSnakeCaseRow(db, 'orders', 'rel-mine-1', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'ASSIGNED' });
+    await seedSnakeCaseRow(db, 'orders', 'rel-mine-2', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'PREPARING', server_version: 7 });
+    await seedSnakeCaseRow(db, 'orders', 'rel-mine-3', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'OUT_FOR_DELIVERY', server_version: 8 });
+    // Baris DELIVERED milik akun ini, tidak ikut.
+    await seedSnakeCaseRow(db, 'orders', 'rel-mine-delivered', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'DELIVERED' });
+    // Baris milik driver lain, tidak ikut.
+    await seedSnakeCaseRow(db, 'orders', 'rel-other', { ...RELEASED_BASE_ROW, driver_id: 'other-driver', status: 'PREPARING' });
+    // Baris pool (driver_id null), tidak ikut.
+    await seedSnakeCaseRow(db, 'orders', 'rel-pool', { ...RELEASED_BASE_ROW, driver_id: null, status: 'ASSIGNED' });
+    // Baris milik akun ini dengan deleted_at terisi, tidak ikut.
+    await seedSnakeCaseRow(db, 'orders', 'rel-mine-soft', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'PREPARING', deleted_at: 1234 });
+
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([]));
+
+    await coordinator.start(db);
+
+    expect(pullBatchMock).toHaveBeenCalledTimes(1);
+    const held: string[] = pullBatchMock.mock.calls[0][2];
+    expect(held).toEqual(expect.arrayContaining(['rel-mine-1', 'rel-mine-2', 'rel-mine-3']));
+    expect(held).not.toContain('rel-mine-delivered');
+    expect(held).not.toContain('rel-other');
+    expect(held).not.toContain('rel-pool');
+    expect(held).not.toContain('rel-mine-soft');
+  });
+
+  it('belum login: pullBatch menerima daftar kosong', async () => {
+    // Panggilan pertama getCurrentUserId mengembalikan null, seperti belum login.
+    const session = jest.requireMock<{ getCurrentUserId: jest.Mock }>('./session');
+    session.getCurrentUserId.mockResolvedValueOnce(null);
+    // Baris ini akan ikut kalau ada akun yang login.
+    await seedSnakeCaseRow(db, 'orders', 'rel-mine-1', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'ASSIGNED' });
+
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([]));
+
+    await coordinator.start(db);
+
+    const held: string[] = pullBatchMock.mock.calls[0][2];
+    expect(held).toEqual([]);
+  });
+
+  it('laporan lepas: kolom driver_id null, last_conflict_reason "released", last_conflict_at terisi, _status synced, _changed kosong', async () => {
+    await seedSnakeCaseRow(db, 'orders', 'rel-row-1', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'PREPARING' });
+
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([{ id: 'rel-row-1', version: 6 }]));
+
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find('rel-row-1');
+    expect(row._getRaw('driver_id')).toBeNull();
+    expect(row._getRaw('last_conflict_reason')).toBe('released');
+    expect(typeof row._getRaw('last_conflict_at')).toBe('number');
+    expect(row._raw._status).toBe('synced');
+    expect(row._raw._changed).toBe('');
+  });
+
+  it('records kosong + laporan lepas: baris tetap ditandai, saveCursor tidak dipanggil', async () => {
+    // Modul cursor ditiru di atas, jadi pemanggilan saveCursor bisa dicek.
+    const cursor = jest.requireMock<{ saveCursor: jest.Mock }>('./cursor');
+    cursor.saveCursor.mockClear();
+
+    await seedSnakeCaseRow(db, 'orders', 'rel-row-2', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'ASSIGNED' });
+
+    // Respons tanpa records, hanya releasedOrders.
+    pullBatchMock.mockResolvedValue({
+      nextCursor: 'cursor-should-not-be-saved',
+      records: [],
+      releasedOrders: [{ id: 'rel-row-2', version: 7 }],
+      serverTime: '2026-02-15T10:00:00.000Z',
+    });
+
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find('rel-row-2');
+    expect(row._getRaw('driver_id')).toBeNull();
+    expect(row._getRaw('last_conflict_reason')).toBe('released');
+    // saveCursor tidak dipanggil karena records kosong
+    expect(cursor.saveCursor).not.toHaveBeenCalled();
+  });
+
+  it('versi lokal lebih besar dari laporan: baris tidak disentuh', async () => {
+    await seedSnakeCaseRow(db, 'orders', 'rel-row-3', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'PREPARING', server_version: 10 });
+
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([{ id: 'rel-row-3', version: 6 }]));
+
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find('rel-row-3');
+    // driver_id tetap, last_conflict_reason tetap null
+    expect(row._getRaw('driver_id')).toBe(RELEASE_TEST_USER);
+    expect(row._getRaw('last_conflict_reason')).toBeNull();
+  });
+
+  it('baris milik driver lain: tidak disentuh', async () => {
+    await seedSnakeCaseRow(db, 'orders', 'rel-row-4', { ...RELEASED_BASE_ROW, driver_id: 'someone-else', status: 'PREPARING' });
+
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([{ id: 'rel-row-4', version: 6 }]));
+
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find('rel-row-4');
+    expect(row._getRaw('driver_id')).toBe('someone-else');
+    expect(row._getRaw('last_conflict_reason')).toBeNull();
+  });
+
+  it('aksi update_status "pending" untuk order: baris dan aksinya tidak disentuh', async () => {
+    await seedSnakeCaseRow(db, 'orders', 'rel-row-5', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'PREPARING' });
+    // Aksi update_status 'pending' untuk order ini (bukan collect_cod).
+    await seedSnakeCaseRow(db, 'pending_actions', 'pa-pending-1', {
+      action_type: 'update_status',
+      target_order_id: 'rel-row-5',
+      expected_version: 5,
+      idempotency_key: 'status:rel-row-5:OUT_FOR_DELIVERY',
+      payload_json: '{"status":"OUT_FOR_DELIVERY"}',
+      status: 'pending',
+      created_at: 1700000000000,
+      updated_at: 1700000000000,
+    });
+
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([{ id: 'rel-row-5', version: 6 }]));
+
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find('rel-row-5');
+    // Baris tidak disentuh, driver_id tetap
+    expect(row._getRaw('driver_id')).toBe(RELEASE_TEST_USER);
+    expect(row._getRaw('last_conflict_reason')).toBeNull();
+    // Aksi tetap ada
+    const act = await db.get<PendingActionModel>('pending_actions').find('pa-pending-1');
+    expect(act._getRaw('status')).toBe('pending');
+  });
+
+  it('aksi update_status "failed": baris ditandai, aksi dihapus', async () => {
+    await seedSnakeCaseRow(db, 'orders', 'rel-row-6', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'PREPARING' });
+    await seedSnakeCaseRow(db, 'pending_actions', 'pa-failed-1', {
+      action_type: 'update_status',
+      target_order_id: 'rel-row-6',
+      expected_version: 5,
+      idempotency_key: 'status:rel-row-6:OUT_FOR_DELIVERY',
+      payload_json: '{"status":"OUT_FOR_DELIVERY"}',
+      status: 'failed',
+      created_at: 1700000000000,
+      updated_at: 1700000000000,
+    });
+
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([{ id: 'rel-row-6', version: 6 }]));
+
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find('rel-row-6');
+    expect(row._getRaw('driver_id')).toBeNull();
+    expect(row._getRaw('last_conflict_reason')).toBe('released');
+    // Aksi 'failed' dihapus
+    const all = await db.get<PendingActionModel>('pending_actions').query().fetch();
+    expect(all.find((a) => a.id === 'pa-failed-1')).toBeUndefined();
+  });
+
+  it('aksi collect_cod "pending" untuk order: baris ditandai, aksi COD tetap ada', async () => {
+    await seedSnakeCaseRow(db, 'orders', 'rel-row-7', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'OUT_FOR_DELIVERY' });
+    await seedSnakeCaseRow(db, 'pending_actions', 'pa-cod-1', {
+      action_type: 'collect_cod',
+      target_order_id: 'rel-row-7',
+      expected_version: 5,
+      idempotency_key: 'cod:rel-row-7:uuid-1',
+      payload_json: '{"amountCents":50000}',
+      status: 'pending',
+      created_at: 1700000000000,
+      updated_at: 1700000000000,
+    });
+
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([{ id: 'rel-row-7', version: 6 }]));
+
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find('rel-row-7');
+    expect(row._getRaw('driver_id')).toBeNull();
+    expect(row._getRaw('last_conflict_reason')).toBe('released');
+    // Aksi collect_cod tetap ada
+    const act = await db.get<PendingActionModel>('pending_actions').find('pa-cod-1');
+    expect(act._getRaw('status')).toBe('pending');
+  });
+
+  it('order yang sama di records dan releasedOrders (versi laporan >= record): tidak ada galat, baris ditandai', async () => {
+    // Baris lokal: PREPARING, server_version 5.
+    await seedSnakeCaseRow(db, 'orders', 'rel-row-8', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'PREPARING', server_version: 5 });
+    // Record dari server versi 6, laporan juga versi 6. Versi laporan sama
+    // atau lebih besar, jadi record dilewati dan baris ditandai lepas.
+    const orderRecord: Order = {
+      id: 'rel-row-8',
+      customerId: 'cust-release-1',
+      driverId: RELEASE_TEST_USER,
+      status: 'PREPARING',
+      items: [],
+      deliveryAddress: { recipientName: 'X', phone: '0', street: 'X', city: 'X', postalCode: '0' },
+      totalCents: 50000,
+      currency: 'IDR',
+      version: 6,
+      createdAt: '2026-02-15T09:00:00.000Z',
+      updatedAt: '2026-02-15T09:00:00.000Z',
+    };
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([{ id: 'rel-row-8', version: 6 }], [orderRecord]));
+
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find('rel-row-8');
+    // Baris ditandai lepas, status tidak berubah dari PREPARING
+    expect(row._getRaw('driver_id')).toBeNull();
+    expect(row._getRaw('last_conflict_reason')).toBe('released');
+    expect(row._getRaw('status')).toBe('PREPARING');
+  });
+
+  it('order yang sama di records dan releasedOrders (record lebih baru dari laporan): pullNow tidak null, last_conflict_reason tetap null', async () => {
+    // Baris lokal: PREPARING, server_version 5.
+    await seedSnakeCaseRow(db, 'orders', 'rel-row-X', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'PREPARING', server_version: 5 });
+
+    // Pull pertama dari start() kosong; yang diuji pull berikutnya.
+    pullBatchMock.mockResolvedValueOnce(makeReleasedResponse([]));
+    await coordinator.start(db);
+
+    // pullNow membawa record X versi 7 (lebih baru dari lokal 5 dan laporan
+    // 6) dan laporan versi 6. Record dipakai dan laporan diabaikan. Kalau
+    // baris yang sama disiapkan dua kali, write gagal dan pullNow
+    // mengembalikan null.
+    const orderRecord: Order = {
+      id: 'rel-row-X',
+      customerId: 'cust-release-1',
+      driverId: RELEASE_TEST_USER,
+      status: 'PREPARING',
+      items: [],
+      deliveryAddress: { recipientName: 'X', phone: '0', street: 'X', city: 'X', postalCode: '0' },
+      totalCents: 50000,
+      currency: 'IDR',
+      version: 7,
+      createdAt: '2026-02-15T09:00:00.000Z',
+      updatedAt: '2026-02-15T09:00:00.000Z',
+    };
+    pullBatchMock.mockResolvedValueOnce(makeReleasedResponse([{ id: 'rel-row-X', version: 6 }], [orderRecord]));
+
+    const result = await coordinator.pullNow();
+
+    expect(result).not.toBeNull();
+    const row = await db.get<OrderModel>('orders').find('rel-row-X');
+    expect(row._getRaw('last_conflict_reason')).toBeNull();
+  });
+
+  it('pool-refresh dipancarkan sekali kalau ada yang ditandai, tidak dipancarkan kalau tidak ada', async () => {
+    const syncEvents = jest.requireMock<{ syncEvents: { emit: jest.Mock } }>('./syncEvents');
+
+    // Ada baris ditandai lepas
+    await seedSnakeCaseRow(db, 'orders', 'rel-row-9', { ...RELEASED_BASE_ROW, driver_id: RELEASE_TEST_USER, status: 'PREPARING' });
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([{ id: 'rel-row-9', version: 6 }]));
+    await coordinator.start(db);
+
+    const poolRefreshCalls = syncEvents.syncEvents.emit.mock.calls.filter(
+      ([event]) => event === 'pool-refresh',
+    );
+    expect(poolRefreshCalls).toHaveLength(1);
+    expect(syncEvents.syncEvents.emit).toHaveBeenCalledWith('pool-refresh', { source: 'released' });
+
+    // Bagian kedua: laporan untuk baris milik driver lain tidak memicu
+    // penandaan.
+    syncEvents.syncEvents.emit.mockClear();
+    await seedSnakeCaseRow(db, 'orders', 'rel-row-10', { ...RELEASED_BASE_ROW, driver_id: 'someone-else', status: 'PREPARING' });
+    // Hentikan dulu supaya start() berjalan lagi dari awal.
+    coordinator.stop();
+    const coordinator2 = jest.requireActual<typeof import('./coordinator')>('./coordinator').syncCoordinator;
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([{ id: 'rel-row-10', version: 6 }]));
+    await coordinator2.start(db);
+
+    const poolRefreshCalls2 = syncEvents.syncEvents.emit.mock.calls.filter(
+      ([event]) => event === 'pool-refresh',
+    );
+    expect(poolRefreshCalls2).toHaveLength(0);
+    expect(syncEvents.syncEvents.emit).not.toHaveBeenCalledWith('pool-refresh', { source: 'released' });
   });
 });

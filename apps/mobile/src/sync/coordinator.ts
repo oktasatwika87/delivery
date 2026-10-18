@@ -10,8 +10,8 @@
  */
 
 import { Q } from '@nozbe/watermelondb';
+import type { Database, Model } from '@nozbe/watermelondb';
 import reactNativeUUID from 'react-native-uuid';
-import type { Database } from '@nozbe/watermelondb';
 import type {
   ChatMessage,
   Order,
@@ -29,6 +29,8 @@ import { getDeviceId } from './device';
 import { getCurrentUserId } from './session';
 import { syncEvents } from './syncEvents';
 import { networkMonitor } from '../map/networkMonitor';
+import { OrderModel } from '../db/models/OrderModel';
+import { PendingActionModel } from '../db/models/PendingActionModel';
 
 /**
  * Maximum consecutive failed sync attempts per record. After this many
@@ -346,7 +348,30 @@ export class SyncCoordinator implements Coordinator {
       return { nextCursor: null, records: [], serverTime: new Date().toISOString() };
     }
     const deviceId = await getDeviceId();
-    return pullBatch(deviceId, sinceCursor);
+    const heldOrderIds = await this.collectHeldOrderIds(this.db);
+    return pullBatch(deviceId, sinceCursor, heldOrderIds);
+  }
+
+  /**
+   * Kumpulkan id order yang dipegang akun yang login: status aktif dan
+   * deleted_at kosong. Server memakai daftar ini untuk melaporkan mana yang
+   * sudah bukan miliknya (releasedOrders). Paling banyak 100 id.
+   *
+   * Belum login atau DB belum ada: daftar kosong.
+   */
+  private async collectHeldOrderIds(db: Database | null): Promise<string[]> {
+    if (!db) return [];
+    const userId = await getCurrentUserId();
+    if (!userId) return [];
+    const held = await db
+      .get<Model>('orders')
+      .query(
+        Q.where('driver_id', userId),
+        Q.where('status', Q.oneOf(['ASSIGNED', 'PREPARING', 'OUT_FOR_DELIVERY'])),
+        Q.where('deleted_at', null),
+      )
+      .fetch();
+    return held.map((row) => row.id).slice(0, 100);
   }
 
   // ============ applyPull ============
@@ -368,18 +393,140 @@ export class SyncCoordinator implements Coordinator {
     if (this.stopped) return;
     const database = db ?? this.db;
     if (!database) return;
-    if (pull.records.length === 0) return;
+    // Tidak ada data sama sekali (records kosong, releasedOrders kosong atau tidak ada):
+    // keluar lebih awal, cursor tidak disimpan.
+    const releasedOrders = pull.releasedOrders ?? [];
+    if (pull.records.length === 0 && releasedOrders.length === 0) return;
+
+    // getCurrentUserId dibaca sebelum database.write, hanya kalau ada
+    // releasedOrders untuk diproses. null berarti releasedOrders diabaikan
+    // (sama dengan daftar kosong).
+    let currentUserId: string | null = null;
+    if (releasedOrders.length > 0) {
+      currentUserId = await getCurrentUserId();
+    }
 
     // find() dan penulisan batch berjalan di dalam SATU database.write.
     // Kalau find() di luar write, tulisan outbox yang masuk di antara baca
     // dan tulis (misalnya setelah await find()) tertimpa data pull yang
     // diambil lebih dulu.
+    let releasedMarkedCount = 0;
     await database.write(async () => {
       const batch: any[] = [];
+      const ordersCollection = database.get<OrderModel>('orders');
+
+      // Versi laporan per id order.
+      const releaseById = new Map<string, number>();
+      for (const entry of releasedOrders) {
+        releaseById.set(entry.id, entry.version);
+      }
+      // Order yang ada di records dan juga di laporan diputuskan di sini,
+      // sebelum prepareUpdate apa pun. Versi laporan sama atau lebih besar:
+      // record dilewati dan laporan tetap dipakai. Lebih kecil: record dipakai
+      // dan laporan diabaikan. Dengan begitu satu baris tidak pernah disiapkan
+      // dua kali dalam satu batch.
+      const skipRecordIds = new Set<string>();
+      for (const record of pull.records) {
+        if (record.entityType !== 'order') continue;
+        const reportVer = releaseById.get(record.id);
+        if (typeof reportVer !== 'number') continue;
+        if (reportVer >= record.serverVersion) {
+          skipRecordIds.add(record.id);
+        } else {
+          releaseById.delete(record.id);
+        }
+      }
+      const rowsToRelease = new Set<string>();
+      // Aksi update_status/cancel/reject yang akan dihapus per order.
+      const actionsToDelete = new Map<string, string[]>();
+
+      // pending_actions dibaca di dalam write yang sama dengan penulisan
+      // records.
+      const pendingActionsCollection = database.get<PendingActionModel>('pending_actions');
+
+      for (const [orderId, reportVersion] of releaseById) {
+        if (currentUserId === null) break;
+        const existing = await ordersCollection.find(orderId).catch(() => null);
+        if (!existing) continue;
+        // Hanya baris yang driver_id-nya akun yang login.
+        const existingDriverId = existing._getRaw('driver_id');
+        if (existingDriverId !== currentUserId) continue;
+        // Versi lokal berupa angka dan lebih besar dari versi laporan: baris
+        // sudah lebih baru, laporan diabaikan.
+        const localVersion = existing._getRaw('server_version');
+        if (typeof localVersion === 'number' && localVersion > reportVersion) continue;
+        // Aksi yang menghalangi: update_status/cancel/reject dengan status
+        // 'pending' atau 'syncing'. 'failed' dan 'orphaned_needs_review'
+        // tidak menghalangi karena tidak akan dikirim lagi.
+        const blocking = await pendingActionsCollection
+          .query(
+            Q.where('target_order_id', orderId),
+            Q.where('action_type', Q.oneOf(['update_status', 'cancel', 'reject'])),
+            Q.where('status', Q.oneOf(['pending', 'syncing'])),
+          )
+          .fetch();
+        if (blocking.length > 0) continue;
+
+        // Baris disiapkan sekali di bawah, setelah semua laporan dicek.
+        rowsToRelease.add(orderId);
+
+        // Aksi update_status, cancel, dan reject order ini dihapus, status apa
+        // pun, sama seperti writeRejectConflictAndDelete untuk 'reassigned'.
+        // collect_cod tidak disentuh. Kolom dibaca lewat _getRaw karena
+        // dekorator @text tidak aktif di Jest.
+        const allForOrder = await pendingActionsCollection
+          .query(Q.where('target_order_id', orderId))
+          .fetch();
+        const deleteIds: string[] = [];
+        for (const action of allForOrder) {
+          const actionType = action._getRaw('action_type');
+          if (actionType === 'collect_cod') continue;
+          deleteIds.push(action.id);
+        }
+        if (deleteIds.length > 0) {
+          actionsToDelete.set(orderId, deleteIds);
+        }
+      }
+
+      // Tandai baris lepas: satu prepareUpdate per order, dengan
+      // driver_id null, last_conflict_reason 'released', last_conflict_at,
+      // _status 'synced', _changed ''. Status, versi, dan kolom lain tidak
+      // diubah, karena driver lama tidak berhak tahu keadaan order sekarang.
+      for (const orderId of rowsToRelease) {
+        const row = await ordersCollection.find(orderId);
+        const op = row.prepareUpdate((r) => {
+          r._setRaw('driver_id', null);
+          r._setRaw('last_conflict_reason', 'released');
+          r._setRaw('last_conflict_at', Date.now());
+          r._raw._status = 'synced';
+          r._raw._changed = '';
+        });
+        batch.push(op);
+        releasedMarkedCount += 1;
+      }
+
+      // Siapkan prepareDestroyPermanently untuk aksi-aksi yang akan dihapus.
+      for (const orderId of rowsToRelease) {
+        const deleteIds = actionsToDelete.get(orderId) ?? [];
+        if (deleteIds.length === 0) continue;
+        const actions = await pendingActionsCollection
+          .query(Q.where('target_order_id', orderId))
+          .fetch();
+        for (const action of actions) {
+          if (!deleteIds.includes(action.id)) continue;
+          batch.push(action.prepareDestroyPermanently());
+        }
+      }
 
       for (const record of pull.records) {
         const collection = this.collectionFor(record.entityType, database);
         if (!collection) continue;
+
+        // Laporannya sama atau lebih baru dari record ini (diputuskan di
+        // atas), jadi record tidak dipakai.
+        if (record.entityType === 'order' && skipRecordIds.has(record.id)) {
+          continue;
+        }
 
         if (record.deleted) {
           // Soft delete lokal, cari row, kalau ada, mark deleted_at
@@ -439,7 +586,17 @@ export class SyncCoordinator implements Coordinator {
       }
     });
 
-    await saveCursor(pull.nextCursor);
+    // Cursor hanya disimpan kalau ada records, karena respons tanpa records
+    // bisa membawa nextCursor null (misalnya respons batas waktu pullBatch).
+    if (pull.records.length > 0) {
+      await saveCursor(pull.nextCursor);
+    }
+
+    // pool-refresh dipancarkan sekali kalau ada baris yang ditandai lepas,
+    // supaya OrdersScreen mengambil ulang daftar Tersedia.
+    if (releasedMarkedCount > 0) {
+      syncEvents.emit('pool-refresh', { source: 'released' });
+    }
   }
 
   /**
