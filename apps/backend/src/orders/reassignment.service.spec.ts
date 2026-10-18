@@ -25,6 +25,7 @@ import { PrismaClient, OrderStatusDb } from '@prisma/client';
 
 import { ReassignmentService } from './reassignment.service';
 import { OrdersService } from './orders.service';
+import { OrdersGateway } from './orders.gateway';
 
 describe('ReassignmentService', () => {
   let service: ReassignmentService;
@@ -42,6 +43,9 @@ describe('ReassignmentService', () => {
   };
   let mockConfig: {
     get: jest.Mock;
+  };
+  let mockOrdersGateway: {
+    emitOrderCancelled: jest.Mock;
   };
 
   const orderId = 'order-uuid-123';
@@ -64,6 +68,10 @@ describe('ReassignmentService', () => {
       releaseToPool: jest.fn(),
     };
 
+    mockOrdersGateway = {
+      emitOrderCancelled: jest.fn(),
+    };
+
     mockConfig = {
       get: jest.fn().mockImplementation((key: string, fallback: number) => {
         if (key === 'REASSIGN_TIMEOUT_PREPARING_MINUTES') return 15;
@@ -78,6 +86,7 @@ describe('ReassignmentService', () => {
         { provide: PrismaClient, useValue: mockPrisma },
         { provide: ConfigService, useValue: mockConfig },
         { provide: OrdersService, useValue: mockOrdersService },
+        { provide: OrdersGateway, useValue: mockOrdersGateway },
       ],
     }).compile();
 
@@ -94,8 +103,10 @@ describe('ReassignmentService', () => {
     test('OCC success - releaseToPool dipanggil, return true', async () => {
       const reassignedOrder = {
         id: orderId,
+        customerId,
         status: OrderStatusDb.ASSIGNED,
         version: version + 1,
+        cancelReason: 'system_timeout',
       };
 
       mockOrdersService.releaseToPool.mockResolvedValue(reassignedOrder);
@@ -149,6 +160,56 @@ describe('ReassignmentService', () => {
 
       expect(result).toBe(false);
     });
+
+    // Setelah releaseToPool sukses, customer dikabari lewat
+    // emitOrderCancelled sekali. Alasannya diambil dari order hasil
+    // releaseToPool, yaitu 'system_timeout' yang dikirim cron.
+    test('sukses: emitOrderCancelled dipanggil sekali dengan customer, order, versi baru, system_timeout', async () => {
+      mockOrdersService.releaseToPool.mockResolvedValue({
+        id: orderId,
+        customerId,
+        version: version + 1,
+        cancelReason: 'system_timeout',
+      });
+
+      const result = await service.triggerReassignment(orderId, version);
+
+      expect(result).toBe(true);
+      expect(mockOrdersGateway.emitOrderCancelled).toHaveBeenCalledTimes(1);
+      expect(mockOrdersGateway.emitOrderCancelled).toHaveBeenCalledWith(
+        customerId,
+        orderId,
+        version + 1,
+        'system_timeout',
+      );
+    });
+
+    test('ConflictException VERSION_CONFLICT: emitOrderCancelled tidak dipanggil', async () => {
+      mockOrdersService.releaseToPool.mockRejectedValue(
+        new ConflictException({ code: 'VERSION_CONFLICT', message: 'stale' }),
+      );
+
+      await service.triggerReassignment(orderId, version);
+
+      expect(mockOrdersGateway.emitOrderCancelled).not.toHaveBeenCalled();
+    });
+
+    test('ConflictException COD_ALREADY_CAPTURED: emitOrderCancelled tidak dipanggil', async () => {
+      mockOrdersService.releaseToPool.mockRejectedValue(
+        new ConflictException({ code: 'COD_ALREADY_CAPTURED', message: 'cod' }),
+      );
+
+      await service.triggerReassignment(orderId, version);
+
+      expect(mockOrdersGateway.emitOrderCancelled).not.toHaveBeenCalled();
+    });
+
+    test('galat lain: emitOrderCancelled tidak dipanggil', async () => {
+      mockOrdersService.releaseToPool.mockRejectedValue(new Error('DB down'));
+
+      await expect(service.triggerReassignment(orderId, version)).rejects.toThrow('DB down');
+      expect(mockOrdersGateway.emitOrderCancelled).not.toHaveBeenCalled();
+    });
   });
 
   // ===== checkReassignments tests =====
@@ -191,7 +252,9 @@ describe('ReassignmentService', () => {
         ]);
         mockOrdersService.releaseToPool.mockResolvedValue({
           id: orderId,
+          customerId,
           version: version + 1,
+          cancelReason: 'system_timeout',
         });
 
         await service.checkReassignments();
@@ -228,7 +291,9 @@ describe('ReassignmentService', () => {
         ]);
         mockOrdersService.releaseToPool.mockResolvedValue({
           id: orderId,
+          customerId,
           version: version + 1,
+          cancelReason: 'system_timeout',
         });
 
         await service.checkReassignments();
@@ -259,7 +324,9 @@ describe('ReassignmentService', () => {
         ]);
         mockOrdersService.releaseToPool.mockResolvedValue({
           id: orderId,
+          customerId,
           version: version + 1,
+          cancelReason: 'system_timeout',
         });
 
         await service.checkReassignments();
@@ -279,7 +346,9 @@ describe('ReassignmentService', () => {
         ]);
         mockOrdersService.releaseToPool.mockResolvedValue({
           id: orderId,
+          customerId,
           version: version + 1,
+          cancelReason: 'system_timeout',
         });
 
         await service.checkReassignments();
@@ -333,7 +402,9 @@ describe('ReassignmentService', () => {
 
       mockOrdersService.releaseToPool.mockResolvedValue({
         id: 'order-old',
+        customerId,
         version: version + 1,
+        cancelReason: 'system_timeout',
       });
 
       await service.checkReassignments();

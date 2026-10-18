@@ -63,6 +63,9 @@ export interface OrderRejectedPayload {
  * order:cancelled, customer-targeted. Status hardcoded 'ASSIGNED' by the
  * server (lihat OrdersGateway.emitOrderCancelled dan OrdersService.cancelOrder).
  * Order balik ke pool, status ASSIGNED + driverId null, bukan terminal.
+ *
+ * Dipancarkan saat driver membatalkan order yang dipegangnya (alasan dari
+ * driver) dan saat cron melepas order otomatis (alasan 'system_timeout').
  */
 export interface OrderCancelledPayload {
   orderId: string;

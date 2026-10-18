@@ -4,6 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaClient, OrderStatusDb } from '@prisma/client';
 
 import { OrdersService } from './orders.service';
+import { OrdersGateway } from './orders.gateway';
 
 const SYSTEM_DRIVER_ID = 'SYSTEM';
 
@@ -43,6 +44,7 @@ export class ReassignmentService {
     private readonly prisma: PrismaClient,
     private readonly configService: ConfigService,
     private readonly ordersService: OrdersService,
+    private readonly ordersGateway: OrdersGateway,
   ) {
     this.timeoutPreparingMinutes = this.configService.get<number>(
       'REASSIGN_TIMEOUT_PREPARING_MINUTES',
@@ -85,8 +87,15 @@ export class ReassignmentService {
         `[reassign] Order ${orderId} timed out, released to pool (v${expectedVersion} -> v${updated.version})`,
       );
 
-      // releaseToPool sudah broadcast ke pool (emitOrderAvailable),
-      // jadi tidak ada emit tambahan di sini.
+      // releaseToPool sudah memberi tahu pool (emitOrderAvailable). Customer
+      // dikabari di sini supaya layar tracking langsung kembali ke "Mencari
+      // driver", sama seperti saat driver membatalkan order.
+      this.ordersGateway.emitOrderCancelled(
+        updated.customerId,
+        updated.id,
+        updated.version,
+        updated.cancelReason,
+      );
 
       return true;
     } catch (err) {

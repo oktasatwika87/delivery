@@ -127,7 +127,8 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   /**
-   * Emit event ke customer saat driver cancel mid-delivery.
+   * Mengabari customer saat driver membatalkan order atau saat cron melepas
+   * order yang driver-nya lama tidak tersambung.
    *
    * Status 'ASSIGNED', order balik ke pool, single pool state sekarang ASSIGNED
    * + driverId null (lihat releaseToPool). Customer lihat "Mencari driver",
