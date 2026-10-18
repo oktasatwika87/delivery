@@ -1438,6 +1438,172 @@ describe('outbox', () => {
     // ============ pemilahan hasil kirim ============
 
     describe('409 ORDER_REASSIGNED dan COD_ALREADY_CAPTURED: aksi dihapus, alasan ditulis ke order', () => {
+      // 409 ORDER_REASSIGNED: order bukan milik driver lagi, jadi driver_id
+      // dikosongkan supaya baris keluar dari Order Saya dan tidak mengganggu
+      // syarat tombol. pool-refresh dipancarkan agar OrdersScreen memuat ulang
+      // daftar Tersedia. Aksi collect_cod tidak dihapus, dan driver tidak boleh
+      // melihat status atau data order baru (cuma driver_id null).
+      test('reject 409 ORDER_REASSIGNED: driver_id null, pool-refresh dipancarkan, aksi dihapus', async () => {
+        const order = {
+          id: 'order-reassigned-driver-null',
+          _raw: { id: 'order-reassigned-driver-null', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 3,
+        };
+        mockState.orders.set('order-reassigned-driver-null', order);
+
+        const action = makeRecord({
+          actionType: 'reject',
+          targetOrderId: 'order-reassigned-driver-null',
+          expectedVersion: 3,
+        });
+        mockState.records.set('reassigned-driver-null-action', action);
+        attachMethods(action);
+
+        mockRejectOrder.mockRejectedValue(new ApiError(
+          'rejectOrder failed: 409 - body',
+          409,
+          'ORDER_REASSIGNED',
+          { code: 'ORDER_REASSIGNED', message: 'Order reassigned' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('conflict');
+        expect(mockState.records.has('reassigned-driver-null-action')).toBe(false);
+        const updated = mockState.orders.get('order-reassigned-driver-null')!;
+        // driver_id dikosongkan, status tidak diubah
+        expect(updated._raw.driver_id).toBeNull();
+        expect(updated._raw.last_conflict_reason).toBe('reassigned');
+        // pool-refresh dipancarkan dengan source 'reassigned' dan orderId
+        expect(syncEvents.emit).toHaveBeenCalledWith(
+          'pool-refresh',
+          expect.objectContaining({
+            source: 'reassigned',
+            orderId: 'order-reassigned-driver-null',
+          }),
+        );
+      });
+
+      test('cancel 409 ORDER_REASSIGNED: driver_id null, pool-refresh dipancarkan, aksi dihapus', async () => {
+        const order = {
+          id: 'order-cancel-reassigned-driver-null',
+          _raw: { id: 'order-cancel-reassigned-driver-null', _status: 'synced' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 7,
+        };
+        mockState.orders.set('order-cancel-reassigned-driver-null', order);
+
+        const action = makeRecord({
+          actionType: 'cancel',
+          targetOrderId: 'order-cancel-reassigned-driver-null',
+          expectedVersion: 7,
+          payloadJson: { reason: 'test' },
+        });
+        mockState.records.set('cancel-reassigned-driver-null-action', action);
+        attachMethods(action);
+
+        mockCancelOrder.mockRejectedValue(new ApiError(
+          'cancelOrder failed: 409 - body',
+          409,
+          'ORDER_REASSIGNED',
+          { code: 'ORDER_REASSIGNED', message: 'm' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('conflict');
+        expect(mockState.records.has('cancel-reassigned-driver-null-action')).toBe(false);
+        const updated = mockState.orders.get('order-cancel-reassigned-driver-null')!;
+        expect(updated._raw.driver_id).toBeNull();
+        expect(updated._raw.last_conflict_reason).toBe('reassigned');
+        expect(syncEvents.emit).toHaveBeenCalledWith(
+          'pool-refresh',
+          expect.objectContaining({
+            source: 'reassigned',
+            orderId: 'order-cancel-reassigned-driver-null',
+          }),
+        );
+      });
+
+      test('update_status 409 ORDER_REASSIGNED: driver_id null, pool-refresh dipancarkan, aksi dihapus', async () => {
+        const order = {
+          id: 'order-us-reassigned-driver-null',
+          _raw: { id: 'order-us-reassigned-driver-null', _status: 'synced' },
+          status: 'PREPARING',
+          serverVersion: 3,
+        };
+        mockState.orders.set('order-us-reassigned-driver-null', order);
+
+        const action = makeRecord({
+          actionType: 'update_status',
+          targetOrderId: 'order-us-reassigned-driver-null',
+          expectedVersion: 0,
+          idempotencyKey: 'status:order-us-reassigned-driver-null:OUT_FOR_DELIVERY',
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+        });
+        mockState.records.set('us-reassigned-driver-null-action', action);
+        attachMethods(action);
+
+        mockUpdateOrderStatus.mockRejectedValueOnce(new ApiError(
+          'updateOrderStatus failed: 409 - body',
+          409,
+          'ORDER_REASSIGNED',
+          { code: 'ORDER_REASSIGNED', message: 'm' },
+        ));
+
+        const results = await drainPendingActions();
+        expect(results[0].status).toBe('conflict');
+        expect(mockState.records.has('us-reassigned-driver-null-action')).toBe(false);
+        const updated = mockState.orders.get('order-us-reassigned-driver-null')!;
+        expect(updated._raw.driver_id).toBeNull();
+        expect(updated._raw.last_conflict_reason).toBe('reassigned');
+        expect(syncEvents.emit).toHaveBeenCalledWith(
+          'pool-refresh',
+          expect.objectContaining({
+            source: 'reassigned',
+            orderId: 'order-us-reassigned-driver-null',
+          }),
+        );
+      });
+
+      // 'cancel-cod-captured' artinya order masih milik driver, jadi driver_id
+      // tidak dikosongkan dan pool-refresh tidak dipancarkan.
+      test('reject 409 COD_ALREADY_CAPTURED: driver_id tetap, pool-refresh tidak dipancarkan', async () => {
+        const order = {
+          id: 'order-reject-cod-captured',
+          _raw: { id: 'order-reject-cod-captured', _status: 'synced', driver_id: 'driver-123' },
+          status: 'OUT_FOR_DELIVERY',
+          serverVersion: 8,
+        };
+        mockState.orders.set('order-reject-cod-captured', order);
+
+        const action = makeRecord({
+          actionType: 'reject',
+          targetOrderId: 'order-reject-cod-captured',
+          expectedVersion: 8,
+        });
+        mockState.records.set('reject-cod-captured-action', action);
+        attachMethods(action);
+
+        mockRejectOrder.mockRejectedValue(new ApiError(
+          'rejectOrder failed: 409 - body',
+          409,
+          'COD_ALREADY_CAPTURED',
+          { code: 'COD_ALREADY_CAPTURED', message: 'm' },
+        ));
+
+        await drainPendingActions();
+
+        const updated = mockState.orders.get('order-reject-cod-captured')!;
+        // driver_id tetap untuk cancel-cod-captured, order masih milik driver
+        expect(updated._raw.driver_id).toBe('driver-123');
+        expect(updated._raw.last_conflict_reason).toBe('cancel-cod-captured');
+        // pool-refresh tidak dipancarkan untuk 'cancel-cod-captured'
+        expect(syncEvents.emit).not.toHaveBeenCalledWith(
+          'pool-refresh',
+          expect.objectContaining({ source: 'reassigned' }),
+        );
+      });
+
       test('reject 409 ORDER_REASSIGNED: aksi dihapus, order dapat last_conflict_reason "reassigned"', async () => {
         const order = {
           id: 'order-reassigned-reject',

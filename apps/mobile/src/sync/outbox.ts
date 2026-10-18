@@ -704,16 +704,20 @@ async function classifyAndHandleRejectError(
  * hapus aksinya, dalam satu batch. Baris ditutup 'synced' supaya kolom lokal
  * ini tidak membuat baris ikut push.
  *
- * Untuk reason 'reassigned' (ORDER_REASSIGNED dari server): selain aksi
- * yang sedang diproses, semua aksi update_status/cancel/reject lain untuk
- * order itu ikut dihapus, karena order sudah bukan milik driver dan aksi
- * itu tidak akan diterima server. Aksi collect_cod tidak dihapus, karena
- * uangnya sudah diterima driver; kalau server menolaknya, aksi itu menjadi
- * yatim lewat markActionOrphaned.
+ * Untuk alasan 'reassigned' (ORDER_REASSIGNED dari server): order bukan
+ * milik driver lagi, jadi driver_id dikosongkan supaya baris keluar dari
+ * Order Saya dan tombol yang bergantung pada driver_id hilang. Sesudah itu
+ * pool-refresh dipancarkan supaya daftar Tersedia dicek ulang, karena order
+ * itu mungkin sudah kembali ke pool. Selain aksi yang sedang diproses, semua
+ * aksi update_status/cancel/reject lain untuk order itu ikut dihapus, karena
+ * aksi itu tidak akan diterima server. Aksi collect_cod tidak dihapus,
+ * karena uangnya sudah diterima driver; kalau server menolaknya, aksi itu
+ * menjadi yatim lewat markActionOrphaned.
  *
- * Untuk reason 'cancel-cod-captured': hanya aksi yang sedang diproses yang
- * dihapus; aksi status lain untuk order itu (misalnya update_status
- * DELIVERED) tetap berlaku.
+ * Untuk alasan 'cancel-cod-captured': order masih milik driver, jadi
+ * driver_id tidak diubah dan pool-refresh tidak dipancarkan. Hanya aksi
+ * yang sedang diproses yang dihapus; aksi status lain untuk order itu
+ * (misalnya update_status DELIVERED) tetap berlaku.
  */
 async function writeRejectConflictAndDelete(
   action: PendingActionModel,
@@ -755,12 +759,25 @@ async function writeRejectConflictAndDelete(
       ops.push(orderRow.prepareUpdate((r) => {
         r._setRaw('last_conflict_reason', reason);
         r._setRaw('last_conflict_at', Date.now());
+        if (reason === 'reassigned') {
+          // Baris keluar dari Order Saya dan tombol yang bergantung pada
+          // driverId ikut hilang. Status dan kolom lain tidak diubah.
+          r._setRaw('driver_id', null);
+        }
         r._raw._status = 'synced';
         r._raw._changed = '';
       }));
     }
     await db.batch(...ops);
   });
+
+  // Untuk 'reassigned', minta OrdersScreen mengambil ulang daftar Tersedia,
+  // karena order itu mungkin sudah kembali ke pool. Dipancarkan di luar
+  // write, supaya write dari fetchPool yang dipicunya tidak tumpang tindih
+  // dengan write ini.
+  if (reason === 'reassigned') {
+    syncEvents.emit('pool-refresh', { source: 'reassigned', orderId: action.targetOrderId });
+  }
 
   return { pendingActionId: action.id, status: 'conflict', error: reason };
 }
