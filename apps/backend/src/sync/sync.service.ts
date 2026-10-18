@@ -195,18 +195,26 @@ export class SyncService {
       return this.nack(id, entityType, 'rejected', 'Tipe data tidak dikenal', now);
     }
 
-    // Order: semua push ditolak. Update/delete cek OCC duluan.
+    // Order: semua push ditolak. Update/delete cek pemilik dan OCC duluan.
     if (entityType === 'order') {
       if (op === 'create') {
         // Create: langsung nack tanpa query DB
         return this.nack(id, entityType, 'rejected',
           'Order hanya bisa diubah lewat endpoint order', now);
       }
-      // Update/delete: OCC conflict harus didahulukan dari penolakan
+      // Update/delete: cek pemilik lebih dulu, supaya kiriman basi dari akun
+      // lain tidak bisa dipakai untuk membaca data order lewat balasan
+      // `conflict`. Sesudah itu OCC conflict tetap didahulukan dari penolakan
+      // di bawah, supaya HP yang mengirim baseVersion basi untuk order
+      // miliknya sendiri bisa pulih dengan data server.
       const row = await this.prisma.order.findUnique({ where: { id } });
       if (!row) {
         return this.nack(id, entityType, 'rejected',
           `Entity ${id} not found`, now);
+      }
+      if (row.customerId !== userId && row.driverId !== userId) {
+        return this.nack(id, entityType, 'rejected',
+          'Order ini bukan milik Anda', now);
       }
       if (row.version !== baseVersion) {
         return {
@@ -223,18 +231,28 @@ export class SyncService {
         'Order hanya bisa diubah lewat endpoint order', now, row.version);
     }
 
-    // Payment: semua push ditolak. Update/delete cek OCC duluan.
+    // Payment: semua push ditolak. Update/delete cek pemilik dan OCC duluan.
     if (entityType === 'payment') {
       if (op === 'create') {
         // Create: langsung nack tanpa query DB
         return this.nack(id, entityType, 'rejected',
           'Pembayaran hanya bisa diubah lewat endpoint pembayaran', now);
       }
-      // Update/delete: OCC conflict harus didahulukan dari penolakan
-      const row = await this.prisma.payment.findUnique({ where: { id } });
+      // Update/delete: cek pemilik lebih dulu, sebelum OCC. Pemilik
+      // pembayaran adalah customer atau driver ordernya. Tanpa cek ini,
+      // kiriman basi dari akun lain dibalas `conflict` dengan serverData,
+      // sehingga data pembayaran orang lain bisa terbaca.
+      const row = await this.prisma.payment.findUnique({
+        where: { id },
+        include: { order: { select: { customerId: true, driverId: true } } },
+      });
       if (!row) {
         return this.nack(id, entityType, 'rejected',
           `Entity ${id} not found`, now);
+      }
+      if (row.order.customerId !== userId && row.order.driverId !== userId) {
+        return this.nack(id, entityType, 'rejected',
+          'Pembayaran ini bukan milik Anda', now);
       }
       if (row.version !== baseVersion) {
         return {

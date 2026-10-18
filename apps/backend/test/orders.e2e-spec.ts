@@ -1772,4 +1772,142 @@ describe('Orders (e2e) - accept/reject', () => {
       expect(resp.body.releasedOrders).toEqual([]);
     });
   });
+
+  // Push order basi dari bukan pemilik dibalas ack 'rejected' tanpa
+  // serverData, serverVersion 0. Pemilik dengan baseVersion basi tetap
+  // mendapat 'conflict' dengan serverData.
+  describe('sync push: order basi dari bukan pemilik', () => {
+    const deviceId = 'e2e-sync-nonowner';
+    const orderId = 'e2e00000-0000-0000-0000-00000000f001';
+
+    async function cleanupOrder() {
+      await prisma.payment.deleteMany({ where: { orderId } }).catch(() => {});
+      await prisma.order.deleteMany({ where: { id: orderId } }).catch(() => {});
+    }
+
+    afterAll(async () => {
+      await prisma.syncCursor.deleteMany({ where: { deviceId } }).catch(() => {});
+    });
+
+    test('driver2 push order milik driver1 dengan baseVersion basi: rejected tanpa serverData', async () => {
+      // Order PREPARING milik driver1, versi 3.
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: OrderStatusDb.PREPARING,
+          itemsJson: [],
+          addressJson: { recipientName: 'Budi', phone: '0812', street: 'Jl Merdeka', city: 'Jakarta', postalCode: '10110' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 3,
+        },
+        update: {},
+      });
+      const driver2Token = generateToken(driver2UserId, UserRole.DRIVER);
+      try {
+        const resp = await request(app.getHttpServer())
+          .post('/sync/push')
+          .set('Authorization', `Bearer ${driver2Token}`)
+          .send({
+            deviceId,
+            userId: driver2UserId,
+            sinceCursor: null,
+            records: [{
+              entityType: 'order',
+              id: orderId,
+              data: {
+                id: orderId,
+                customerId: customerUserId,
+                driverId: driver2UserId,
+                status: 'OUT_FOR_DELIVERY',
+                items: [],
+                deliveryAddress: { recipientName: 'Budi', phone: '0812', street: 'Jl Merdeka', city: 'Jakarta', postalCode: '10110' },
+                totalCents: 50000,
+                currency: 'IDR',
+                notes: undefined,
+                version: 4,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+              op: 'update',
+              clientChangedAt: new Date().toISOString(),
+              baseVersion: 2, // basi
+            }],
+          });
+        // POST di NestJS membalas 201
+        expect(resp.status).toBe(201);
+        const ack = resp.body.acks[0];
+        expect(ack.status).toBe('rejected');
+        expect(ack.reason).toBe('Order ini bukan milik Anda');
+        expect(ack.serverData).toBeUndefined();
+        expect(ack.serverVersion).toBe(0);
+        // Versi order tidak berubah dan driverId tetap driver1
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.version).toBe(3);
+        expect(dbOrder?.driverId).toBe(driverUserId);
+      } finally {
+        await cleanupOrder();
+      }
+    });
+
+    test('driver1 (pemilik) push order miliknya dengan baseVersion basi: conflict + serverData', async () => {
+      await prisma.order.upsert({
+        where: { id: orderId },
+        create: {
+          id: orderId,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: OrderStatusDb.PREPARING,
+          itemsJson: [],
+          addressJson: { recipientName: 'Budi', phone: '0812', street: 'Jl Merdeka', city: 'Jakarta', postalCode: '10110' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 3,
+        },
+        update: {},
+      });
+      try {
+        const resp = await request(app.getHttpServer())
+          .post('/sync/push')
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({
+            deviceId,
+            userId: driverUserId,
+            sinceCursor: null,
+            records: [{
+              entityType: 'order',
+              id: orderId,
+              data: {
+                id: orderId,
+                customerId: customerUserId,
+                driverId: driverUserId,
+                status: 'OUT_FOR_DELIVERY',
+                items: [],
+                deliveryAddress: { recipientName: 'Budi', phone: '0812', street: 'Jl Merdeka', city: 'Jakarta', postalCode: '10110' },
+                totalCents: 50000,
+                currency: 'IDR',
+                notes: undefined,
+                version: 4,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+              op: 'update',
+              clientChangedAt: new Date().toISOString(),
+              baseVersion: 2, // basi
+            }],
+          });
+        expect(resp.status).toBe(201);
+        const ack = resp.body.acks[0];
+        expect(ack.status).toBe('conflict');
+        expect(ack.serverVersion).toBe(3);
+        expect(ack.serverData).toBeDefined();
+        expect(ack.serverData.id).toBe(orderId);
+      } finally {
+        await cleanupOrder();
+      }
+    });
+  });
 });

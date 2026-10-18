@@ -285,6 +285,10 @@ describe('SyncService.applyOne', () => {
       amountCents: 50000,
       currency: 'IDR',
       kind: 'PAYMENT',
+      // Relasi order dipakai SyncService.applyOne untuk cek pemilik.
+      // customerId sama dengan userId tes ('customer-uuid'), jadi pemanggil
+      // tetap pemilik.
+      order: { customerId: 'customer-uuid', driverId: 'driver-uuid' },
       externalRef: null,
       version: 2,
       createdAt: new Date(),
@@ -337,6 +341,8 @@ describe('SyncService.applyOne', () => {
       amountCents: 50000,
       currency: 'IDR',
       kind: 'REFUND',
+      // customerId sama dengan userId tes, jadi pemanggil pemilik.
+      order: { customerId: 'customer-uuid', driverId: 'driver-uuid' },
       externalRef: 'ref-123',
       version: 5, // SERVER LEBIH BARU
       createdAt: new Date(),
@@ -419,6 +425,8 @@ describe('SyncService.applyOne', () => {
       amountCents: 50000,
       currency: 'IDR',
       kind: 'PAYMENT',
+      // Relasi order: customerId sama dengan userId tes, jadi pemanggil pemilik.
+      order: { customerId: 'customer-uuid', driverId: 'driver-uuid' },
       externalRef: null,
       version: 2,
       createdAt: new Date(),
@@ -431,6 +439,105 @@ describe('SyncService.applyOne', () => {
     expect(ack.reason).toBe('Pembayaran hanya bisa diubah lewat endpoint pembayaran');
     expect(ack.serverVersion).toBe(2);
     expect(prisma.payment.update).not.toHaveBeenCalled();
+  });
+
+  // Push pembayaran basi dari bukan pemilik dibalas 'rejected' tanpa
+  // serverData, serverVersion 0. Pemilik pembayaran adalah customer atau
+  // driver ordernya (lihat relasi `order` di tiruan).
+
+  it('payment update basi oleh bukan pemilik: rejected tanpa serverData, serverVersion 0', async () => {
+    const paymentRecord = {
+      entityType: 'payment' as const,
+      id: 'payment-uuid',
+      data: {
+        id: 'payment-uuid',
+        orderId: 'order-uuid',
+        idempotencyKey: 'idem-key-456',
+        method: 'CASH',
+        status: 'CAPTURED',
+        amountCents: 50000,
+        currency: 'IDR',
+        kind: 'PAYMENT',
+        externalRef: undefined,
+        version: 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      op: 'update' as const,
+      clientChangedAt: new Date().toISOString(),
+      baseVersion: 2,
+    };
+
+    (prisma.payment.findUnique as jest.Mock).mockResolvedValue({
+      id: 'payment-uuid',
+      orderId: 'order-uuid',
+      idempotencyKey: 'idem-key-456',
+      method: 'CARD',
+      status: 'REFUNDED',
+      amountCents: 50000,
+      currency: 'IDR',
+      kind: 'REFUND',
+      externalRef: 'ref-123',
+      // Relasi order: bukan milik userId ('customer-uuid').
+      order: { customerId: 'other-customer-uuid', driverId: 'other-driver-uuid' },
+      version: 5,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const ack = await service.applyOne('payment', paymentRecord, userId);
+
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Pembayaran ini bukan milik Anda');
+    expect(ack.serverVersion).toBe(0);
+    expect(ack.serverData).toBeUndefined();
+  });
+
+  it('payment update basi oleh pemilik: conflict + serverData', async () => {
+    const paymentRecord = {
+      entityType: 'payment' as const,
+      id: 'payment-uuid',
+      data: {
+        id: 'payment-uuid',
+        orderId: 'order-uuid',
+        idempotencyKey: 'idem-key-456',
+        method: 'CASH',
+        status: 'CAPTURED',
+        amountCents: 50000,
+        currency: 'IDR',
+        kind: 'PAYMENT',
+        externalRef: undefined,
+        version: 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      op: 'update' as const,
+      clientChangedAt: new Date().toISOString(),
+      baseVersion: 2,
+    };
+
+    (prisma.payment.findUnique as jest.Mock).mockResolvedValue({
+      id: 'payment-uuid',
+      orderId: 'order-uuid',
+      idempotencyKey: 'idem-key-456',
+      method: 'CARD',
+      status: 'REFUNDED',
+      amountCents: 50000,
+      currency: 'IDR',
+      kind: 'REFUND',
+      externalRef: 'ref-123',
+      // Relasi order: customerId sama dengan userId, jadi pemanggil pemilik.
+      order: { customerId: 'customer-uuid', driverId: 'driver-uuid' },
+      version: 5,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const ack = await service.applyOne('payment', paymentRecord, userId);
+
+    expect(ack.status).toBe('conflict');
+    expect(ack.serverVersion).toBe(5);
+    expect(ack.serverData).toBeDefined();
   });
 
   // ============ entityType tak dikenal: nack 'rejected' ============
@@ -1213,6 +1320,87 @@ describe('applyOne, order sync records (rejected)', () => {
     expect(ack.serverVersion).toBe(9);
     expect(ack.serverData).toBeDefined();
     expect(prisma.order.update).not.toHaveBeenCalled();
+  });
+
+  // Push basi dari bukan pemilik dibalas 'rejected' tanpa serverData,
+  // serverVersion 0. Tanpa ini, HP yang memegang orderId orang lain bisa
+  // membaca data order itu lewat kiriman basi.
+
+  it('order update basi oleh bukan pemilik: rejected tanpa serverData, serverVersion 0', async () => {
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+      id: 'order-validate-uuid',
+      customerId: 'other-customer-uuid',
+      driverId: 'other-driver-uuid',
+      status: 'PREPARING',
+      itemsJson: [],
+      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      version: 7,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const record = makeOrderRecord({ baseVersion: 5 });
+    const ack = await service.applyOne(record.entityType, record, userId);
+
+    expect(ack.status).toBe('rejected');
+    expect(ack.reason).toBe('Order ini bukan milik Anda');
+    expect(ack.serverVersion).toBe(0);
+    expect(ack.serverData).toBeUndefined();
+    expect(prisma.order.upsert).not.toHaveBeenCalled();
+  });
+
+  it('order update basi oleh customer pemilik: conflict + serverData', async () => {
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+      id: 'order-validate-uuid',
+      customerId: 'customer-uuid',
+      driverId: 'driver-uuid',
+      status: 'OUT_FOR_DELIVERY',
+      itemsJson: [],
+      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      version: 7,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const record = makeOrderRecord({ baseVersion: 5 });
+    const ack = await service.applyOne(record.entityType, record, userId);
+
+    expect(ack.status).toBe('conflict');
+    expect(ack.serverVersion).toBe(7);
+    expect(ack.serverData).toBeDefined();
+  });
+
+  it('order update basi oleh driver pemilik: conflict + serverData', async () => {
+    // userId diganti supaya kasus pemanggil sebagai driver, bukan customer,
+    // ikut teruji. customerId milik akun lain, driverId milik pemanggil.
+    const driverUser = 'driver-uuid';
+    (prisma.order.findUnique as jest.Mock).mockResolvedValue({
+      id: 'order-validate-uuid',
+      customerId: 'other-customer-uuid',
+      driverId: driverUser,
+      status: 'PREPARING',
+      itemsJson: [],
+      addressJson: { recipientName: 'Test', phone: '0812', street: 'Jl Test', city: 'Jakarta', postalCode: '12345' },
+      totalCents: 50000,
+      currency: 'IDR',
+      notes: null,
+      version: 7,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const record = makeOrderRecord({ baseVersion: 5 });
+    const ack = await service.applyOne(record.entityType, record, driverUser);
+
+    expect(ack.status).toBe('conflict');
+    expect(ack.serverVersion).toBe(7);
+    expect(ack.serverData).toBeDefined();
   });
 });
 
