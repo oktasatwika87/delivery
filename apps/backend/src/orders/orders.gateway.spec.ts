@@ -1,16 +1,21 @@
 /**
  * Unit tests untuk OrdersGateway
  *
+ * JWT diverifikasi di middleware namespace (lihat auth/socket-auth.ts)
+ * yang dipasang lewat afterInit. handleConnection tinggal membaca
+ * userId dan role dari socket.data, lalu join room yang sesuai.
+ *
  * Coverage:
- * 1. handleConnection - valid JWT + DRIVER role -> join drivers:available room
- * 2. handleConnection - valid JWT + CUSTOMER role -> does NOT join drivers:available
- * 3. handleConnection - missing token -> disconnect
- * 4. handleConnection - invalid token -> disconnect
- * 5. handleDisconnect - cleanup userSockets map
- * 6. handleDisconnect - last socket deleted -> remove map entry
- * 7. emitOrderAvailable - broadcasts to room with minimal payload
- * 8. emitOrderUnavailable - broadcasts with correct reason enum
- * 9. emitOrderCodCollected - broadcasts to customer, no status/version field
+ * 1. afterInit - middleware dipasang sekali lewat server.use
+ * 2. handleConnection - DRIVER sah: join room drivers:available
+ * 3. handleConnection - CUSTOMER sah: join room id sendiri, bukan drivers:available
+ * 4. handleConnection - tanpa userId: socket diputus
+ * 5. handleConnection - role tidak dikenal: socket diputus
+ * 6. handleDisconnect - cleanup userSockets map
+ * 7. handleDisconnect - last socket deleted -> remove map entry
+ * 8. emitOrderAvailable - broadcasts to room with minimal payload
+ * 9. emitOrderUnavailable - broadcasts with correct reason enum
+ * 10. emitOrderCodCollected - broadcasts to customer, no status/version field
  */
 
 import { JwtService } from '@nestjs/jwt';
@@ -22,7 +27,7 @@ import { UserRole } from '@delivery/shared';
 describe('OrdersGateway', () => {
   let gateway: OrdersGateway;
   let mockJwtService: { verify: jest.Mock };
-  let mockServer: { to: jest.Mock; emit: jest.Mock };
+  let mockServer: { to: jest.Mock; emit: jest.Mock; use: jest.Mock };
 
   const driverPayload = { sub: 'driver-uuid', role: UserRole.DRIVER };
   const customerPayload = { sub: 'customer-uuid', role: UserRole.CUSTOMER };
@@ -44,6 +49,7 @@ describe('OrdersGateway', () => {
     mockServer = {
       to: jest.fn().mockReturnThis(),
       emit: jest.fn(),
+      use: jest.fn(),
     };
 
     gateway = new OrdersGateway(mockJwtService as unknown as JwtService);
@@ -55,74 +61,78 @@ describe('OrdersGateway', () => {
     jest.clearAllMocks();
   });
 
+  // ===== afterInit =====
+
+  describe('afterInit', () => {
+    test('memasang middleware lewat server.use tepat sekali', () => {
+      const namespace = { use: jest.fn() };
+
+      gateway.afterInit(namespace);
+
+      expect(namespace.use).toHaveBeenCalledTimes(1);
+      expect(typeof namespace.use.mock.calls[0][0]).toBe('function');
+    });
+  });
+
   // ===== handleConnection tests =====
 
   describe('handleConnection', () => {
-    test('valid JWT + DRIVER role -> join drivers:available room', async () => {
-      const socket = makeMockSocket({
-        handshake: { auth: { token: 'valid-token' } } as any,
-      });
-      mockJwtService.verify.mockReturnValue(driverPayload);
-
-      await gateway.handleConnection(socket);
-
-      expect(mockJwtService.verify).toHaveBeenCalledWith('valid-token');
-      expect(socket.join).toHaveBeenCalledWith('drivers:available');
-      expect(socket.data['userId']).toBe('driver-uuid');
-      expect(socket.data['role']).toBe(UserRole.DRIVER);
-      expect(socket.disconnect).not.toHaveBeenCalled();
-    });
-
-    test('valid JWT + CUSTOMER role -> join own userId room, does NOT join drivers:available', async () => {
-      const socket = makeMockSocket({
-        handshake: { auth: { token: 'valid-token' } } as any,
-      });
-      mockJwtService.verify.mockReturnValue(customerPayload);
-
-      await gateway.handleConnection(socket);
-
-      expect(mockJwtService.verify).toHaveBeenCalledWith('valid-token');
-      expect(socket.join).toHaveBeenCalledWith('customer-uuid');
-      expect(socket.join).not.toHaveBeenCalledWith('drivers:available');
-      expect(socket.data['userId']).toBe('customer-uuid');
-      expect(socket.data['role']).toBe(UserRole.CUSTOMER);
-      expect(socket.disconnect).not.toHaveBeenCalled();
-    });
-
-    test('missing token -> disconnect', async () => {
-      const socket = makeMockSocket({
-        handshake: { auth: {} } as any,
-      });
+    test('data berisi userId dan role DRIVER: join drivers:available, verify tidak dipanggil', async () => {
+      const socket = makeMockSocket();
+      socket.data['userId'] = driverPayload.sub;
+      socket.data['role'] = driverPayload.role;
 
       await gateway.handleConnection(socket);
 
       expect(mockJwtService.verify).not.toHaveBeenCalled();
-      expect(socket.disconnect).toHaveBeenCalled();
+      expect(socket.join).toHaveBeenCalledWith('drivers:available');
+      expect(socket.join).not.toHaveBeenCalledWith(driverPayload.sub);
+      expect(socket.disconnect).not.toHaveBeenCalled();
     });
 
-    test('invalid token -> disconnect', async () => {
-      const socket = makeMockSocket({
-        handshake: { auth: { token: 'invalid-token' } } as any,
-      });
-      mockJwtService.verify.mockImplementation(() => {
-        throw new Error('Invalid token');
-      });
+    test('data berisi userId dan role CUSTOMER: join room id sendiri, bukan drivers:available', async () => {
+      const socket = makeMockSocket();
+      socket.data['userId'] = customerPayload.sub;
+      socket.data['role'] = customerPayload.role;
 
       await gateway.handleConnection(socket);
 
-      expect(mockJwtService.verify).toHaveBeenCalledWith('invalid-token');
-      expect(socket.disconnect).toHaveBeenCalled();
+      expect(mockJwtService.verify).not.toHaveBeenCalled();
+      expect(socket.join).toHaveBeenCalledWith(customerPayload.sub);
+      expect(socket.join).not.toHaveBeenCalledWith('drivers:available');
+      expect(socket.disconnect).not.toHaveBeenCalled();
     });
 
-    test('valid token but missing sub -> disconnect', async () => {
-      const socket = makeMockSocket({
-        handshake: { auth: { token: 'valid-token' } } as any,
-      });
-      mockJwtService.verify.mockReturnValue({ sub: '', role: UserRole.DRIVER });
+    test('tanpa data.userId: socket diputus, tidak join apa pun', async () => {
+      const socket = makeMockSocket();
+      socket.data['role'] = UserRole.DRIVER;
 
       await gateway.handleConnection(socket);
 
       expect(socket.disconnect).toHaveBeenCalled();
+      expect(socket.join).not.toHaveBeenCalled();
+    });
+
+    test('data.userId kosong: socket diputus, tidak join apa pun', async () => {
+      const socket = makeMockSocket();
+      socket.data['userId'] = '';
+      socket.data['role'] = UserRole.DRIVER;
+
+      await gateway.handleConnection(socket);
+
+      expect(socket.disconnect).toHaveBeenCalled();
+      expect(socket.join).not.toHaveBeenCalled();
+    });
+
+    test("role 'ADMIN' tidak dikenal: socket diputus, tidak join apa pun", async () => {
+      const socket = makeMockSocket();
+      socket.data['userId'] = 'attacker';
+      socket.data['role'] = 'ADMIN';
+
+      await gateway.handleConnection(socket);
+
+      expect(socket.disconnect).toHaveBeenCalled();
+      expect(socket.join).not.toHaveBeenCalled();
     });
   });
 

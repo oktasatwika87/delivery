@@ -2,6 +2,7 @@ import {
   WebSocketGateway,
   WebSocketServer,
   SubscribeMessage,
+  OnGatewayInit,
   OnGatewayConnection,
   OnGatewayDisconnect,
   ConnectedSocket,
@@ -15,16 +16,19 @@ import { JwtService } from '@nestjs/jwt';
 
 import { ChatService } from './chat.service';
 import { SendChatMessageDto } from './chat.dto';
+import { createSocketAuthMiddleware } from '../auth/socket-auth';
 
 /**
  * WebSocket Gateway untuk chat real-time.
  *
- * Auth: JWT diverifikasi di handleConnection via JwtService (reuse dari AuthModule).
+ * Auth: JWT diverifikasi di middleware namespace (lihat socket-auth.ts)
+ * yang dipasang lewat afterInit. handleConnection tinggal membaca userId
+ * dari socket.data, lalu melacak socket per user.
  * roomId = orderId kontrak yang sama dengan ChatService.
  * Ownership validasi dilakukan via ChatService.validateRoomAccess().
  */
 @WebSocketGateway({ namespace: '/chat', cors: true })
-export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class ChatGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server!: Server;
 
   // Track client sockets per user untuk cleanup saat disconnect
@@ -36,41 +40,29 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {}
 
   /**
-   * Verifikasi JWT saat socket connect.
-   * Token dikirim via socket.handshake.auth.token.
-   * Jika invalid/missing, disconnect socket.
+   * Pasang middleware auth namespace sebelum ada soket yang tersambung.
+   */
+  afterInit(server: Pick<Server, 'use'>): void {
+    server.use(createSocketAuthMiddleware(this.jwtService, '/chat'));
+  }
+
+  /**
+   * Middleware sudah mengisi socket.data.userId. Kalau kosong (seharusnya
+   * tidak terjadi karena middleware menolak lebih dulu), socket diputus.
    */
   async handleConnection(client: Socket): Promise<void> {
-    const token = client.handshake.auth?.token as string | undefined;
-
-    if (!token) {
+    const userId: unknown = client.data['userId'];
+    if (typeof userId !== 'string' || userId.length === 0) {
       client.disconnect();
       return;
     }
 
-    try {
-      const payload = this.jwtService.verify(token);
-      if (!payload?.sub) {
-        client.disconnect();
-        return;
-      }
-
-      // Simpan userId di socket data untuk dipakai di event lain
-      client.data['userId'] = payload.sub;
-
-      // Track socket per user
-      const existing = this.userSockets.get(payload.sub);
-      if (existing) {
-        existing.add(client.id);
-      } else {
-        this.userSockets.set(payload.sub, new Set([client.id]));
-      }
-    } catch (err) {
-      console.warn(
-        '[ChatGateway] JWT verification failed:',
-        err instanceof Error ? err.message : String(err),
-      );
-      client.disconnect();
+    // Track socket per user
+    const existing = this.userSockets.get(userId);
+    if (existing) {
+      existing.add(client.id);
+    } else {
+      this.userSockets.set(userId, new Set([client.id]));
     }
   }
 

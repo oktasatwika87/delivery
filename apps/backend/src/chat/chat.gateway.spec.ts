@@ -1,6 +1,10 @@
 /**
  * Unit tests untuk ChatGateway
  *
+ * JWT diverifikasi di middleware namespace (lihat auth/socket-auth.ts)
+ * yang dipasang lewat afterInit. handleConnection tinggal membaca
+ * userId dari socket.data, lalu melacak socket per user.
+ *
  * Field test untuk handleSendMessage menggunakan pendekatan DI mock NestJS.
  * Perilaku emitNewMessage (created=true) diuji di chat.controller.spec.ts
  * karena ChatController memanggil ChatGateway.emitNewMessage secara langsung.
@@ -18,6 +22,7 @@ describe('ChatGateway', () => {
   let emitNewMessageSpy: jest.SpyInstance;
   let toMock: jest.Mock;
   let emitMock: jest.Mock;
+  let useMock: jest.Mock;
 
   const orderId = '11111111-1111-4111-8111-111111111111';
   const userId = '22222222-2222-4222-8222-222222222222';
@@ -29,7 +34,8 @@ describe('ChatGateway', () => {
     // Mock server: to() mengembalikan objek dengan emit() mock
     emitMock = jest.fn();
     toMock = jest.fn().mockReturnValue({ emit: emitMock });
-    const mockServer = { to: toMock };
+    useMock = jest.fn();
+    const mockServer = { to: toMock, use: useMock };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -53,6 +59,61 @@ describe('ChatGateway', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+  });
+
+  describe('afterInit', () => {
+    test('memasang middleware lewat server.use tepat sekali', () => {
+      const namespace = { use: jest.fn() };
+
+      gateway.afterInit(namespace);
+
+      expect(namespace.use).toHaveBeenCalledTimes(1);
+      expect(typeof namespace.use.mock.calls[0][0]).toBe('function');
+    });
+  });
+
+  describe('handleConnection', () => {
+    test('data.userId ada: socket tidak diputus', async () => {
+      const mockClient = {
+        id: 'socket-1',
+        data: { userId },
+        disconnect: jest.fn(),
+      };
+
+      await gateway.handleConnection(
+        mockClient as Parameters<typeof gateway.handleConnection>[0],
+      );
+
+      expect(mockClient.disconnect).not.toHaveBeenCalled();
+    });
+
+    test('tanpa data.userId: socket diputus', async () => {
+      const mockClient = {
+        id: 'socket-2',
+        data: {},
+        disconnect: jest.fn(),
+      };
+
+      await gateway.handleConnection(
+        mockClient as Parameters<typeof gateway.handleConnection>[0],
+      );
+
+      expect(mockClient.disconnect).toHaveBeenCalled();
+    });
+
+    test('data.userId string kosong: socket diputus', async () => {
+      const mockClient = {
+        id: 'socket-3',
+        data: { userId: '' },
+        disconnect: jest.fn(),
+      };
+
+      await gateway.handleConnection(
+        mockClient as Parameters<typeof gateway.handleConnection>[0],
+      );
+
+      expect(mockClient.disconnect).toHaveBeenCalled();
+    });
   });
 
   describe('handleSendMessage', () => {

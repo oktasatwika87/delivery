@@ -1,10 +1,11 @@
 import {
   WebSocketGateway,
   WebSocketServer,
+  OnGatewayInit,
   OnGatewayConnection,
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
-import { Socket, Server } from 'socket.io';
+import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 
 import {
@@ -19,6 +20,8 @@ import {
   type OrderStatusUpdatedPayload,
 } from '@delivery/shared';
 
+import { createSocketAuthMiddleware, isUserRole } from '../auth/socket-auth';
+
 /**
  * WebSocket Gateway untuk order events.
  *
@@ -28,10 +31,13 @@ import {
  * 2. Driver-targeted: order:available, order:unavailable
  *    - room = 'drivers:available' (driver socket joins di handleConnection)
  *
- * Auth: JWT diverifikasi di handleConnection (reuse pattern dari ChatGateway).
+ * Auth: JWT diverifikasi di middleware namespace (lihat socket-auth.ts)
+ * yang dipasang lewat afterInit. handleConnection membaca userId dan role
+ * dari socket.data (middleware sudah menolak koneksi yang tokennya
+ * tidak sah sebelum klien sempat melihat connect).
  */
 @WebSocketGateway({ namespace: '/orders', cors: true })
-export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class OrdersGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server!: Server;
 
   private static readonly DRIVERS_AVAILABLE_ROOM = 'drivers:available';
@@ -39,43 +45,40 @@ export class OrdersGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   constructor(private readonly jwtService: JwtService) {}
 
+  /**
+   * Dipanggil NestJS tepat setelah server namespace siap. Di sinilah
+   * middleware auth dipasang sebelum ada soket yang mencoba tersambung.
+   */
+  afterInit(server: Pick<Server, 'use'>): void {
+    server.use(createSocketAuthMiddleware(this.jwtService, '/orders'));
+  }
+
   async handleConnection(client: Socket): Promise<void> {
-    const token = client.handshake.auth?.token as string | undefined;
-    if (!token) {
+    const userId: unknown = client.data['userId'];
+    const role: unknown = client.data['role'];
+
+    if (typeof userId !== 'string' || userId.length === 0 || !isUserRole(role)) {
       client.disconnect();
       return;
     }
 
-    try {
-      const payload = this.jwtService.verify(token) as { sub: string; role: UserRole };
-      if (!payload?.sub) {
-        client.disconnect();
-        return;
-      }
+    // Track per-user (cleanup on disconnect)
+    const existing = this.userSockets.get(userId) ?? new Set<string>();
+    existing.add(client.id);
+    this.userSockets.set(userId, existing);
 
-      client.data['userId'] = payload.sub;
-      client.data['role'] = payload.role;
+    // Driver joins global pool room (untuk order:available/unavailable events)
+    if (role === UserRole.DRIVER) {
+      client.join(OrdersGateway.DRIVERS_AVAILABLE_ROOM);
+    }
 
-      // Track per-user (cleanup on disconnect)
-      const existing = this.userSockets.get(payload.sub) ?? new Set<string>();
-      existing.add(client.id);
-      this.userSockets.set(payload.sub, existing);
-
-      // Driver joins global pool room (untuk order:available/unavailable events)
-      if (payload.role === UserRole.DRIVER) {
-        client.join(OrdersGateway.DRIVERS_AVAILABLE_ROOM);
-      }
-
-      // Customer joins own userId room (untuk order:accepted/rejected/cancelled events).
-      // Emit calls pake `this.server.to(customerId)` yang cuma delivers ke socket
-      // di room dengan id == customerId, tanpa ini customer-targeted events
-      // hilang diam-diam. HandleConnection dulu pernah tidak join customer ke
-      // room apapun, jadi emit-nya nyasar.
-      if (payload.role === UserRole.CUSTOMER) {
-        client.join(payload.sub);
-      }
-    } catch {
-      client.disconnect();
+    // Customer joins own userId room (untuk order:accepted/rejected/cancelled events).
+    // Emit calls pake `this.server.to(customerId)` yang cuma delivers ke socket
+    // di room dengan id == customerId, tanpa ini customer-targeted events
+    // hilang diam-diam. HandleConnection dulu pernah tidak join customer ke
+    // room apapun, jadi emit-nya nyasar.
+    if (role === UserRole.CUSTOMER) {
+      client.join(userId);
     }
   }
 
