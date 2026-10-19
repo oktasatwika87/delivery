@@ -26,7 +26,8 @@ import { syncCoordinator } from './src/sync';
 import { ordersSocket } from './src/sync';
 import { chatSocket } from './src/sync/socket';
 import { getToken, clearToken, getRole } from './src/sync/token-storage';
-import { syncEvents } from './src/sync/syncEvents';
+import { isCurrentToken } from './src/sync/session';
+import { syncEvents, type AuthExpiredEvent } from './src/sync/syncEvents';
 import { UserRole } from '@delivery/shared';
 import { CustomerStack } from './src/customer';
 import { RegisterScreen } from './src/screens/RegisterScreen';
@@ -126,8 +127,21 @@ function App(): React.JSX.Element {
     });
 
     // --- Auth-expired listener: force logout saat session expired detected ---
-    const onAuthExpired = (event: { source: string }) => {
-      console.warn(`[App] auth-expired event from: ${event.source}, forcing logout`);
+    // Pesan membawa source (http/orders-socket/chat-socket) dan token yang
+    // ditolak server. Kalau token bukan token tersimpan sekarang, event
+    // dipicu permintaan lama yang sedang selesai setelah login ulang,
+    // dan harus diabaikan supaya sesi yang baru tidak ikut berakhir.
+    const onAuthExpired = async (event: AuthExpiredEvent): Promise<void> => {
+      const { source, token } = event;
+      console.warn(
+        `[App] auth-expired event from: ${source}, rejecting token length=${token.length}`,
+      );
+      if (!token || !(await isCurrentToken(token))) {
+        console.warn(
+          '[App] auth-expired event for stale token, ignoring',
+        );
+        return;
+      }
       setLogoutReason('auth-expired');
       // 1. Stop sync coordinator
       syncCoordinator.stop();

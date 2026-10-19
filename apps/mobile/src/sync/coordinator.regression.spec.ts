@@ -34,6 +34,7 @@ import { PaymentModel } from '../db/models/PaymentModel';
 import { ChatMessageModel } from '../db/models/ChatMessageModel';
 import { PendingActionModel } from '../db/models/PendingActionModel';
 import { SyncCoordinator } from './coordinator';
+import * as clientModule from './client';
 
 // Mock jaringan: pullBatch dikontrol per tes, fungsi lain memakai yang asli.
 jest.mock('./client', () => {
@@ -1166,6 +1167,27 @@ describe('heldOrderIds dan releasedOrders', () => {
     expect(result).not.toBeNull();
     const row = await db.get<OrderModel>('orders').find('rel-row-X');
     expect(row._getRaw('last_conflict_reason')).toBeNull();
+  });
+
+  it('pullNow dengan pullBatch melempar UnauthorizedError: tidak ada emit auth-expired', async () => {
+    const syncEvents = jest.requireMock<{ syncEvents: { emit: jest.Mock } }>('./syncEvents');
+    syncEvents.syncEvents.emit.mockClear();
+
+    // Pull pertama dari start() agar coordinator berhenti setelah pull pertama.
+    pullBatchMock.mockResolvedValueOnce(makeReleasedResponse([]));
+    await coordinator.start(db);
+
+    // Pull berikutnya: UnauthorizedError. Hanya fetch yang melempar,
+    // coordinator tidak boleh memancarkan auth-expired (cukup syncEvents
+    // bus yang berasal dari fetchWithAuth, lihat client.ts).
+    pullBatchMock.mockRejectedValueOnce(new clientModule.UnauthorizedError());
+    const result = await coordinator.pullNow();
+
+    expect(result).toBeNull();
+    const emits = syncEvents.syncEvents.emit.mock.calls.filter(
+      ([event]) => event === 'auth-expired',
+    );
+    expect(emits).toHaveLength(0);
   });
 
   it('pool-refresh dipancarkan sekali kalau ada yang ditandai, tidak dipancarkan kalau tidak ada', async () => {

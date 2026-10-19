@@ -226,19 +226,26 @@ describe('OrderTrackingScreen', () => {
     });
   });
 
-  it('fetch UnauthorizedError -> emit auth-expired (no error UI)', async () => {
+  it('fetch UnauthorizedError -> tidak ada UI galat dan tidak emit dari layar', async () => {
+    // Layar tidak boleh menampilkan UI galat untuk UnauthorizedError:
+    // 401 adalah kasus token-expired dan jalur penanganannya ada di
+    // App.tsx lewat syncEvents.emit('auth-expired', {source, token}).
+    // Layar tidak boleh memancarkan auth-expired (sumbernya hanya http).
     mockGetOrderById.mockRejectedValueOnce(new UnauthorizedError());
 
-    render(
+    const { queryByText } = render(
       <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
     );
 
-    await waitFor(() => {
-      expect(mockAuthExpiredEmit).toHaveBeenCalledWith(
-        'auth-expired',
-        expect.objectContaining({ source: 'tracking-fetch' }),
-      );
-    });
+    // Tunggu beberapa saat supaya useEffect fetch selesai.
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 50));
+
+    // Tidak ada UI galat yang tampil (loading tetap karena setLoading(false)
+    // tidak pernah dipanggil; cek tidak ada judul galat spesifik).
+    expect(queryByText('Gagal memuat order')).toBeNull();
+
+    // Tidak ada pemanggilan auth-expired dari layar.
+    expect(mockAuthExpiredEmit).not.toHaveBeenCalled();
   });
 
   it('order:accepted event -> update status PREPARING + driverId + clear cancelReason (matching orderId)', async () => {

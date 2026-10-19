@@ -110,10 +110,10 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
     try {
       response = await fetchAvailableOrders();
     } catch (err) {
-      // Network error, 401, 5xx, or invalid response: no changes.
-      if (err instanceof UnauthorizedError) {
-        syncEvents.emit('auth-expired', { source: 'pool-fetch' });
-      } else {
+      // Network error, 401, 5xx, atau respons tidak valid: tidak ada
+      // perubahan. auth-expired dipancarkan lewat fetchWithAuth kalau token
+      // tidak berlaku; jalur ini cukup keluar tanpa log galat untuk 401.
+      if (!(err instanceof UnauthorizedError)) {
         console.warn('[OrdersScreen] fetchPool failed:', err);
       }
       return;

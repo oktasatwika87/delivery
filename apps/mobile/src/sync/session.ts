@@ -22,3 +22,16 @@ export async function getCurrentUserId(): Promise<string | null> {
 export async function getCurrentToken(): Promise<string | null> {
   return getToken();
 }
+
+/**
+ * True kalau `token` sama dengan token yang sedang tersimpan di keychain
+ * dan ada token tersimpan. False kalau tidak ada token atau beda.
+ *
+ * Dipakai untuk membedakan 401 lama (token sudah diganti login ulang,
+ * abaikan) dari 401 untuk token yang sekarang aktif (akhiri sesi).
+ */
+export async function isCurrentToken(token: string): Promise<boolean> {
+  const current = await getToken();
+  if (!current) return false;
+  return current === token;
+}

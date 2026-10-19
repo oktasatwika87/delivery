@@ -52,7 +52,6 @@ import { orderStatusLabel } from '../orderStatusLabel';
 import { formatCurrency } from '../formatCurrency';
 import { getOrderById, UnauthorizedError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
-import { syncEvents } from '../sync/syncEvents';
 
 interface OrderTrackingScreenProps {
   orderId: string;
@@ -115,8 +114,10 @@ export function OrderTrackingScreen({
       } catch (err) {
         if (cancelled) return;
         if (err instanceof UnauthorizedError) {
-          // Session expired -> trigger logout flow di App.tsx
-          syncEvents.emit('auth-expired', { source: 'tracking-fetch' });
+          // Token tidak berlaku: auth-expired dipancarkan lewat fetchWithAuth
+          // dengan sumber 'http'. Layar tidak menampilkan UI galat dan tidak
+          // memancarkan event sendiri, supaya listener di App.tsx yang
+          // menjadi satu-satunya pintu berakhirnya sesi.
           return;
         }
         const message =

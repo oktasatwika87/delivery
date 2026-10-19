@@ -23,8 +23,25 @@ export interface OrderRejectedEvent {
   reason: string; // server-side nack reason, sudah dalam Bahasa Indonesia
 }
 
+/**
+ * Dipancarkan saat server menolak token (HTTP 401 atau socket ditolak).
+ * `source` menunjukkan jalur yang mengirim, `token` adalah token yang ditolak
+ * server. Penerima bisa mengabaikan event untuk token yang sudah bukan
+ * token tersimpan (mis. login ulang sambil ada permintaan lama yang
+ * sedang dalam perjalanan).
+ */
+export interface AuthExpiredEvent {
+  source: 'http' | 'orders-socket' | 'chat-socket';
+  token: string;
+}
+
 /** Event names supported by syncEvents */
-export type SyncEventName = 'orderConflict' | 'orderRemovedFromView' | 'orderRejected' | 'pool-refresh';
+export type SyncEventName =
+  | 'orderConflict'
+  | 'orderRemovedFromView'
+  | 'orderRejected'
+  | 'pool-refresh'
+  | 'auth-expired';
 
 /** Callback type, matches pattern from socket managers */
 type EventCallback<T = unknown> = (data: T) => void;

@@ -6,6 +6,7 @@ import type { CreateOrderInput, Order } from '@delivery/shared';
 
 // Import module under test (top-level import for jest)
 import * as clientModule from './client';
+import * as syncEventsModule from './syncEvents';
 
 describe('pullBatch dengan heldOrderIds', () => {
   const originalFetch = globalThis.fetch;
@@ -158,3 +159,101 @@ describe('createOrder', () => {
     await expect(createOrder(input)).rejects.toThrow('Gagal membuat order: 500 - Internal Server Error');
   });
 });
+
+// 401 dari server harus memicu 'auth-expired' lewat syncEvents dengan token
+// yang dipakai untuk request itu. 401 tanpa token, 403, dan 500: tidak ada
+// event. Setelah emit, fungsi pemanggil tetap melempar UnauthorizedError.
+
+describe('fetchWithAuth: 401 memicu auth-expired dengan token yang dipakai', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    jest.resetModules();
+    globalThis.fetch = jest.fn();
+    jest.doMock('./session', () => ({
+      getCurrentToken: jest.fn().mockResolvedValue('test-token'),
+    }));
+    jest.doMock('./syncEvents', () => ({
+      syncEvents: {
+        emit: jest.fn(),
+        on: jest.fn(),
+        off: jest.fn(),
+      },
+    }));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    jest.clearAllMocks();
+    jest.resetModules();
+  });
+
+  it('getOrderById menerima 401: auth-expired dipancarkan sekali dengan token itu, fungsi melempar UnauthorizedError', async () => {
+    const syncEvents = jest.requireMock<typeof import('./syncEvents')>('./syncEvents');
+    const { getOrderById, UnauthorizedError } = jest.requireActual<typeof import('./client')>('./client');
+
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      status: 401,
+      ok: false,
+      json: () => Promise.reject(new Error('not used')),
+    });
+
+    await expect(getOrderById('order-123')).rejects.toBeInstanceOf(UnauthorizedError);
+
+    expect(syncEvents.syncEvents.emit).toHaveBeenCalledTimes(1);
+    expect(syncEvents.syncEvents.emit).toHaveBeenCalledWith(
+      'auth-expired',
+      { source: 'http', token: 'test-token' },
+    );
+  });
+
+  it('401 tanpa token tersimpan: tidak ada event', async () => {
+    jest.doMock('./session', () => ({
+      getCurrentToken: jest.fn().mockResolvedValue(null),
+    }));
+    const syncEvents = jest.requireMock<typeof import('./syncEvents')>('./syncEvents');
+    const { getOrderById, UnauthorizedError } = jest.requireActual<typeof import('./client')>('./client');
+
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      status: 401,
+      ok: false,
+      json: () => Promise.reject(new Error('not used')),
+    });
+
+    await expect(getOrderById('order-123')).rejects.toBeInstanceOf(UnauthorizedError);
+
+    expect(syncEvents.syncEvents.emit).not.toHaveBeenCalled();
+  });
+
+  it('403: tidak ada event', async () => {
+    const syncEvents = jest.requireMock<typeof import('./syncEvents')>('./syncEvents');
+    const { getOrderById } = jest.requireActual<typeof import('./client')>('./client');
+
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      status: 403,
+      ok: false,
+      text: () => Promise.resolve('forbidden'),
+    });
+
+    await expect(getOrderById('order-123')).rejects.toThrow('getOrderById failed: 403');
+
+    expect(syncEvents.syncEvents.emit).not.toHaveBeenCalled();
+  });
+
+  it('500: tidak ada event', async () => {
+    const syncEvents = jest.requireMock<typeof import('./syncEvents')>('./syncEvents');
+    const { getOrderById } = jest.requireActual<typeof import('./client')>('./client');
+
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      status: 500,
+      ok: false,
+      text: () => Promise.resolve('server error'),
+    });
+
+    await expect(getOrderById('order-123')).rejects.toThrow('getOrderById failed: 500');
+
+    expect(syncEvents.syncEvents.emit).not.toHaveBeenCalled();
+  });
+});
+
+void syncEventsModule;

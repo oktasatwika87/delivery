@@ -6,12 +6,21 @@
 import Config from 'react-native-config';
 import type { SyncPushPayload, SyncPushResponse, SyncPullResponse } from '@delivery/shared';
 import { getCurrentToken } from './session';
+import { syncEvents } from './syncEvents';
 import type { CreateOrderInput, Order, OrderStatus, Payment } from '@delivery/shared';
 
 /** Base URL API dari .env (react-native-config) */
 const API_BASE = Config.API_BASE_URL;
 
-/** Build fetch options dengan Authorization header jika ada token */
+/**
+ * Build fetch options dengan Authorization header jika ada token
+ *
+ * Setelah fetch, kalau token dikirim dan server menjawab 401, syncEvents
+ * memancarkan 'auth-expired' dengan token yang dipakai dan sumber 'http'.
+ * Tanpa token: tidak ada event (jadi tidak menggangu saat register/login).
+ * Fungsi pemanggil tidak berubah: tetap melempar UnauthorizedError untuk 401,
+ * supaya jalur penanganan di koordinator / layar tidak bergeser.
+ */
 async function fetchWithAuth(
   url: string,
   options: RequestInit = {}
@@ -23,7 +32,11 @@ async function fetchWithAuth(
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers as Record<string, string>),
   };
-  return fetch(url, { ...options, headers });
+  const res = await fetch(url, { ...options, headers });
+  if (token && res.status === 401) {
+    syncEvents.emit('auth-expired', { source: 'http', token });
+  }
+  return res;
 }
 
 export async function pushBatch(payload: SyncPushPayload): Promise<SyncPushResponse> {
