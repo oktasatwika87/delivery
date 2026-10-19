@@ -75,60 +75,52 @@ export class SyncCoordinator implements Coordinator {
   private db: Database | null = null;
   private stopped = false;
   private syncInterval: ReturnType<typeof setInterval> | null = null;
-  /** Guards against concurrent start() calls, set BEFORE any await, reset in finally. */
-  private isStarting = false;
   /** Unsubscribe from networkMonitor, stored so we can clean up on stop(). */
   private networkUnsubscribe: (() => void) | null = null;
   /** Track last known network status to detect reconnect events. */
   private lastNetworkStatus: 'online' | 'offline' | 'unknown' = 'unknown';
+  /** Generation counter, dinaikkan setiap stop(). Pemanggil ambil
+   * nomor ini sebelum request dikirim dan meneruskannya ke applyPull.
+   * Kalau generasi berubah saat penulis DB berjalan (mis. data lokal
+   * sudah dibersihkan untuk akun lain), tulisan di-bail tanpa
+   * menyentuh baris sesi lama. */
+  private generation = 0;
 
   async start(db: Database): Promise<void> {
-    // Always update db reference FIRST, even if this call gets skipped due to
-    // concurrent start(), the db instance stays fresh. Placed BEFORE the
-    // isStarting guard so skipped calls still update this.db.
+    // Selalu perbarui referensi db dulu, walaupun panggilan start()
+    // dilewati karena sudah jalan; instance db harus tetap segar.
     this.db = db;
-
-    // Reset stopped flag, allows restart after stop() was previously called
     this.stopped = false;
 
-    // Guard against concurrent start() calls.
-    // Set isStarting BEFORE any await so call #2 cannot slip past this guard
-    // while call #1 is still inside its await this.pull(null).
-    if (this.isStarting) {
-      console.log('[SyncCoordinator] start() called, another start() already in progress, skipping');
-      return;
-    }
-    this.isStarting = true;
-
-    // Skip re-initialization if periodic sync is already running.
-    // db reference was already updated above.
+    // Kalau coordinator sudah jalan (interval terpasang), hanya
+    // perbarui db dan selesai. Tidak ada pull tambahan.
     if (this.syncInterval) {
       console.log('[SyncCoordinator] start() called, already running, skipping duplicate interval');
-      this.isStarting = false;
       return;
     }
 
     console.log('[SyncCoordinator] start() called');
 
-    // Subscribe to network changes, drain pending actions on reconnect
+    // Subscribe ke networkMonitor untuk drain pending actions.
     this.setupNetworkListener();
 
-    // First sync: full pull (cursor null)
-    // Bungkus try/catch supaya kegagalan pull pertama tidak menghalangi periodic sync
+    // Interval 30 detik dipasang SEBELUM pull pertama, supaya pull
+    // berikutnya tidak tertunda kalau pull pertama masih suspended
+    // lama (mis. jaringan lambat).
+    this.syncInterval = setInterval(() => this.syncTick(), 30_000);
+
+    // Pull pertama dengan generasi yang sama yang akan diteruskan ke
+    // applyPull; start() selesai setelah pull pertama selesai
+    // diterapkan (tes lama `await coordinator.start(db)` bergantung).
+    const gen = this.generation;
     try {
       console.log('[SyncCoordinator] Performing initial pull...');
       const pull = await this.pull(null);
-      await this.applyPull(pull);
+      await this.applyPull(pull, undefined, gen);
       console.log('[SyncCoordinator] Initial pull succeeded');
     } catch (err) {
       console.warn('[SyncCoordinator] Initial pull failed, will retry on next tick:', err);
-    } finally {
-      this.isStarting = false;
     }
-
-    // Periodic sync setiap 30 detik
-    console.log('[SyncCoordinator] Starting periodic sync interval');
-    this.syncInterval = setInterval(() => this.syncTick(), 30_000);
   }
 
   /**
@@ -178,6 +170,7 @@ export class SyncCoordinator implements Coordinator {
   private async syncTick(): Promise<void> {
     if (this.stopped || !this.db) return;
     console.log('[syncTick] Running periodic sync...');
+    const tickGen = this.generation;
     try {
       // Selama online, outbox dikirim dulu di tiap sinkron berkala, supaya aksi
       // yang gagal karena gangguan sementara (jaringan, 5xx) dicoba lagi tanpa
@@ -195,13 +188,18 @@ export class SyncCoordinator implements Coordinator {
       await this.flushNow();
       const cursor = await loadCursor();
       const pull = await this.pull(cursor);
-      await this.applyPull(pull);
+      await this.applyPull(pull, undefined, tickGen);
     } catch (err) {
       console.warn('[syncTick] Error:', err);
     }
   }
 
   stop(): void {
+    // Naikkan generasi supaya applyPull yang sedang antre di write
+    // WatermelonDB bail tanpa menulis baris sesi lama. Penulisan
+    // WatermelonDB antre per-batch; pull sesi lama bisa baru berjalan
+    // setelah data lokal dibersihkan untuk akun lain.
+    this.generation++;
     this.stopped = true;
     if (this.syncInterval) {
       clearInterval(this.syncInterval);
@@ -247,9 +245,11 @@ export class SyncCoordinator implements Coordinator {
     // Events (orderConflict, orderRejected) di-emit di resolveAcks()
     await this.resolveAcks(resp.acks, this.db);
 
-    // Simpan cursor dari pullDelta (kalau ada)
+    // Simpan cursor dari pullDelta (kalau ada). Generation diteruskan
+    // supaya applyPull di dalam pullDelta bail kalau sesi sudah berakhir.
+    const pullGen = this.generation;
     await saveCursor(resp.pullDelta?.nextCursor ?? null);
-    if (resp.pullDelta) await this.applyPull(resp.pullDelta);
+    if (resp.pullDelta) await this.applyPull(resp.pullDelta, undefined, pullGen);
 
     return resp;
   }
@@ -319,10 +319,11 @@ export class SyncCoordinator implements Coordinator {
   async pullNow(): Promise<SyncPullResponse | null> {
     if (this.stopped || !this.db) return null;
     console.log('[SyncCoordinator] pullNow() called, manual pull');
+    const pullGen = this.generation;
     try {
       const cursor = await loadCursor();
       const pull = await this.pull(cursor);
-      await this.applyPull(pull);
+      await this.applyPull(pull, undefined, pullGen);
       console.log(
         '[SyncCoordinator] pullNow() succeeded, records:',
         pull.records.length,
@@ -382,7 +383,7 @@ export class SyncCoordinator implements Coordinator {
     }
   }
 
-  private async applyPull(pull: SyncPullResponse, db?: Database): Promise<void> {
+  private async applyPull(pull: SyncPullResponse, db?: Database, generation?: number): Promise<void> {
     if (this.stopped) return;
     const database = db ?? this.db;
     if (!database) return;
@@ -399,12 +400,26 @@ export class SyncCoordinator implements Coordinator {
       currentUserId = await getCurrentUserId();
     }
 
-    // find() dan penulisan batch berjalan di dalam SATU database.write.
-    // Kalau find() di luar write, tulisan outbox yang masuk di antara baca
-    // dan tulis (misalnya setelah await find()) tertimpa data pull yang
-    // diambil lebih dulu.
+    // writeApplied menandai apakah fungsi penulis benar-benar menulis
+    // (generation masih cocok saat write berjalan). Kalau bail
+    // karena generasi stale, kursor tidak disimpan dan pool-refresh
+    // tidak dipancarkan, supaya sesi baru tidak mewarisi state dari
+    // pull yang sudah berakhir.
+    let writeApplied = true;
     let releasedMarkedCount = 0;
+
+    // find() dan penulisan batch berjalan di dalam SATU database.write.
     await database.write(async () => {
+      // Pemeriksaan generasi di dalam write supaya penulisan sesi lama
+      // yang baru jalan setelah stop() + start() + clearLocalData()
+      // bail tanpa menyentuh baris. Penulisan WatermelonDB antre, jadi
+      // penulisan sesi lama yang terlanjur masuk antrian write di-bail
+      // di sini, bukan sebelumnya.
+      if (typeof generation === 'number' && generation !== this.generation) {
+        console.warn('[SyncCoordinator] applyPull: stale generation, skipping write');
+        writeApplied = false;
+        return;
+      }
       const batch: any[] = [];
       const ordersCollection = database.get<OrderModel>('orders');
 
@@ -579,15 +594,17 @@ export class SyncCoordinator implements Coordinator {
       }
     });
 
-    // Cursor hanya disimpan kalau ada records, karena respons tanpa records
-    // bisa membawa nextCursor null (misalnya respons batas waktu pullBatch).
-    if (pull.records.length > 0) {
+    // Cursor hanya disimpan kalau write benar-benar berjalan, supaya
+    // pull yang bail karena generasi stale tidak menyimpan cursor
+    // yang akan menghalangi pull berikutnya membaca data sesi ini.
+    if (writeApplied && pull.records.length > 0) {
       await saveCursor(pull.nextCursor);
     }
 
-    // pool-refresh dipancarkan sekali kalau ada baris yang ditandai lepas,
-    // supaya OrdersScreen mengambil ulang daftar Tersedia.
-    if (releasedMarkedCount > 0) {
+    // pool-refresh dipancarkan sekali kalau ada baris yang ditandai lepas
+    // dan write benar-benar berjalan, supaya OrdersScreen mengambil ulang
+    // daftar Tersedia.
+    if (writeApplied && releasedMarkedCount > 0) {
       syncEvents.emit('pool-refresh', { source: 'released' });
     }
   }

@@ -1190,6 +1190,127 @@ describe('heldOrderIds dan releasedOrders', () => {
     expect(emits).toHaveLength(0);
   });
 
+  // Setelah stop() di tengah pull pertama lalu start() lagi, pull sesi
+  // lama harus diabaikan: tulisan dari database.write yang terlanjur
+  // jalan harus bail tanpa menyimpan kursor atau memancarkan
+  // pool-refresh, supaya DB lokal siap untuk akun lain atau sesi baru.
+  it('stop() di tengah pull pertama, lalu start() lagi: pull sesi lama tidak menulis DB, saveCursor tidak dipanggil, pullBatch dipanggil 2x', async () => {
+    const cursor = jest.requireMock<{ saveCursor: jest.Mock }>('./cursor');
+    cursor.saveCursor.mockClear();
+
+    // Pull pertama dari sesi lama mengembalikan janji yang belum selesai,
+    // supaya bisa di-resolve belakangan setelah stop() + start().
+    let resolvePull1: ((value: SyncPullResponse) => void) | null = null;
+    pullBatchMock.mockImplementationOnce(
+      () => new Promise<SyncPullResponse>((resolve) => {
+        resolvePull1 = resolve;
+      }),
+    );
+
+    // Start sesi lama, JANGAN ditunggu sampai selesai.
+    const start1 = coordinator.start(db);
+    // Tunggu supaya pullBatch pertama benar-benar terpanggil (beberapa
+    // microtask: getDeviceId -> getCurrentUserId -> db query -> pullBatch).
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(pullBatchMock).toHaveBeenCalledTimes(1);
+
+    // Hentikan sesi lama, mulai sesi baru.
+    coordinator.stop();
+    pullBatchMock.mockResolvedValueOnce(makeReleasedResponse([]));
+    const start2 = coordinator.start(db);
+    await start2;
+    expect(pullBatchMock).toHaveBeenCalledTimes(2);
+
+    // Pull sesi lama baru selesai: membawa satu record order dan nextCursor.
+    resolvePull1!({
+      nextCursor: 'cursor-sesi-lama',
+      records: [
+        {
+          entityType: 'order',
+          id: 'order-sesi-lama',
+          serverVersion: 1,
+          serverChangedAt: '2026-02-15T10:00:00.000Z',
+          deleted: false,
+          data: {
+            id: 'order-sesi-lama',
+            customerId: 'cust-sesi-lama',
+            status: 'CONFIRMED',
+            items: [],
+            deliveryAddress: { recipientName: 'X', phone: '0', street: 'X', city: 'X', postalCode: '0' },
+            totalCents: 50000,
+            currency: 'IDR',
+            version: 1,
+            createdAt: '2026-02-15T09:00:00.000Z',
+            updatedAt: '2026-02-15T09:00:00.000Z',
+          } as Order,
+        },
+      ],
+      serverTime: '2026-02-15T10:00:00.000Z',
+    });
+    await start1;
+
+    // Baris sesi lama tidak boleh ada di DB lokal.
+    const found = await db.get<OrderModel>('orders')
+      .find('order-sesi-lama')
+      .catch(() => null);
+    expect(found).toBeNull();
+
+    // saveCursor tidak pernah dipanggil dengan cursor sesi lama.
+    const cursorCallsWithStale = cursor.saveCursor.mock.calls.filter(
+      (args) => args[0] === 'cursor-sesi-lama',
+    );
+    expect(cursorCallsWithStale).toHaveLength(0);
+  });
+
+  it('start(): interval 30 detik dipasang sebelum pull pertama selesai', async () => {
+    const setIntervalSpy = jest.spyOn(globalThis, 'setInterval');
+
+    // Pull pertama mengembalikan janji yang belum selesai.
+    let resolvePull: ((value: SyncPullResponse) => void) | null = null;
+    pullBatchMock.mockImplementationOnce(
+      () => new Promise<SyncPullResponse>((resolve) => {
+        resolvePull = resolve;
+      }),
+    );
+
+    const startPromise = coordinator.start(db);
+
+    // Beberapa microtask supaya pullBatch sudah dipanggil sebelum
+    // kita asserts interval.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // setInterval(30_000) harus sudah dipanggil sebelum pull pertama
+    // selesai. Producer pullBatch=suspend; kalau interval belum terpasang,
+    // pullDelay akan menggantung tanpa ada sinkron periodik berikutnya.
+    const intervalCalls = setIntervalSpy.mock.calls.filter(
+      (args: unknown[]) => args[1] === 30_000,
+    );
+    expect(intervalCalls.length).toBeGreaterThanOrEqual(1);
+
+    // Selesaikan pull dan start.
+    resolvePull!(makeReleasedResponse([]));
+    await startPromise;
+
+    setIntervalSpy.mockRestore();
+  });
+
+  it('start() saat sedang jalan: tidak memanggil pullBatch lagi', async () => {
+    pullBatchMock.mockResolvedValue(makeReleasedResponse([]));
+    await coordinator.start(db);
+    expect(pullBatchMock).toHaveBeenCalledTimes(1);
+
+    // start() lagi tanpa stop(). Coordinator sedang jalan, tidak boleh
+    // melakukan pull kedua.
+    await coordinator.start(db);
+    expect(pullBatchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('pool-refresh dipancarkan sekali kalau ada yang ditandai, tidak dipancarkan kalau tidak ada', async () => {
     const syncEvents = jest.requireMock<{ syncEvents: { emit: jest.Mock } }>('./syncEvents');
 
