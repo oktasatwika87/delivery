@@ -12,11 +12,16 @@
  * - connect() hanya reject kalau token tidak ada, atau disconnect() dipanggil
  *   sebelum tersambung. Gagal jaringan tidak membuat connect() reject.
  *
- * KNOWN LIMITATION: token difetch sekali saat initial connect() dan
- * dipass ke socket.io. Auto-reconnect oleh socket.io client TIDAK
- * fetch token baru, jadi kalau JWT expired selama socket idle lama,
- * reconnect akan gagal auth. Butuh token refresh mechanism terpisah
- * (belum didesain).
+ * Token dibaca saat connect(): setiap kali manajer perlu membuat socket,
+ * getCurrentToken() dipanggil. Login yang menukar token TIDAK langsung
+ * memicu nyambungan ulang di socket yang sedang idle, tapi login flow
+ * memutus (disconnect()) lalu menyambung lagi (connect()) lewat App.tsx,
+ * jadi socket baru selalu membawa token yang sekarang berlaku.
+ *
+ * Token yang ditolak server dilaporkan lewat 'auth-expired' dengan token
+ * yang dipakai, lalu socket itu dihentikan (socket.active jadi false),
+ * supaya App.tsx bisa membedakan 401 dari token lama (abaikan) dan 401
+ * dari token sekarang (akhiri sesi).
  *
  * Pakenya:
  *   import { ordersSocket } from './ordersSocket';
@@ -44,7 +49,7 @@ import type {
 } from '@delivery/shared';
 
 import { getCurrentToken } from './session';
-import { syncEvents } from './syncEvents';
+import { syncEvents, type AuthExpiredEvent } from './syncEvents';
 
 /** Base URL dari .env (react-native-config) */
 const WS_BASE = Config.API_BASE_URL;
@@ -193,7 +198,7 @@ class OrdersSocketManager {
       // Selalu pakai konfigurasi reconnect tanpa batas sejak koneksi pertama.
       // socket.io mencoba ulang sendiri dan percobaannya tidak pernah habis,
       // jadi pemanggil cukup menunggu 'connect' berikutnya.
-      this.socket = io(`${WS_BASE}${ORDERS_NAMESPACE}`, {
+      const socket = io(`${WS_BASE}${ORDERS_NAMESPACE}`, {
         auth: { token },
         transports: ['websocket'],
         reconnection: true,
@@ -202,9 +207,17 @@ class OrdersSocketManager {
         reconnectionDelayMax: 10000,
       });
 
-      // Register event handlers BEFORE any events can fire
-      this.socket.on('connect', () => {
-        console.info('[OrdersSocket] connected:', this.socket?.id, 'hasEverConnected:', this.hasEverConnected);
+      // Assign ke instance TEPAT setelah socket dibuat, supaya penangkap
+      // di bawah memakai referensi lokal `socket` dan `token`, bukan
+      // this.socket (yang bisa di-null-kan disconnect() concurrent).
+      this.socket = socket;
+
+      // Register event handlers BEFORE any events can fire. Penangkap
+      // memakai `socket` dan `token` lokal untuk konsistensi, supaya
+      // socket yang sebenarnya ditangani tetap yang dimaksud meskipun
+      // this.socket sudah diganti.
+      socket.on('connect', () => {
+        console.info('[OrdersSocket] connected:', socket.id, 'hasEverConnected:', this.hasEverConnected);
         this.hasEverConnected = true;
         this.emit('connect');
         if (this.connectResolve) {
@@ -216,54 +229,72 @@ class OrdersSocketManager {
         this.connectReject = null;
       });
 
-      this.socket.on('disconnect', (reason) => {
+      socket.on('disconnect', (reason) => {
         console.warn('[OrdersSocket] disconnected:', reason);
         this.emit('disconnect', reason);
       });
 
-      this.socket.on('connect_error', (err) => {
+      socket.on('connect_error', (err) => {
         console.error('[OrdersSocket] connect_error:', err.message);
         this.emit('connect_error', err.message);
 
-        // Detect token-related auth failure
-        if (err.message && /jwt|unauthorized|token expired|invalid token/i.test(err.message)) {
-          console.warn('[OrdersSocket] auth-related connect_error, emitting auth-expired');
-          syncEvents.emit('auth-expired', { source: 'orders-socket' });
+        // Server menolak dengan `connect_error` dan `socket.active` jadi
+        // false (socket.io tidak akan mencoba ulang). Tolak janji
+        // connect() yang masih menunggu supaya pemanggil tidak menggantung,
+        // dan kosongkan field janji supaya connect() berikutnya bisa
+        // membuat socket baru.
+        if (socket.active === false) {
+          const message = (err as { message?: string })?.message ?? 'connect_error';
+          const rejectedError = err instanceof Error ? err : new Error(message);
+          if (this.connectReject) {
+            this.connectReject(rejectedError);
+          }
+          this.connectPromise = null;
+          this.connectResolve = null;
+          this.connectReject = null;
+          if (err.message === 'UNAUTHORIZED') {
+            console.warn('[OrdersSocket] auth-related connect_error, emitting auth-expired');
+            const event: AuthExpiredEvent = { source: 'orders-socket', token };
+            syncEvents.emit<AuthExpiredEvent>('auth-expired', event);
+          }
         }
+        // socket.active true: socket.io sedang mencoba ulang sendiri,
+        // jangan reject; pemanggil akan mendapat 'connect' berikutnya
+        // atau 'connect_error' lain yang juga active=false.
       });
 
-      this.socket.on('order:available', (payload: OrderAvailablePayload) => {
+      socket.on('order:available', (payload: OrderAvailablePayload) => {
         this.emit('orderAvailable', payload);
       });
 
-      this.socket.on('order:unavailable', (payload: OrderUnavailablePayload) => {
+      socket.on('order:unavailable', (payload: OrderUnavailablePayload) => {
         this.emit('orderUnavailable', payload);
       });
 
       // Customer-targeted events, delivered ke customer via
       // room = customerId. OrderTrackingScreen subscribe ke ini untuk
       // live-update status tanpa refresh manual.
-      this.socket.on('order:accepted', (payload: OrderAcceptedPayload) => {
+      socket.on('order:accepted', (payload: OrderAcceptedPayload) => {
         this.emit('orderAccepted', payload);
       });
 
-      this.socket.on('order:rejected', (payload: OrderRejectedPayload) => {
+      socket.on('order:rejected', (payload: OrderRejectedPayload) => {
         this.emit('orderRejected', payload);
       });
 
-      this.socket.on('order:cancelled', (payload: OrderCancelledPayload) => {
+      socket.on('order:cancelled', (payload: OrderCancelledPayload) => {
         this.emit('orderCancelled', payload);
       });
 
       // Live payment confirmation only, order status doesn't change, so
       // there's no version field to reconcile here (see order-events.ts).
-      this.socket.on('order:cod_collected', (payload: OrderCodCollectedPayload) => {
+      socket.on('order:cod_collected', (payload: OrderCodCollectedPayload) => {
         this.emit('orderCodCollected', payload);
       });
 
       // order:status_updated, customer-targeted live status update from
       // PATCH /orders/:id/status (PREPARING jadi OUT_FOR_DELIVERY, OUT_FOR_DELIVERY jadi DELIVERED).
-      this.socket.on('order:status_updated', (payload: OrderStatusUpdatedPayload) => {
+      socket.on('order:status_updated', (payload: OrderStatusUpdatedPayload) => {
         this.emit('orderStatusUpdated', payload);
       });
     } catch (err) {

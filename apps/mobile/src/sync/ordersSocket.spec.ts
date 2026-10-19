@@ -8,10 +8,17 @@
 // Module-level mock state
 var mockHandlers: Record<string, Set<Function>> = {};
 var isConnected = false;
+// `active` mirror socket.io asli: true saat socket hidup (meskipun belum
+// tersambung ke server), false setelah server menolak dengan `connect_error`
+// yang tidak memiliki plan retry (auth 401). Default true supaya tes
+// connect_error jaringan tetap memperlakukan socket sebagai hidup; tes
+// khusus auth-error men-set false sebelum trigger connect_error.
+var isActive = true;
 var ioCallHistory: Array<{url: string; options: any}> = [];
 
 var mockSocket = {
   get connected() { return isConnected; },
+  get active() { return isActive; },
   id: 'mock-socket-id',
   get handlers() { return mockHandlers; },
   on: jest.fn(function(event: string, handler: Function) {
@@ -54,6 +61,17 @@ jest.mock('./session', () => ({
   getCurrentToken: getCurrentTokenMock,
 }));
 
+// Mock syncEvents: spec ini memantau emit('auth-expired', ...) di test
+// "socket orders ditolak server". Mock emit mock biar bisa di-mockClear
+// dan di-inspect.
+jest.mock('./syncEvents', () => ({
+  syncEvents: {
+    emit: jest.fn(),
+    on: jest.fn(),
+    off: jest.fn(),
+  },
+}));
+
 function trigger(event: string, ...args: any[]) {
   var handlers = mockHandlers[event];
   if (handlers) handlers.forEach(function(h: Function) { h.apply(null, args); });
@@ -68,6 +86,11 @@ function trigger(event: string, ...args: any[]) {
   }
 }
 
+// Test helper: set socket inactive (server menolak tanpa retry).
+function setActive(value: boolean): void {
+  isActive = value;
+}
+
 describe('OrdersSocketManager', () => {
   var ordersSocket: any;
   var getCurrentTokenMock: jest.Mock;
@@ -78,6 +101,7 @@ describe('OrdersSocketManager', () => {
 
     // 2. Reset mock state
     isConnected = false;
+    isActive = true;
     ioCallHistory = [];
     Object.keys(mockHandlers).forEach((k) => delete mockHandlers[k]);
     jest.clearAllMocks();
@@ -552,6 +576,61 @@ describe('OrdersSocketManager', () => {
       ordersSocket.disconnect();
 
       expect(ordersSocket.wasEverConnected).toBe(true);
+    });
+  });
+
+  // Socket yang ditolak server (token tidak berlaku) harus ditandai
+  // berhenti dan laporan auth-expired dipancarkan lewat syncEvents.
+  describe('socket orders ditolak server', () => {
+    function authEmit(): jest.Mock {
+      return jest.requireMock('./syncEvents').syncEvents.emit;
+    }
+
+    it('connect_error dengan message "UNAUTHORIZED" saat active=false: promise reject, auth-expired dipancarkan, connect berikutnya memanggil io lagi', async () => {
+      var ioMock = require('socket.io-client').io;
+      var emit = authEmit();
+      emit.mockClear();
+
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // socket.io v4: setelah middleware menolak, socket.active false.
+      setActive(false);
+      trigger('connect_error', { message: 'UNAUTHORIZED' });
+
+      await expect(promise).rejects.toThrow('UNAUTHORIZED');
+
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit).toHaveBeenCalledWith(
+        'auth-expired',
+        { source: 'orders-socket', token: 'test-token' },
+      );
+
+      setActive(true);
+      var promise2 = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await promise2;
+
+      expect(ioMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('connect_error gagal jaringan saat active=true: promise tetap menunggu, tanpa auth-expired', async () => {
+      var emit = authEmit();
+      emit.mockClear();
+
+      var promise = ordersSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      trigger('connect_error', { message: 'network error' });
+      trigger('connect_error', { message: 'network error' });
+      trigger('connect');
+      await expect(promise).resolves.toBeUndefined();
+
+      expect(emit).not.toHaveBeenCalled();
     });
   });
 

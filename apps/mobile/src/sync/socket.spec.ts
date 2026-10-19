@@ -12,6 +12,12 @@
  */
 
 var mockHandlers: Record<string, Set<Function>> = {};
+// `active` mirror socket.io asli: true saat socket hidup (meskipun belum
+// tersambung ke server), false setelah server menolak dengan `connect_error`
+// yang tidak memiliki plan retry (auth 401). Default true supaya tes
+// connect_error jaringan tetap memperlakukan socket sebagai hidup; tes
+// khusus auth-error men-set false sebelum trigger connect_error.
+var isActive = true;
 var isConnected = false;
 
 // Track io() call arguments, array of [url, options] pairs per call
@@ -20,6 +26,7 @@ var ioCallHistory: Array<{ url: string; options: any }> = [];
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface MockSocket {
   readonly connected: boolean;
+  readonly active: boolean;
   id: string;
   readonly handlers: Record<string, Set<Function>>;
   on: any;
@@ -31,6 +38,7 @@ interface MockSocket {
 
 var mockSocket: MockSocket = {
   get connected() { return isConnected; },
+  get active() { return isActive; },
   id: 'mock-socket-id',
   get handlers() { return mockHandlers; },
   on: jest.fn(function(event, handler) {
@@ -70,6 +78,18 @@ jest.mock('./session', function() {
   return { getCurrentToken: getCurrentTokenMock };
 });
 
+// Mock syncEvents: socket.spec memantau emit('auth-expired', ...). Mock
+// dipakai lewat jest.requireMock dalam tes.
+jest.mock('./syncEvents', function() {
+  return {
+    syncEvents: {
+      emit: jest.fn(),
+      on: jest.fn(),
+      off: jest.fn(),
+    },
+  };
+});
+
 function trigger(event: string, ...args: any[]) {
   var handlers = mockHandlers[event];
   if (handlers) handlers.forEach(function(h) { h.apply(null, args); });
@@ -81,7 +101,17 @@ function trigger(event: string, ...args: any[]) {
     // Tanpa ini mockSocket.connected tetap true, jadi connect() berikutnya
     // langsung selesai dan io() tidak dipanggil lagi.
     isConnected = false;
+  } else if (event === 'connect_error') {
+    // Mirror socket.io: kalau server menolak tanpa retry plan (auth 401),
+    // socket jadi inactive. Tes auth-error set ini ke false sebelum
+    // trigger; default perilaku adalah tetap aktif (network failure).
+    // (Aktualnya socket.io reset sendiri; mock ini tidak.)
   }
+}
+
+// Test helper: set socket inactive (server menolak tanpa retry).
+function setActive(value: boolean): void {
+  isActive = value;
 }
 
 describe('ChatSocketManager', function() {
@@ -98,6 +128,7 @@ describe('ChatSocketManager', function() {
     // 2. Reset mock state SEBELUM require, mockHandlers, isConnected, dan ioCallHistory
     //    adalah variable module-level, bukan export, jadi tidak ter-reset oleh resetModules.
     isConnected = false;
+    isActive = true;
     ioCallHistory = [];
     Object.keys(mockHandlers).forEach(function(k) { delete mockHandlers[k]; });
     jest.clearAllMocks();
@@ -481,6 +512,102 @@ describe('ChatSocketManager', function() {
       expect(disconnectCallOrder).toBeDefined();
       expect(offCallOrder).toBeLessThan(ioSecondCallOrder);
       expect(disconnectCallOrder).toBeLessThan(ioSecondCallOrder);
+    });
+  });
+
+  // Socket yang ditolak server (token tidak berlaku, atau penolakan
+  // lain tanpa retry plan) harus ditandai berhenti dan laporan
+  // auth-expired dipancarkan lewat syncEvents. socket.io v4: kalau
+  // server menolak dengan `connect_error` dan middleware tidak izinkan
+  // retry, socket `active` jadi false. Mock ini set `active` lewat
+  // setActive() sebelum trigger 'connect_error' untuk mensimulasikan
+  // penolakan.
+  describe('socket ditolak server', () => {
+    // Mock syncEvents dipakai di sini; requireModule memberi kita mock
+    // yang dipasang oleh jest.mock factory setelah resetModules.
+    function authEmit(): jest.Mock {
+      return jest.requireMock('./syncEvents').syncEvents.emit;
+    }
+
+    it('getCurrentToken suspend; connect() lalu disconnect() lalu token selesai: io tidak dipanggil (generasi men-stale-kan _doConnectAsync)', async () => {
+      var resolveToken: ((token: string | null) => void) | null = null;
+      getCurrentTokenMock.mockImplementationOnce(function() {
+        return new Promise<string | null>(function(resolve) {
+          resolveToken = resolve;
+        });
+      });
+
+      var promise = chatSocket.connect();
+      // _doConnectAsync suspended di await token, io() belum dipanggil.
+      expect(ioCallHistory.length).toBe(0);
+
+      chatSocket.disconnect();
+      // Resolve token setelah disconnect, async work bail karena generasi
+      // berubah, io() TIDAK dipanggil.
+      resolveToken!('test-token');
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(ioCallHistory.length).toBe(0);
+      await expect(promise).rejects.toThrow('Disconnected before connection established');
+    });
+
+    it('connect_error dengan message "UNAUTHORIZED" saat active=false: promise reject, auth-expired dipancarkan, connect berikutnya memanggil io lagi', async () => {
+      var ioMock = require('socket.io-client').io;
+      var emit = authEmit();
+      emit.mockClear();
+
+      var promise = chatSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Socket.io v4: setelah middleware menolak (token tidak berlaku),
+      // socket.active false. Mock ini meniru dengan setActive(false).
+      setActive(false);
+      trigger('connect_error', { message: 'UNAUTHORIZED' });
+
+      // Promise connect() reject dengan galat UNAUTHORIZED.
+      await expect(promise).rejects.toThrow('UNAUTHORIZED');
+
+      // auth-expired dipancarkan sekali dengan source chat-socket dan
+      // token yang dipakai untuk socket itu.
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit).toHaveBeenCalledWith(
+        'auth-expired',
+        { source: 'chat-socket', token: 'test-token' },
+      );
+
+      // connect() berikutnya harus membuat socket baru (io dipanggil lagi).
+      // setActive(true) lagi supaya mock tidak mengacaukan test lain.
+      setActive(true);
+      var promise2 = chatSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+      trigger('connect');
+      await promise2;
+
+      expect(ioMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('connect_error gagal jaringan saat active=true: promise tetap menunggu, tanpa auth-expired', async () => {
+      // active default true (di-reset tiap beforeEach). connect_error
+      // jaringan tidak menyebabkan reject; socket.io mencoba ulang
+      // otomatis.
+      var emit = authEmit();
+      emit.mockClear();
+
+      var promise = chatSocket.connect();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      trigger('connect_error', { message: 'network error' });
+      trigger('connect_error', { message: 'network error' });
+      // Promise tetap pending sampai 'connect' berikutnya.
+      trigger('connect');
+      await expect(promise).resolves.toBeUndefined();
+
+      expect(emit).not.toHaveBeenCalled();
     });
   });
 });
