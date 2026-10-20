@@ -74,6 +74,10 @@ jest.mock('./syncEvents', () => ({
 
 function trigger(event: string, ...args: any[]) {
   var handlers = mockHandlers[event];
+  if (event === 'connect_error' && args[0] && typeof args[0] === 'object' && 'message' in args[0]) {
+    var err: any = new Error(args[0].message);
+    args = [err];
+  }
   if (handlers) handlers.forEach(function(h: Function) { h.apply(null, args); });
   if (event === 'connect') {
     isConnected = true;
@@ -481,9 +485,9 @@ describe('OrdersSocketManager', () => {
       expect(() => ordersSocket.disconnect()).not.toThrow();
     });
 
-    test('disconnect() saat _doConnectAsync in-flight, async work bail, no socket created (race fix)', async () => {
+    test('disconnect() saat _doConnectAsync sedang berjalan, async work berhenti, tidak ada socket dibuat (race fix)', async () => {
       // Override getCurrentToken untuk delay resolution, biar _doConnectAsync
-      // suspended di await token, kita bisa disconnect() di tengah-tengah.
+      // sedang menunggu token, kita bisa disconnect() di tengah-tengah.
       var resolveToken: ((token: string | null) => void) | null = null;
       getCurrentTokenMock.mockImplementation(function() {
         return new Promise<string | null>(function(resolve) {
@@ -496,20 +500,20 @@ describe('OrdersSocketManager', () => {
       // Async work masih pending, io() belum dipanggil
       expect(ioCallHistory.length).toBe(0);
 
-      // User disconnect saat _doConnectAsync suspended di await token.
-      // Generation counter increment, connectPromise di-reject.
+      // disconnect() saat _doConnectAsync masih menunggu token: generasi
+      // naik dan janji connect() berakhir dengan galat.
       ordersSocket.disconnect();
 
-      // Resolve token, _doConnectAsync resume, gen check fails, bail
-      // tanpa overwrite this.socket atau mutate state.
+      // Token selesai dibaca, _doConnectAsync melihat generasi sudah
+      // berubah, lalu berhenti tanpa memasang socket.
       resolveToken!('test-token');
 
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
 
-      // io() HARUS gak dipanggil, _doConnectAsync bail sebelum call io()
-      // karena gen !== this.generation (stale).
+      // io() HARUS gak dipanggil, _doConnectAsync berhenti sebelum call io()
+      // karena gen !== this.generation.
       expect(ioCallHistory.length).toBe(0);
 
       // Promise HARUS rejected (existing behavior preserved)
@@ -519,7 +523,7 @@ describe('OrdersSocketManager', () => {
       expect(ordersSocket.isConnected).toBe(false);
     });
 
-    test('multiple connect()-disconnect()-connect() cycles, generation invalidates stale async', async () => {
+    test('multiple connect()-disconnect()-connect() cycles, generation menghentikan async yang tidak relevan', async () => {
       // Cycle 1: connect, disconnect mid-async, no socket created
       var resolveToken1: ((token: string | null) => void) | null = null;
       getCurrentTokenMock.mockImplementationOnce(function() {
@@ -543,7 +547,7 @@ describe('OrdersSocketManager', () => {
       trigger('connect');
       await promise2;
 
-      // io() dipanggil 1x untuk cycle 2, cycle 1 di-bail
+      // io() dipanggil 1x untuk cycle 2, cycle 1 dihentikan
       expect(ioCallHistory.length).toBe(1);
       expect(ordersSocket.wasEverConnected).toBe(true);
     });
@@ -586,7 +590,7 @@ describe('OrdersSocketManager', () => {
       return jest.requireMock('./syncEvents').syncEvents.emit;
     }
 
-    it('connect_error dengan message "UNAUTHORIZED" saat active=false: promise reject, auth-expired dipancarkan, connect berikutnya memanggil io lagi', async () => {
+    it('connect_error UNAUTHORIZED saat active false: janji connect berakhir dengan galat, auth-expired dipancarkan, connect berikutnya memanggil io lagi', async () => {
       var ioMock = require('socket.io-client').io;
       var emit = authEmit();
       emit.mockClear();
@@ -617,7 +621,7 @@ describe('OrdersSocketManager', () => {
       expect(ioMock).toHaveBeenCalledTimes(2);
     });
 
-    it('connect_error gagal jaringan saat active=true: promise tetap menunggu, tanpa auth-expired', async () => {
+    it('connect_error gagal jaringan saat active true: janji tetap menunggu, tanpa auth-expired', async () => {
       var emit = authEmit();
       emit.mockClear();
 

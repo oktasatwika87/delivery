@@ -3,11 +3,11 @@
  *
  * Flow:
  *   1. User isi phone + password
- *   2. Submit -> login() -> startLocalSession(token, user.id, database)
- *      -> kalau ok, panggil onLoginSuccess(). Kalau tidak ok
- *      (pemilik data lokal beda dan ada data belum terkirim),
- *      tampilkan pesan blok dan JANGAN panggil onLoginSuccess().
- *   3. Gagal credential -> tampilkan pesan error
+ *   2. Submit jadi login() lalu startLocalSession(token, user.id, database).
+ *      Kalau ok, panggil onLoginSuccess(). Kalau tidak ok (pemilik data
+ *      lokal beda dan masih ada data belum terkirim), tampilkan pesan
+ *      penolakan dan onLoginSuccess() tidak dipanggil.
+ *   3. Nomor HP atau kata sandi salah: tampilkan pesan galat
  *
  * Catatan: navigation ke Orders TIDAK dilakukan di sini. Biarkan
  * App.tsx yang handle, ia akan re-render Navigator begitu

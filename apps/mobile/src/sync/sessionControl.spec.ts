@@ -6,6 +6,16 @@
  * menggagalkan yang lain.
  */
 
+import { Database } from '@nozbe/watermelondb';
+import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
+import { schema } from '../db/schema';
+import { OrderModel } from '../db/models/OrderModel';
+import { PaymentModel } from '../db/models/PaymentModel';
+import { ChatMessageModel } from '../db/models/ChatMessageModel';
+import { PendingActionModel } from '../db/models/PendingActionModel';
+import { UserModel } from '../db/models/UserModel';
+import { RouteSnapshotModel } from '../db/models/RouteSnapshotModel';
+
 jest.mock('./coordinator', () => ({
   syncCoordinator: {
     start: jest.fn().mockResolvedValue(undefined),
@@ -32,17 +42,30 @@ import { syncCoordinator } from './coordinator';
 import { ordersSocket } from './ordersSocket';
 import { chatSocket } from './socket';
 
+function buildTestDatabase(): Database {
+  const adapter = new LokiJSAdapter({
+    schema,
+    useWebWorker: false,
+    useIncrementalIndexedDB: false,
+    onSetUpError: (e: Error) => { throw e; },
+  });
+  return new Database({
+    adapter,
+    modelClasses: [OrderModel, PaymentModel, ChatMessageModel, PendingActionModel, UserModel, RouteSnapshotModel],
+  });
+}
+
 describe('sessionControl', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('beginSyncSession: syncCoordinator.start dengan db, ordersSocket.connect, chatSocket.connect', async () => {
-    const fakeDb: unknown = { marker: 'db' };
-    await beginSyncSession(fakeDb as never);
+  it('beginSyncSession: syncCoordinator.start dengan db, ordersSocket.connect, chatSocket.connect', () => {
+    const db = buildTestDatabase();
+    beginSyncSession(db);
 
     expect(syncCoordinator.start).toHaveBeenCalledTimes(1);
-    expect(syncCoordinator.start).toHaveBeenCalledWith(fakeDb);
+    expect(syncCoordinator.start).toHaveBeenCalledWith(db);
     expect(ordersSocket.connect).toHaveBeenCalledTimes(1);
     expect(chatSocket.connect).toHaveBeenCalledTimes(1);
   });
@@ -56,14 +79,13 @@ describe('sessionControl', () => {
   });
 
   it('connect yang gagal tidak membuat beginSyncSession melempar dan tidak menyisakan janji yang tidak ditangani', async () => {
-    const fakeDb: unknown = { marker: 'db' };
+    const db = buildTestDatabase();
     const err = new Error('socket refused');
-    (ordersSocket.connect as jest.Mock).mockRejectedValueOnce(err);
+    jest.mocked(ordersSocket.connect).mockRejectedValueOnce(err);
 
-    // Tidak boleh melempar: caller App.tsx fire-and-forget. Fungsi
-    // beginSyncSession sinkron; kita tunggu microtask queue agar catch
-    // di .catch() sempat jalan.
-    expect(() => beginSyncSession(fakeDb as never)).not.toThrow();
+    // beginSyncSession tidak boleh melempar, karena App.tsx tidak
+    // menunggunya. Microtask ditunggu supaya .catch() sempat jalan.
+    expect(() => beginSyncSession(db)).not.toThrow();
     await new Promise<void>((resolve) => setTimeout(() => resolve(), 0));
 
     // Sinkronisasi dan chat socket tetap dipanggil.

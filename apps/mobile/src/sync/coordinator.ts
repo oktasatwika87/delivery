@@ -5,7 +5,7 @@
  * - Pull incremental berdasarkan cursor (disimpan di AsyncStorage / MMKV).
  * - Periodic sync setiap 30 detik (flush + pull).
  *
- * Conflict resolution: kalau server return conflict, local row di-overwrite
+ * Conflict resolution: kalau server return conflict, local row ditimpa
  * dengan data server (baseVersion yang salah discard).
  */
 
@@ -82,8 +82,8 @@ export class SyncCoordinator implements Coordinator {
   /** Generation counter, dinaikkan setiap stop(). Pemanggil ambil
    * nomor ini sebelum request dikirim dan meneruskannya ke applyPull.
    * Kalau generasi berubah saat penulis DB berjalan (mis. data lokal
-   * sudah dibersihkan untuk akun lain), tulisan di-bail tanpa
-   * menyentuh baris sesi lama. */
+   * sudah dibersihkan untuk akun lain), tulisan tidak dijalankan
+   * tanpa menyentuh baris sesi lama. */
   private generation = 0;
 
   async start(db: Database): Promise<void> {
@@ -101,12 +101,12 @@ export class SyncCoordinator implements Coordinator {
 
     console.log('[SyncCoordinator] start() called');
 
-    // Subscribe ke networkMonitor untuk drain pending actions.
+    // Pantau status jaringan supaya outbox dikirim saat koneksi kembali.
     this.setupNetworkListener();
 
     // Interval 30 detik dipasang SEBELUM pull pertama, supaya pull
-    // berikutnya tidak tertunda kalau pull pertama masih suspended
-    // lama (mis. jaringan lambat).
+    // berikutnya tidak tertunda kalau pull pertama masih lama
+    // (mis. jaringan lambat).
     this.syncInterval = setInterval(() => this.syncTick(), 30_000);
 
     // Pull pertama dengan generasi yang sama yang akan diteruskan ke
@@ -196,9 +196,9 @@ export class SyncCoordinator implements Coordinator {
 
   stop(): void {
     // Naikkan generasi supaya applyPull yang sedang antre di write
-    // WatermelonDB bail tanpa menulis baris sesi lama. Penulisan
-    // WatermelonDB antre per-batch; pull sesi lama bisa baru berjalan
-    // setelah data lokal dibersihkan untuk akun lain.
+    // WatermelonDB tidak dijalankan tanpa menulis baris sesi lama.
+    // Penulisan WatermelonDB antre per-batch; pull sesi lama bisa baru
+    // berjalan setelah data lokal dibersihkan untuk akun lain.
     this.generation++;
     this.stopped = true;
     if (this.syncInterval) {
@@ -221,6 +221,10 @@ export class SyncCoordinator implements Coordinator {
     console.log(`[flushNow] Collected ${payload.records.length} dirty records`);
     if (payload.records.length === 0) return null;
 
+    // Generation dibaca sebelum request dikirim, supaya applyPull di
+    // dalam pullDelta tidak dijalankan kalau sesi sudah berakhir.
+    const pullGen = this.generation;
+
     let resp: SyncPushResponse;
     try {
       resp = await pushBatch(payload);
@@ -241,13 +245,13 @@ export class SyncCoordinator implements Coordinator {
       await this.markRecordsFailed(payload.records, this.db);
     }
 
-    // Process acks: conflict = overwrite local row dengan data server
+    // Process acks: conflict = timpa local row dengan data server
     // Events (orderConflict, orderRejected) di-emit di resolveAcks()
     await this.resolveAcks(resp.acks, this.db);
 
     // Simpan cursor dari pullDelta (kalau ada). Generation diteruskan
-    // supaya applyPull di dalam pullDelta bail kalau sesi sudah berakhir.
-    const pullGen = this.generation;
+    // supaya applyPull di dalam pullDelta tidak dijalankan kalau
+    // sesi sudah berakhir.
     await saveCursor(resp.pullDelta?.nextCursor ?? null);
     if (resp.pullDelta) await this.applyPull(resp.pullDelta, undefined, pullGen);
 
@@ -401,10 +405,9 @@ export class SyncCoordinator implements Coordinator {
     }
 
     // writeApplied menandai apakah fungsi penulis benar-benar menulis
-    // (generation masih cocok saat write berjalan). Kalau bail
-    // karena generasi stale, kursor tidak disimpan dan pool-refresh
-    // tidak dipancarkan, supaya sesi baru tidak mewarisi state dari
-    // pull yang sudah berakhir.
+    // (generation masih cocok saat write berjalan). Kalau generasi sudah
+    // berubah, kursor tidak disimpan dan pool-refresh tidak dipancarkan,
+    // supaya sesi baru tidak mewarisi state dari pull yang sudah berakhir.
     let writeApplied = true;
     let releasedMarkedCount = 0;
 
@@ -412,9 +415,9 @@ export class SyncCoordinator implements Coordinator {
     await database.write(async () => {
       // Pemeriksaan generasi di dalam write supaya penulisan sesi lama
       // yang baru jalan setelah stop() + start() + clearLocalData()
-      // bail tanpa menyentuh baris. Penulisan WatermelonDB antre, jadi
-      // penulisan sesi lama yang terlanjur masuk antrian write di-bail
-      // di sini, bukan sebelumnya.
+      // tidak dijalankan tanpa menyentuh baris. Penulisan WatermelonDB
+      // antre, jadi penulisan sesi lama yang terlanjur masuk antrian
+      // write tidak dijalankan di sini, bukan sebelumnya.
       if (typeof generation === 'number' && generation !== this.generation) {
         console.warn('[SyncCoordinator] applyPull: stale generation, skipping write');
         writeApplied = false;
@@ -594,9 +597,9 @@ export class SyncCoordinator implements Coordinator {
       }
     });
 
-    // Cursor hanya disimpan kalau write benar-benar berjalan, supaya
-    // pull yang bail karena generasi stale tidak menyimpan cursor
-    // yang akan menghalangi pull berikutnya membaca data sesi ini.
+    // Cursor hanya disimpan kalau write benar-benar berjalan dan respons
+    // membawa records, supaya pull dengan generasi lama atau respons
+    // tanpa records tidak menyimpan cursor yang salah.
     if (writeApplied && pull.records.length > 0) {
       await saveCursor(pull.nextCursor);
     }

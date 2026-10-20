@@ -15,7 +15,7 @@ const mockDatabase = { marker: 'db' };
 jest.mock('../db', () => ({ database: mockDatabase }));
 
 jest.mock('../sync/client', () => {
-  const actual = jest.requireActual('../sync/client') as typeof import('../sync/client');
+  const actual = jest.requireActual<typeof import('../sync/client')>('../sync/client');
   return {
     ...actual,
     register: (...args: unknown[]) => mockRegister(...args),
@@ -58,7 +58,7 @@ describe('RegisterScreen', () => {
     expect(getByText('Sudah punya akun? Masuk')).toBeTruthy();
   });
 
-  test('countUnsentData > 0: pesan tampil dan register tidak dipanggil', async () => {
+  test('countUnsentData lebih dari 0: pesan tampil dan register tidak dipanggil', async () => {
     mockCountUnsentData.mockResolvedValue(7);
 
     const onRegisterSuccess = jest.fn();
@@ -69,7 +69,7 @@ describe('RegisterScreen', () => {
     fireEvent.changeText(getByPlaceholderText('Nama'), 'Budi');
     fireEvent.changeText(getByPlaceholderText('Nomor HP'), '08123');
     fireEvent.changeText(getByPlaceholderText('Password (min. 8 karakter)'), 'password1234');
-    // getAllByText('Daftar') -> [judul, tombol]. Pilih yang terakhir.
+    // getAllByText('Daftar') berisi judul lalu tombol; yang terakhir tombolnya.
     const daftarButtons = getAllByText('Daftar');
     fireEvent.press(daftarButtons[daftarButtons.length - 1]);
 

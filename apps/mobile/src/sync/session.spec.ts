@@ -14,24 +14,22 @@ jest.mock('./token-storage', () => ({
 }));
 
 describe('isCurrentToken', function() {
-  const mockGetToken = tokenStorage.getToken as jest.Mock;
-
   beforeEach(function() {
-    mockGetToken.mockReset();
+    jest.mocked(tokenStorage.getToken).mockReset();
   });
 
   it('token sama dengan yang tersimpan: true', async function() {
-    mockGetToken.mockResolvedValue('test-token');
+    jest.mocked(tokenStorage.getToken).mockResolvedValue('test-token');
     await expect(sessionModule.isCurrentToken('test-token')).resolves.toBe(true);
   });
 
   it('token berbeda dengan yang tersimpan: false', async function() {
-    mockGetToken.mockResolvedValue('current-token');
+    jest.mocked(tokenStorage.getToken).mockResolvedValue('current-token');
     await expect(sessionModule.isCurrentToken('other-token')).resolves.toBe(false);
   });
 
   it('tidak ada token tersimpan: false', async function() {
-    mockGetToken.mockResolvedValue(null);
+    jest.mocked(tokenStorage.getToken).mockResolvedValue(null);
     await expect(sessionModule.isCurrentToken('any-token')).resolves.toBe(false);
   });
 });

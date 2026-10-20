@@ -12,11 +12,10 @@
  * - connect() hanya reject kalau token tidak ada, atau disconnect() dipanggil
  *   sebelum tersambung. Gagal jaringan tidak membuat connect() reject.
  *
- * Token dibaca saat connect(): setiap kali manajer perlu membuat socket,
- * getCurrentToken() dipanggil. Login yang menukar token TIDAK langsung
- * memicu nyambungan ulang di socket yang sedang idle, tapi login flow
- * memutus (disconnect()) lalu menyambung lagi (connect()) lewat App.tsx,
- * jadi socket baru selalu membawa token yang sekarang berlaku.
+ * Token dibaca saat connect(): setiap kali manajer membuat socket,
+ * getCurrentToken() dipanggil. Token hanya berganti lewat login, dan
+ * setiap login App.tsx memutus (disconnect()) lalu menyambung lagi
+ * (connect()), jadi socket baru selalu membawa token yang berlaku.
  *
  * Token yang ditolak server dilaporkan lewat 'auth-expired' dengan token
  * yang dipakai, lalu socket itu dihentikan (socket.active jadi false),
@@ -69,13 +68,11 @@ class ChatSocketManager {
   private hasEverConnected = false;
 
   /**
-   * Generation counter, dinaikkan di connect() atau disconnect().
-   * Async _doConnectAsync(gen) track gen-nya, dan BAIL kalo sudah stale
-   * (mis. disconnect() di tengah-tengah await token, atau connect()
-   * baru men-supersede yang lama). Tanpa ini, _doConnectAsync yang
-   * suspended bisa resume dan overwrite this.socket yang sudah di-null
-   * oleh disconnect(), atau emit auth-expired dari socket yang bukan
-   * milik sesi ini.
+   * Nomor generasi, naik di setiap connect() dan disconnect().
+   * _doConnectAsync(gen) membawa nomor saat mulai, lalu berhenti kalau
+   * nomornya sudah berubah (misalnya disconnect() datang saat token masih
+   * dibaca). Tanpa ini, _doConnectAsync yang tertunda bisa memasang
+   * socket baru dengan token lama setelah logout.
    */
   private generation = 0;
 
@@ -85,10 +82,10 @@ class ChatSocketManager {
    *
    * Returns:
    * - Resolves when connected successfully (initial or reconnect)
-   * - Reject hanya kalau token tidak ada, disconnect() dipanggil sebelum
-   *   tersambung, atau server menolak (mis. token tidak berlaku).
-   * - Gagal jaringan tidak membuat reject. socket.io mencoba ulang sendiri
-   *   tanpa batas, pemanggil cukup menunggu 'connect' berikutnya.
+   * - Janji gagal hanya kalau token tidak ada, disconnect() dipanggil
+   *   sebelum tersambung, atau server menolak (misalnya token tidak berlaku).
+   * - Gagal jaringan tidak membuat janji gagal. socket.io mencoba ulang
+   *   sendiri tanpa batas, pemanggil cukup menunggu 'connect' berikutnya.
    *
    * Idempotent: calling connect() while already connecting/connected resolves immediately.
    *
@@ -115,9 +112,9 @@ class ChatSocketManager {
       this.connectReject = reject;
     });
 
-    // Increment generasi dan capture untuk _doConnectAsync. Generation
-    // protects dari race: disconnect() di tengah-tengah async token fetch,
-    // atau connect() baru men-supersede, di-bail oleh stale check.
+    // Naikkan generasi dan bawa nomornya ke _doConnectAsync, supaya
+    // disconnect() atau connect() baru yang datang saat token masih
+    // dibaca menghentikan pekerjaan yang lama.
     this.generation++;
     const myGen = this.generation;
 
@@ -130,15 +127,16 @@ class ChatSocketManager {
   /**
    * Async connection logic, called by connect() but runs after connect() returns.
    * `gen` adalah generation yang diambil di connect(); dicek setelah await
-   * supaya operasi stale (sudah di-disconnect atau superseded) bail
-   * tanpa overwrite this.socket atau emit event dari socket lama.
+   * supaya operasi yang sudah tidak relevan (socket lama disconnect atau
+   * connect baru menimpa) tidak menimpa this.socket atau emit event
+   * dari socket lama.
    */
   private async _doConnectAsync(gen: number): Promise<void> {
     try {
       const token = await getCurrentToken();
 
-      // Stale check: disconnect() dipanggil selagi await getCurrentToken,
-      // atau connect() baru men-supersede, bail.
+      // Cek generasi: kalau disconnect() dipanggil selagi ambil token,
+      // atau ada connect() baru, hentikan operasi ini.
       if (gen !== this.generation) return;
 
       if (!token) {
@@ -163,13 +161,12 @@ class ChatSocketManager {
         reconnectionDelayMax: 10000,
       });
 
-      // Assign ke instance TEPAT setelah socket dibuat, supaya penangkap
-      // di bawah memakai referensi lokal `socket` dan `token`, bukan
-      // this.socket (yang bisa di-null-kan disconnect() concurrent).
+      // Penangkap di bawah memakai `socket` dan `token` lokal, bukan
+      // this.socket, karena this.socket bisa sudah dikosongkan atau diganti
+      // oleh disconnect() dan connect() berikutnya.
       this.socket = socket;
 
-      // Register event handlers BEFORE any events can fire. Penangkap
-      // memakai `socket` dan `token` lokal untuk konsistensi.
+      // Penangkap dipasang sebelum event apa pun bisa datang.
       socket.on('connect', () => {
         console.info('[ChatSocket] connected:', socket.id, 'hasEverConnected:', this.hasEverConnected);
         this.hasEverConnected = true;
@@ -204,10 +201,8 @@ class ChatSocketManager {
         // dan kosongkan field janji supaya connect() berikutnya bisa
         // membuat socket baru.
         if (socket.active === false) {
-          const message = (err as { message?: string })?.message ?? 'connect_error';
-          const rejectedError = err instanceof Error ? err : new Error(message);
           if (this.connectReject) {
-            this.connectReject(rejectedError);
+            this.connectReject(err);
           }
           this.connectPromise = null;
           this.connectResolve = null;
@@ -218,9 +213,8 @@ class ChatSocketManager {
             syncEvents.emit<AuthExpiredEvent>('auth-expired', event);
           }
         }
-        // socket.active true: socket.io sedang mencoba ulang sendiri,
-        // jangan reject; pemanggil akan mendapat 'connect' berikutnya
-        // atau 'connect_error' lain yang juga active=false.
+        // socket.active true: socket.io sedang mencoba ulang sendiri, jadi
+        // janji tetap menunggu 'connect' berikutnya.
       });
 
       socket.on('new_message', (message: ChatMessage) => {
@@ -231,7 +225,7 @@ class ChatSocketManager {
       // If reconnection is enabled, it will automatically attempt reconnection
       // The 'connect' or 'connect_error' event above will fire
     } catch (err) {
-      // Stale check: jangan reject promise yang bukan punya kita.
+      // Generasi sudah berubah: janji yang ada bukan milik pekerjaan ini.
       if (gen !== this.generation) return;
 
       const error = err instanceof Error ? err : new Error(String(err));
@@ -254,7 +248,8 @@ class ChatSocketManager {
    * Disconnect dari WebSocket server secara sengaja.
    * Panggil ini saat logout/unmount, akan mencegah auto-reconnect.
    *
-   * Increment generation untuk invalidate any in-flight _doConnectAsync.
+   * Generation dinaikkan supaya _doConnectAsync yang sedang berjalan
+   * berhenti tanpa menimpa socket.
    */
   disconnect(): void {
     this.generation++;

@@ -8,8 +8,8 @@
  * - endSyncSession(): hentikan sinkron dan putuskan kedua socket.
  *
  * Kegagalan satu panggilan tidak menggagalkan yang lain: setiap langkah
- * menangkap galat dengan .catch yang mencatat. Pemanggil (App.tsx) bisa
- * fire-and-forget tanpa penanganan tambahan.
+ * menangkap galat dengan .catch yang mencatat, jadi pemanggil (App.tsx)
+ * tidak perlu menunggu atau menangani galat.
  */
 
 import { syncCoordinator } from './coordinator';

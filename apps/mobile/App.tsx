@@ -15,13 +15,11 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, View, StyleSheet } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Button, View, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { DatabaseProvider } from '@nozbe/watermelondb/react';
-import { Button } from 'react-native';
-
 import { database } from './src/db';
 import { syncCoordinator } from './src/sync';
 import { getToken, clearToken, getRole, getUserId } from './src/sync/token-storage';
@@ -74,7 +72,7 @@ function App(): React.JSX.Element {
 
   /**
    * Akhiri sesi: hentikan sinkron dan kedua socket, bersihkan state
-   * otentikasi, dan opsional hapus token (untuk logout manual).
+   * otentikasi, dan hapus token.
    *
    * Dipakai oleh pendengar 'auth-expired' (setelah cek token),
    * handleLogout, token tanpa role saat app dibuka, role yang tidak
@@ -112,9 +110,9 @@ function App(): React.JSX.Element {
     networkMonitor.start();
 
     // --- AppState listener: pause/resume sync + sockets on background/foreground ---
-    // Sinkron dan socket cuma jalan selama ada sesi. active tanpa sesi:
-    // no-op. active dengan sesi: beginSyncSession() supaya pull pertama
-    // kembali setelah perpindahan background. Keadaan lain: endSyncSession().
+    // Sinkron dan socket hanya jalan selama ada sesi. Saat app aktif lagi
+    // dan ada sesi, beginSyncSession() menjalankan pull pertama lagi; tanpa
+    // sesi tidak ada yang dijalankan. Keadaan lain: endSyncSession().
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         console.log('[App] AppState active, restarting sync + resuming sockets');
@@ -132,13 +130,13 @@ function App(): React.JSX.Element {
     // --- Auth-expired listener: force logout saat session expired detected ---
     const onAuthExpired = async (event: AuthExpiredEvent): Promise<void> => {
       const { source, token } = event;
-      console.warn(
-        `[App] auth-expired event from: ${source}, rejecting token length=${token.length}`,
-      );
       if (!token || !(await isCurrentToken(token))) {
         console.warn('[App] auth-expired event for stale token, ignoring');
         return;
       }
+      console.warn(
+        `[App] auth-expired event from: ${source}, rejecting token length=${token.length}`,
+      );
       try {
         endSession('auth-expired');
       } catch (err: unknown) {
@@ -160,8 +158,7 @@ function App(): React.JSX.Element {
           const userRole = await getRole();
           if (!userRole) {
             // Token tidak valid atau role tidak ada (legacy). Akhiri sesi
-            // tanpa menghapus data, supaya user bisa login ulang dengan
-            // akun lain dan datanya tetap tersimpan.
+            // tanpa menghapus data lokal.
             console.warn('[App] Token has invalid or missing role - ending session');
             endSession('auth-expired');
           } else {
@@ -211,11 +208,10 @@ function App(): React.JSX.Element {
   }, []);
 
   // --- Kick flush dari transisi offline -> online ---
-  // Hanya perpindahan 'offline' -> 'online' yang memicu flushNow;
-  // transisi 'unknown' -> 'online' diurus di tempat lain. Hanya saat
-  // ada sesi sinkron (sessionActiveRef true), supaya pemicu offline
-  // -> online dari pemantau lain (mis. network monitor global) tidak
-  // memanggil flush sebelum login.
+  // Hanya perpindahan 'offline' ke 'online' yang memicu flushNow;
+  // perpindahan 'unknown' ke 'online' diurus di tempat lain. Hanya saat
+  // ada sesi (sessionActiveRef true), supaya flush tidak dipanggil
+  // sebelum login.
   useEffect(() => {
     let cancelled = false;
 
@@ -255,7 +251,7 @@ function App(): React.JSX.Element {
   /**
    * Login success handler.
    *
-   * Setelah token tersimpan (oleh LoginScreen SEBELUM callback ini
+   * Setelah token tersimpan (oleh LoginScreen, sebelum fungsi ini
    * dipanggil), kita:
    *  1. Decode role dari token
    *  2. Set authenticated=true + role state -> App re-render dengan nav stack sesuai role
@@ -296,18 +292,6 @@ function App(): React.JSX.Element {
    * tahu pasti apakah ada data belum terkirim).
    */
   const handleLogout = (): void => {
-    const endSessionOnly = (): void => {
-      sessionActiveRef.current = false;
-      endSyncSession();
-      setLogoutReason('manual');
-      setAuthenticated(false);
-      setRole(null);
-      setShowRegister(false);
-      clearToken().catch((err: unknown) => {
-        console.error('[App] clearToken failed:', err);
-      });
-    };
-
     countUnsentData(database)
       .then((unsent) => {
         if (unsent > 0) {
@@ -316,11 +300,11 @@ function App(): React.JSX.Element {
             `Masih ada ${unsent} data yang belum terkirim ke server. Data itu tetap tersimpan di HP ini dan baru terkirim setelah Anda masuk lagi dengan akun ini.`,
             [
               { text: 'Batal', style: 'cancel' },
-              { text: 'Keluar', style: 'destructive', onPress: endSessionOnly },
+              { text: 'Keluar', style: 'destructive', onPress: () => endSession('manual') },
             ],
           );
         } else {
-          endSessionOnly();
+          endSession('manual');
           clearLocalDataForLogout(database).catch((err: unknown) => {
             console.error('[App] clearLocalDataForLogout failed:', err);
           });
@@ -330,7 +314,7 @@ function App(): React.JSX.Element {
         console.error('[App] countUnsentData failed during logout:', err);
         // Tidak tahu apakah ada data belum terkirim. Konservatif:
         // akhiri sesi tanpa menghapus data.
-        endSessionOnly();
+        endSession('manual');
       });
   };
 

@@ -226,7 +226,7 @@ describe('OrderTrackingScreen', () => {
     });
   });
 
-  it('fetch UnauthorizedError -> tidak ada UI galat dan tidak emit dari layar', async () => {
+  it('fetch UnauthorizedError: tanpa UI galat dan layar tidak memancarkan auth-expired', async () => {
     // Layar tidak boleh menampilkan UI galat untuk UnauthorizedError:
     // 401 adalah kasus token-expired dan jalur penanganannya ada di
     // App.tsx lewat syncEvents.emit('auth-expired', {source, token}).

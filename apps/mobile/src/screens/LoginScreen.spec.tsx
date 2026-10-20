@@ -1,14 +1,14 @@
 /**
  * Tes untuk LoginScreen.
  *
- * - Submit dengan kredensial sah -> startLocalSession menerima
- *   token + userId + database, lalu onLoginSuccess dipanggil.
- * - startLocalSession mengembalikan {ok: false, unsentCount: N} -> pesan
- *   blok dengan N tampil, onLoginSuccess TIDAK dipanggil.
- * - logoutReason 'auth-expired' -> banner sesi berakhir tampil dengan
+ * - Masuk dengan data benar: startLocalSession menerima token, userId,
+ *   dan database, lalu onLoginSuccess dipanggil.
+ * - startLocalSession mengembalikan {ok: false, unsentCount: N}: pesan
+ *   penolakan dengan N tampil, onLoginSuccess tidak dipanggil.
+ * - logoutReason 'auth-expired': banner sesi berakhir tampil dengan
  *   baris tambahan tentang data belum terkirim.
  *
- * Module tiruan: ../sync/client, ../sync/localData, ../db.
+ * Modul tiruan: ../sync/client, ../sync/localData, ../db.
  */
 
 import React from 'react';
@@ -19,15 +19,13 @@ import { LoginScreen } from './LoginScreen';
 const mockLogin = jest.fn();
 const mockStartLocalSession = jest.fn();
 
-// mockDatabase dideklarasikan dengan var (bukan const) dan nilai
-// eksplisit sehingga factory jest.mock di-hoist bisa membaca referensinya
-// sebelum assignment const di-init. Factory di atas dievaluasi oleh
-// babel-plugin Jest di awal modul, sehingga module-level const belum
-// terinisialisasi saat factory dipanggil.
+// mockDatabase memakai var, bukan const. Babel Jest memindahkan jest.mock
+// ke awal modul, jadi fungsi di dalam jest.mock berjalan sebelum const di
+// tingkat modul sempat terisi.
 var mockDatabase: { marker: string } = { marker: 'db' };
 
 jest.mock('../sync/client', () => {
-  const actual = jest.requireActual('../sync/client') as typeof import('../sync/client');
+  const actual = jest.requireActual<typeof import('../sync/client')>('../sync/client');
   return {
     ...actual,
     login: (...args: unknown[]) => mockLogin(...args),
@@ -68,7 +66,7 @@ describe('LoginScreen', () => {
 
     fireEvent.changeText(getByPlaceholderText('Nomor HP'), '08123');
     fireEvent.changeText(getByPlaceholderText('Password'), 'password1234');
-    // getAllByText('Masuk') -> [judul, tombol]. Yang terakhir adalah tombol.
+    // getAllByText('Masuk') berisi judul lalu tombol; yang terakhir tombolnya.
     const masukButtons = getAllByText('Masuk');
     fireEvent.press(masukButtons[masukButtons.length - 1]);
 

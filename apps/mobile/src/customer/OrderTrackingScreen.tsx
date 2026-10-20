@@ -116,7 +116,7 @@ export function OrderTrackingScreen({
         if (err instanceof UnauthorizedError) {
           // Token tidak berlaku: auth-expired dipancarkan lewat fetchWithAuth
           // dengan sumber 'http'. Layar tidak menampilkan UI galat dan tidak
-          // memancarkan event sendiri, supaya listener di App.tsx yang
+          // memancarkan event sendiri, supaya pendengar di App.tsx yang
           // menjadi satu-satunya pintu berakhirnya sesi.
           return;
         }

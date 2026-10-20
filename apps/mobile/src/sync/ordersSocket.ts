@@ -12,11 +12,10 @@
  * - connect() hanya reject kalau token tidak ada, atau disconnect() dipanggil
  *   sebelum tersambung. Gagal jaringan tidak membuat connect() reject.
  *
- * Token dibaca saat connect(): setiap kali manajer perlu membuat socket,
- * getCurrentToken() dipanggil. Login yang menukar token TIDAK langsung
- * memicu nyambungan ulang di socket yang sedang idle, tapi login flow
- * memutus (disconnect()) lalu menyambung lagi (connect()) lewat App.tsx,
- * jadi socket baru selalu membawa token yang sekarang berlaku.
+ * Token dibaca saat connect(): setiap kali manajer membuat socket,
+ * getCurrentToken() dipanggil. Token hanya berganti lewat login, dan
+ * setiap login App.tsx memutus (disconnect()) lalu menyambung lagi
+ * (connect()), jadi socket baru selalu membawa token yang berlaku.
  *
  * Token yang ditolak server dilaporkan lewat 'auth-expired' dengan token
  * yang dipakai, lalu socket itu dihentikan (socket.active jadi false),
@@ -106,11 +105,11 @@ class OrdersSocketManager {
   private hasEverConnected = false;
 
   /**
-   * Generation counter, incremented setiap connect() atau disconnect().
-   * Async _doConnectAsync(gen) track gen-nya, dan BAIL kalo sudah stale
-   * (mis. user disconnect() di tengah-tengah async token fetch).
-   * Tanpa ini, _doConnectAsync yang suspended bisa resume dan overwrite
-   * this.socket yang udah di-null-in oleh disconnect().
+   * Nomor generasi, naik di setiap connect() dan disconnect().
+   * _doConnectAsync(gen) membawa nomor saat mulai, lalu berhenti kalau
+   * nomornya sudah berubah (misalnya disconnect() datang saat token masih
+   * dibaca). Tanpa ini, _doConnectAsync yang tertunda bisa memasang
+   * socket baru dengan token lama setelah logout.
    */
   private generation = 0;
 
@@ -149,10 +148,9 @@ class OrdersSocketManager {
       this.connectReject = reject;
     });
 
-    // Increment generation dan capture untuk stale-check di async path.
-    // Generation check protects dari race: kalo user disconnect() di
-    // tengah-tengah async _doConnectAsync, async work akan bail instead
-    // of overwriting this.socket.
+    // Naikkan generasi dan bawa nomornya ke _doConnectAsync, supaya
+    // disconnect() atau connect() baru yang datang saat token masih
+    // dibaca menghentikan pekerjaan yang lama.
     this.generation++;
     const myGen = this.generation;
 
@@ -172,15 +170,15 @@ class OrdersSocketManager {
    * - The first connect() call "owns" the async work
    *
    * `gen` is captured from connect() at start. Checked setelah await
-   * supaya stale operations (gak relevan lagi karena udah di-disconnect
-   * atau di-supersede) bail tanpa overwrite this.socket / mutate state.
+   * supaya operasi yang sudah tidak relevan (socket lama disconnect atau
+   * connect baru menimpa) tidak menimpa this.socket atau ubah state.
    */
   private async _doConnectAsync(gen: number): Promise<void> {
     try {
       const token = await getCurrentToken();
 
-      // Stale check: kalo disconnect() dipanggil selagi await getCurrentToken,
-      // atau ada connect() baru yang supersede ini, bail.
+      // Cek generasi: kalau disconnect() dipanggil selagi ambil token,
+      // atau ada connect() baru, hentikan operasi ini.
       if (gen !== this.generation) return;
 
       if (!token) {
@@ -207,15 +205,12 @@ class OrdersSocketManager {
         reconnectionDelayMax: 10000,
       });
 
-      // Assign ke instance TEPAT setelah socket dibuat, supaya penangkap
-      // di bawah memakai referensi lokal `socket` dan `token`, bukan
-      // this.socket (yang bisa di-null-kan disconnect() concurrent).
+      // Penangkap di bawah memakai `socket` dan `token` lokal, bukan
+      // this.socket, karena this.socket bisa sudah dikosongkan atau diganti
+      // oleh disconnect() dan connect() berikutnya.
       this.socket = socket;
 
-      // Register event handlers BEFORE any events can fire. Penangkap
-      // memakai `socket` dan `token` lokal untuk konsistensi, supaya
-      // socket yang sebenarnya ditangani tetap yang dimaksud meskipun
-      // this.socket sudah diganti.
+      // Penangkap dipasang sebelum event apa pun bisa datang.
       socket.on('connect', () => {
         console.info('[OrdersSocket] connected:', socket.id, 'hasEverConnected:', this.hasEverConnected);
         this.hasEverConnected = true;
@@ -244,10 +239,8 @@ class OrdersSocketManager {
         // dan kosongkan field janji supaya connect() berikutnya bisa
         // membuat socket baru.
         if (socket.active === false) {
-          const message = (err as { message?: string })?.message ?? 'connect_error';
-          const rejectedError = err instanceof Error ? err : new Error(message);
           if (this.connectReject) {
-            this.connectReject(rejectedError);
+            this.connectReject(err);
           }
           this.connectPromise = null;
           this.connectResolve = null;
@@ -258,9 +251,8 @@ class OrdersSocketManager {
             syncEvents.emit<AuthExpiredEvent>('auth-expired', event);
           }
         }
-        // socket.active true: socket.io sedang mencoba ulang sendiri,
-        // jangan reject; pemanggil akan mendapat 'connect' berikutnya
-        // atau 'connect_error' lain yang juga active=false.
+        // socket.active true: socket.io sedang mencoba ulang sendiri, jadi
+        // janji tetap menunggu 'connect' berikutnya.
       });
 
       socket.on('order:available', (payload: OrderAvailablePayload) => {
@@ -319,9 +311,8 @@ class OrdersSocketManager {
    * Disconnect dari WebSocket server secara sengaja.
    * Panggil ini saat logout/unmount, akan mencegah auto-reconnect.
    *
-   * Increment generation untuk invalidate any in-flight _doConnectAsync.
-   * Tanpa ini, suspended async work bisa resume dan overwrite this.socket
-   * yang udah di-null-in (race condition).
+   * Generasi dinaikkan supaya _doConnectAsync yang sedang berjalan
+   * berhenti tanpa memasang socket baru.
    */
   disconnect(): void {
     this.generation++;

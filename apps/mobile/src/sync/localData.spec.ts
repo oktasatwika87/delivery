@@ -7,8 +7,9 @@
  * - Aksi 'orphaned_needs_review', chat 'created' dengan percobaan 5,
  *   chat 'synced', dan order/payment kotor tidak dihitung.
  * - clearLocalData mengosongkan keenam tabel.
- * - startLocalSession: sama -> lewat; beda tanpa data -> clear, set
- *   pemilik, simpan token; beda dengan satu aksi pending -> ditolak.
+ * - startLocalSession: pemilik sama langsung lolos; pemilik beda tanpa
+ *   data belum terkirim: data dibersihkan, pemilik diganti, token
+ *   disimpan; pemilik beda dengan satu aksi 'pending': ditolak.
  * - clearLocalDataForLogout: keenam tabel kosong, cursor null,
  *   pemilik kosong.
  */
@@ -33,6 +34,7 @@ import {
   setLocalDataOwner,
   unsentDataBlockMessage,
 } from './localData';
+import { getToken, getUserId } from './token-storage';
 
 // AsyncStorage tiruan menyimpan string di memori.
 const tokenStorageMock = {
@@ -56,36 +58,6 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
     removeItem: (key: string) => tokenStorageMock.removeItem(key),
   },
 }));
-
-// Keychain tiruan: simpan token di memori. saveToken selalu pakai username
-// 'session' (KEY di token-storage.ts); password berisi JSON {token, userId}.
-const keychainStorage = new Map<string, string>();
-jest.mock('react-native-keychain', () => ({
-  __esModule: true,
-  setGenericPassword: jest.fn(
-    async (username: string, password: string) => {
-      keychainStorage.set(username, password);
-      return true;
-    },
-  ),
-  getGenericPassword: jest.fn(async () => {
-    if (keychainStorage.size === 0) return false;
-    const [username, password] = Array.from(keychainStorage.entries())[0] as [string, string];
-    return { username, password };
-  }),
-  resetGenericPassword: jest.fn(async () => {
-    keychainStorage.clear();
-    return true;
-  }),
-  ACCESSIBLE: { WHEN_UNLOCKED: 'WHEN_UNLOCKED' },
-}));
-
-// Bantu baca password tersimpan untuk verifikasi sesi tersimpan.
-function readStoredSession(): { token: string; userId: string } | null {
-  const password = keychainStorage.get('session');
-  if (!password) return null;
-  return JSON.parse(password) as { token: string; userId: string };
-}
 
 // Cursor tiruan: simpan di memori.
 const cursorStorage = new Map<string, string>();
@@ -206,7 +178,6 @@ describe('localData', () => {
 
   beforeEach(() => {
     tokenStorageMock.storage.clear();
-    keychainStorage.clear();
     cursorStorage.clear();
     db = buildTestDatabase();
   });
@@ -294,18 +265,23 @@ describe('localData', () => {
   });
 
   describe('startLocalSession', () => {
-    it('pemilik sama dengan userId: saveToken, hasil sessionSet', async () => {
+    it('pemilik sama dengan userId: token tersimpan, data dan kursor tetap', async () => {
       await setLocalDataOwner('user-A');
       // Cursor sudah disimpan sebelumnya, harus tetap.
       cursorStorage.set('sync_cursor', 'cursor-prev');
+      // Order row sudah ada, harus tetap ada.
+      await seedOrderRow(db, 'order-existing');
 
       const result = await startLocalSession('token-A', 'user-A', db);
 
       expect(result).toEqual({ ok: true });
-      const stored = readStoredSession();
-      expect(stored).toEqual({ token: 'token-A', userId: 'user-A' });
+      expect(await getToken()).toBe('token-A');
+      expect(await getUserId()).toBe('user-A');
       // Cursor tidak disentuh.
       expect(cursorStorage.get('sync_cursor')).toBe('cursor-prev');
+      // Order row tetap ada.
+      const found = await db.get('orders').find('order-existing');
+      expect(found).not.toBeNull();
     });
 
     it('pemilik beda tanpa data belum terkirim: clear, set pemilik, simpan token', async () => {
@@ -316,7 +292,8 @@ describe('localData', () => {
 
       expect(result).toEqual({ ok: true });
       expect(await getLocalDataOwner()).toBe('user-new');
-      expect(readStoredSession()).toEqual({ token: 'token-new', userId: 'user-new' });
+      expect(await getToken()).toBe('token-new');
+      expect(await getUserId()).toBe('user-new');
       // Cursor dikosongkan.
       expect(cursorStorage.has('sync_cursor')).toBe(false);
     });
@@ -333,7 +310,7 @@ describe('localData', () => {
       // Pemilik tetap (gagal login, data masih milik akun lama).
       expect(await getLocalDataOwner()).toBe('user-old');
       // Token TIDAK disimpan.
-      expect(readStoredSession()).toBeNull();
+      expect(await getToken()).toBeNull();
     });
 
     it('pemilik kosong dengan satu aksi pending: ditolak', async () => {
@@ -342,7 +319,7 @@ describe('localData', () => {
       const result = await startLocalSession('token-new', 'user-new', db);
 
       expect(result).toEqual({ ok: false, unsentCount: 1 });
-      expect(readStoredSession()).toBeNull();
+      expect(await getToken()).toBeNull();
     });
   });
 

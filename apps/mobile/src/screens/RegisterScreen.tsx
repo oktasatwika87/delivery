@@ -4,13 +4,13 @@
  * Flow:
  *   1. User pilih role (Customer / Driver) via toggle pills
  *   2. User isi name, phone, password
- *   3. Sebelum register: kalau HP ini masih punya data akun lama
- *      yang belum terkirim, tampilkan pesan blok dan JANGAN lanjut.
+ *   3. Sebelum register(): kalau HP ini masih menyimpan data akun lama
+ *      yang belum terkirim, tampilkan pesan penolakan dan berhenti.
  *      Akun baru tidak boleh menjadi pemilik data akun lain.
- *   4. Submit jadi register() -> startLocalSession(token, user.id, db)
- *      -> kalau ok, panggil onRegisterSuccess(). Kalau tidak ok,
- *      tampilkan pesan blok dan JANGAN lanjut.
- *   5. Gagal jadi tampilkan pesan error
+ *   4. Submit jadi register() lalu startLocalSession(token, user.id, db).
+ *      Kalau ok, panggil onRegisterSuccess(). Kalau tidak ok, tampilkan
+ *      pesan penolakan dan berhenti.
+ *   5. Gagal jadi tampilkan pesan galat
  *
  * Navigation ke home dilakukan oleh parent (App.tsx) setelah callback.
  */
@@ -65,11 +65,10 @@ export function RegisterScreen({ onRegisterSuccess, onBackToLogin }: RegisterScr
     setLoading(true);
     setError(null);
 
-    // Pemeriksaan sebelum register: kalau HP ini masih punya data
-    // belum terkirim dari akun sebelumnya, akun baru tidak boleh
-    // menjadi pemilik data itu. Tampilkan pesan blok dan keluar
-    // supaya user keluar dulu dari akun lama lewat App.tsx
-    // (handleLogout dengan konfirmasi).
+    // Sebelum register(): kalau HP ini masih menyimpan data belum
+    // terkirim dari akun sebelumnya, akun baru tidak boleh menjadi
+    // pemilik data itu. Pengguna harus masuk dengan akun lama sampai
+    // datanya terkirim, lalu keluar.
     try {
       const unsentCount = await countUnsentData(database);
       if (unsentCount > 0) {
@@ -78,8 +77,8 @@ export function RegisterScreen({ onRegisterSuccess, onBackToLogin }: RegisterScr
         return;
       }
     } catch (err) {
-      // countUnsentData read failed: lanjut dengan register; kalau
-      // startLocalSession juga gagal, dia yang akan menampilkan pesan.
+      // Gagal membaca DB: register tetap dilanjutkan, karena
+      // startLocalSession memeriksa ulang sebelum token disimpan.
       console.warn('[RegisterScreen] countUnsentData failed:', err);
     }
 
