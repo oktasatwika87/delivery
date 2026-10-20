@@ -3,11 +3,14 @@
  *
  * Flow:
  *   1. User isi phone + password
- *   2. Submit jadi login() jadi saveToken() jadi panggil onLoginSuccess()
- *   3. Gagal jadi tampilkan pesan error
+ *   2. Submit -> login() -> startLocalSession(token, user.id, database)
+ *      -> kalau ok, panggil onLoginSuccess(). Kalau tidak ok
+ *      (pemilik data lokal beda dan ada data belum terkirim),
+ *      tampilkan pesan blok dan JANGAN panggil onLoginSuccess().
+ *   3. Gagal credential -> tampilkan pesan error
  *
- * Catatan: navigation ke Orders TIDAK dilakukan di sini.
- * Biarkan App.tsx yang handle, ia akan re-render Navigator begitu
+ * Catatan: navigation ke Orders TIDAK dilakukan di sini. Biarkan
+ * App.tsx yang handle, ia akan re-render Navigator begitu
  * authenticated=true dan otomatis menampilkan Orders.
  */
 
@@ -25,7 +28,8 @@ import {
 } from 'react-native';
 
 import { login, InvalidCredentialsError } from '../sync/client';
-import { saveToken } from '../sync/token-storage';
+import { startLocalSession, unsentDataBlockMessage } from '../sync/localData';
+import { database } from '../db';
 
 interface LoginScreenProps {
   /** Dipanggil setelah login + saveToken berhasil. */
@@ -54,9 +58,15 @@ export function LoginScreen({ onLoginSuccess, logoutReason, onNavigateToRegister
 
     try {
       const { token, user } = await login(phone.trim(), password);
-      await saveToken(token, user.id);
+      const result = await startLocalSession(token, user.id, database);
+      if (!result.ok) {
+        // Ada data belum terkirim dari akun sebelumnya di HP ini.
+        // Tampilkan pesan blok; JANGAN panggil onLoginSuccess supaya
+        // sesi tidak aktif untuk akun baru.
+        setError(unsentDataBlockMessage(result.unsentCount));
+        return;
+      }
       // Tidak navigate langsung, cukup beritahu App.tsx via callback.
-      // App.tsx akan re-render Navigator dan otomatis tampilkan Orders.
       onLoginSuccess();
     } catch (err) {
       if (err instanceof InvalidCredentialsError) {
@@ -81,6 +91,9 @@ export function LoginScreen({ onLoginSuccess, logoutReason, onNavigateToRegister
         {logoutReason === 'auth-expired' && !bannerDismissed && (
           <View style={styles.banner}>
             <Text style={styles.bannerText}>⚠️ Sesi Anda telah berakhir. Silakan login ulang untuk melanjutkan.</Text>
+            <Text style={styles.bannerText}>
+              Data yang belum terkirim tetap tersimpan dan dikirim setelah Anda masuk lagi dengan akun yang sama.
+            </Text>
             <TouchableOpacity onPress={() => setBannerDismissed(true)} style={styles.bannerClose}>
               <Text style={styles.bannerCloseText}>✕</Text>
             </TouchableOpacity>

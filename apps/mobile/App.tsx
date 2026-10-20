@@ -15,18 +15,25 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, View, StyleSheet } from 'react-native';
+import { ActivityIndicator, Alert, AppState, View, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { DatabaseProvider } from '@nozbe/watermelondb/react';
+import { Button } from 'react-native';
 
 import { database } from './src/db';
 import { syncCoordinator } from './src/sync';
-import { getToken, clearToken, getRole } from './src/sync/token-storage';
+import { getToken, clearToken, getRole, getUserId } from './src/sync/token-storage';
 import { isCurrentToken } from './src/sync/session';
 import { syncEvents, type AuthExpiredEvent } from './src/sync/syncEvents';
 import { beginSyncSession, endSyncSession } from './src/sync/sessionControl';
+import {
+  countUnsentData,
+  clearLocalDataForLogout,
+  getLocalDataOwner,
+  setLocalDataOwner,
+} from './src/sync/localData';
 import { UserRole } from '@delivery/shared';
 import { CustomerStack } from './src/customer';
 import { RegisterScreen } from './src/screens/RegisterScreen';
@@ -72,8 +79,8 @@ function App(): React.JSX.Element {
    * Dipakai oleh pendengar 'auth-expired' (setelah cek token),
    * handleLogout, token tanpa role saat app dibuka, role yang tidak
    * terbaca setelah login, dan galat saat pemeriksaan awal.
-   * Tidak menghapus data lokal; itu tanggung jawab pemanggil (lihat
-   * clearLocalDataForLogout di commit 5 / App.tsx).
+   * Tidak menghapus data lokal; itu tanggung jawab pemanggil
+   * (lihat clearLocalDataForLogout di handleLogout bawah).
    */
   const endSession = (reason: 'auth-expired' | 'manual'): void => {
     sessionActiveRef.current = false;
@@ -151,7 +158,6 @@ function App(): React.JSX.Element {
           setRole(null);
         } else {
           const userRole = await getRole();
-
           if (!userRole) {
             // Token tidak valid atau role tidak ada (legacy). Akhiri sesi
             // tanpa menghapus data, supaya user bisa login ulang dengan
@@ -159,13 +165,32 @@ function App(): React.JSX.Element {
             console.warn('[App] Token has invalid or missing role - ending session');
             endSession('auth-expired');
           } else {
-            // Token dan role sah. Sesi nyala.
-            setAuthenticated(true);
-            setRole(userRole);
-            sessionActiveRef.current = true;
-            console.log('[App] User role:', userRole);
+            // Valid token dan role. Periksa pemilik data lokal:
+            // - userId kosong: token tersimpan tapi pemilik tidak terbaca,
+            //   sesi diakhiri tanpa menghapus data.
+            // - pemilik beda dengan userId: ada data akun lain yang bukan
+            //   milik sesi ini, sesi diakhiri tanpa menghapus data.
+            // - pemilik kosong: tetapkan userId saat ini sebagai pemilik,
+            //   lalu mulai sesi seperti biasa.
+            const userId = await getUserId();
+            const owner = await getLocalDataOwner();
+            if (!userId) {
+              console.warn('[App] Token has no userId - ending session');
+              endSession('auth-expired');
+            } else if (owner !== null && owner !== userId) {
+              console.warn('[App] Local data owner differs from token user - ending session');
+              endSession('auth-expired');
+            } else {
+              if (owner === null) {
+                await setLocalDataOwner(userId);
+              }
+              setAuthenticated(true);
+              setRole(userRole);
+              sessionActiveRef.current = true;
+              console.log('[App] User role:', userRole);
 
-            beginSyncSession(database);
+              beginSyncSession(database);
+            }
           }
         }
       } catch (err) {
@@ -259,22 +284,54 @@ function App(): React.JSX.Element {
 
   /**
    * Logout handler: shared between driver and customer stacks.
-   * Triggers logout flow and resets auth state.
    *
-   * Data lokal dihapus lewat clearLocalDataForLogout (lihat commit 5),
-   * dipanggil dari pemanggil (LoginScreen / handleLogout) dengan
-   * konfirmasi user dulu.
+   * Pemeriksaan data belum terkirim sebelum memutus sesi:
+   * - Ada data belum terkirim: tampilkan Alert. Tombol "Keluar"
+   *   destructive hanya memanggil endSession('manual'); data tetap
+   *   tersimpan supaya bisa dikirim setelah login ulang.
+   * - Tidak ada data: endSession('manual'), lalu clearLocalDataForLogout.
+   *
+   * countUnsentData memakai .catch yang mencatat galat; kalau gagal,
+   * sesi tetap diakhiri tanpa menghapus data (konservatif, tidak
+   * tahu pasti apakah ada data belum terkirim).
    */
   const handleLogout = (): void => {
-    sessionActiveRef.current = false;
-    endSyncSession();
-    setLogoutReason('manual');
-    setAuthenticated(false);
-    setRole(null);
-    setShowRegister(false);
-    clearToken().catch((err) => {
-      console.error('[App] clearToken failed:', err);
-    });
+    const endSessionOnly = (): void => {
+      sessionActiveRef.current = false;
+      endSyncSession();
+      setLogoutReason('manual');
+      setAuthenticated(false);
+      setRole(null);
+      setShowRegister(false);
+      clearToken().catch((err: unknown) => {
+        console.error('[App] clearToken failed:', err);
+      });
+    };
+
+    countUnsentData(database)
+      .then((unsent) => {
+        if (unsent > 0) {
+          Alert.alert(
+            'Keluar',
+            `Masih ada ${unsent} data yang belum terkirim ke server. Data itu tetap tersimpan di HP ini dan baru terkirim setelah Anda masuk lagi dengan akun ini.`,
+            [
+              { text: 'Batal', style: 'cancel' },
+              { text: 'Keluar', style: 'destructive', onPress: endSessionOnly },
+            ],
+          );
+        } else {
+          endSessionOnly();
+          clearLocalDataForLogout(database).catch((err: unknown) => {
+            console.error('[App] clearLocalDataForLogout failed:', err);
+          });
+        }
+      })
+      .catch((err: unknown) => {
+        console.error('[App] countUnsentData failed during logout:', err);
+        // Tidak tahu apakah ada data belum terkirim. Konservatif:
+        // akhiri sesi tanpa menghapus data.
+        endSessionOnly();
+      });
   };
 
   /**
@@ -311,7 +368,17 @@ function App(): React.JSX.Element {
             )
           ) : role === UserRole.DRIVER ? (
             <Stack.Navigator screenOptions={{ headerShown: false }}>
-              <Stack.Screen name="Orders" component={OrdersScreen} />
+              <Stack.Screen
+                name="Orders"
+                component={OrdersScreen}
+                options={{
+                  headerShown: true,
+                  title: 'Order',
+                  headerRight: () => (
+                    <Button title="Keluar" onPress={handleLogout} />
+                  ),
+                }}
+              />
               <Stack.Screen name="OrderDetail" component={OrderDetailScreen} />
               <Stack.Screen name="Chat" component={ChatScreen} />
               <Stack.Screen name="Map" component={MapScreen} />

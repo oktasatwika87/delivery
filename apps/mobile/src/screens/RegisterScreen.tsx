@@ -4,8 +4,13 @@
  * Flow:
  *   1. User pilih role (Customer / Driver) via toggle pills
  *   2. User isi name, phone, password
- *   3. Submit jadi register() jadi saveToken() jadi panggil onRegisterSuccess()
- *   4. Gagal jadi tampilkan pesan error
+ *   3. Sebelum register: kalau HP ini masih punya data akun lama
+ *      yang belum terkirim, tampilkan pesan blok dan JANGAN lanjut.
+ *      Akun baru tidak boleh menjadi pemilik data akun lain.
+ *   4. Submit jadi register() -> startLocalSession(token, user.id, db)
+ *      -> kalau ok, panggil onRegisterSuccess(). Kalau tidak ok,
+ *      tampilkan pesan blok dan JANGAN lanjut.
+ *   5. Gagal jadi tampilkan pesan error
  *
  * Navigation ke home dilakukan oleh parent (App.tsx) setelah callback.
  */
@@ -24,7 +29,8 @@ import {
 } from 'react-native';
 
 import { register, RegisterError } from '../sync/client';
-import { saveToken } from '../sync/token-storage';
+import { startLocalSession, countUnsentData, unsentDataBlockMessage } from '../sync/localData';
+import { database } from '../db';
 import { UserRole } from '@delivery/shared';
 
 interface RegisterScreenProps {
@@ -59,6 +65,24 @@ export function RegisterScreen({ onRegisterSuccess, onBackToLogin }: RegisterScr
     setLoading(true);
     setError(null);
 
+    // Pemeriksaan sebelum register: kalau HP ini masih punya data
+    // belum terkirim dari akun sebelumnya, akun baru tidak boleh
+    // menjadi pemilik data itu. Tampilkan pesan blok dan keluar
+    // supaya user keluar dulu dari akun lama lewat App.tsx
+    // (handleLogout dengan konfirmasi).
+    try {
+      const unsentCount = await countUnsentData(database);
+      if (unsentCount > 0) {
+        setError(unsentDataBlockMessage(unsentCount));
+        setLoading(false);
+        return;
+      }
+    } catch (err) {
+      // countUnsentData read failed: lanjut dengan register; kalau
+      // startLocalSession juga gagal, dia yang akan menampilkan pesan.
+      console.warn('[RegisterScreen] countUnsentData failed:', err);
+    }
+
     try {
       const { token, user } = await register({
         phone: phone.trim(),
@@ -66,7 +90,11 @@ export function RegisterScreen({ onRegisterSuccess, onBackToLogin }: RegisterScr
         name: name.trim(),
         role: selectedRole,
       });
-      await saveToken(token, user.id);
+      const result = await startLocalSession(token, user.id, database);
+      if (!result.ok) {
+        setError(unsentDataBlockMessage(result.unsentCount));
+        return;
+      }
       onRegisterSuccess();
     } catch (err) {
       if (err instanceof RegisterError) {
