@@ -43,7 +43,7 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [isSocketConnected, setIsSocketConnected] = useState(false);
+  const [isSocketConnected, setIsSocketConnected] = useState(() => chatSocket.isConnected);
   const [renderKey, setRenderKey] = useState(0); // increments to force FlatList re-render on observe emit
   const flatListRef = useRef<FlatList>(null);
 
@@ -124,6 +124,11 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
         console.error('[Chat] socket connect_error:', error);
         setIsSocketConnected(false);
       });
+
+      // Socket bisa sudah tersambung sejak sesi dimulai, jadi event `connect`
+      // tidak datang lagi untuk layar ini. Keadaannya dibaca setelah semua
+      // pendengar terpasang, supaya perubahan sesudahnya tetap tertangkap.
+      setIsSocketConnected(chatSocket.isConnected);
 
       // Connect if not already connected
       if (!chatSocket.isConnected) {

@@ -247,3 +247,41 @@ describe('ChatScreen: join_room saat connect berulang', () => {
     expect(mockSocketState.joinRoomCalls.length).toBe(0);
   });
 });
+
+describe('ChatScreen: banner koneksi', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    resetMockSocketState();
+  });
+
+  test('socket sudah tersambung saat layar dibuka: banner terputus tidak tampil', async () => {
+    // Socket chat bisa sudah tersambung sebelum layar ini dibuka, jadi event
+    // connect tidak datang lagi untuk layar ini.
+    mockSocketState.isConnected = true;
+
+    const { queryByText } = renderChatScreen();
+
+    await waitFor(() => {
+      expect(mockSocketState.joinRoomCalls.length).toBe(1);
+    });
+
+    expect(queryByText(/Koneksi real-time terputus/)).toBeNull();
+  });
+
+  test('socket sudah tersambung lalu putus: banner tampil', async () => {
+    mockSocketState.isConnected = true;
+
+    const { findByText } = renderChatScreen();
+
+    await waitFor(() => {
+      expect(mockSocketState.joinRoomCalls.length).toBe(1);
+    });
+
+    await act(async () => {
+      mockSocketState.isConnected = false;
+      mockSocketState.fireDisconnect('transport close');
+    });
+
+    expect(await findByText(/Koneksi real-time terputus/)).toBeTruthy();
+  });
+});
