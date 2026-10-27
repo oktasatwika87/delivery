@@ -337,7 +337,7 @@ describe('OrdersScreen smoke test', () => {
   });
 });
 
-// Pending action badge (Fase 2 outbox wiring)
+// Label aksi tertunda di kartu Order Saya
 //
 // Rendered via OrdersScreenBase directly (bypassing the withDatabase/
 // withObservables-wrapped OrdersScreen export) because the
@@ -595,6 +595,8 @@ describe('Accept order online gating', () => {
     const poolOrderMock = {
       ...makeOrder({ id: 'pool-order-2', status: 'ASSIGNED', driverId: null }),
       _raw: { id: 'pool-order-2', driver_id: null, _status: 'synced' },
+      // handleAccept membaca versi baris lewat _getRaw sebelum mengirim Terima.
+      _getRaw: jest.fn((key: string) => (key === 'server_version' ? 1 : undefined)),
       prepareDestroyPermanently: jest.fn().mockReturnValue({ _preparedState: 'destroy', _raw: { id: 'pool-order-2' } }),
     };
     mockOrdersCollection.query = jest.fn().mockReturnValue({
@@ -737,7 +739,7 @@ describe('Terima order menulis data lengkap dari respons', () => {
   // Buat mock baris pool dengan _getRaw, _setRaw, prepareUpdate yang bisa
   // diverifikasi. _setRaw merekam semua panggilan supaya tes bisa
   // memastikan kolom respons tertulis di _raw.
-  function makeAcceptablePoolOrder(id: string, serverVersion: number) {
+  function makeAcceptablePoolOrder(id: string, serverVersion: number | null) {
     const setRawCalls: Array<[string, unknown]> = [];
     const rowForUpdate = {
       _setRaw: jest.fn((key: string, value: unknown) => {
@@ -903,5 +905,35 @@ describe('Terima order menulis data lengkap dari respons', () => {
     // getRoute TIDAK dipanggil karena tidak ada GPS
     const providerGetRoute = getLastProviderGetRoute();
     expect(providerGetRoute).not.toHaveBeenCalled();
+  });
+
+  test('Terima pada baris tanpa server_version angka: acceptOrder tidak dipanggil', async () => {
+    (acceptOrder as jest.Mock).mockResolvedValue(fullOrderResponse);
+
+    const poolOrder = makeAcceptablePoolOrder('pool-accept-tanpa-versi', null);
+    mockOrdersCollection.query = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue([poolOrder]),
+      fetchCount: jest.fn().mockResolvedValue(0),
+      observe: jest.fn().mockReturnValue({
+        subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
+      }),
+    });
+
+    const { getByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    const acceptButton = getByText('Terima Order').parent?.parent;
+    await act(async () => {
+      await acceptButton?.props.onPress();
+    });
+
+    expect(acceptOrder).not.toHaveBeenCalled();
+    const Alert = require('react-native').Alert;
+    expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Terima order gagal. Coba lagi.');
   });
 });

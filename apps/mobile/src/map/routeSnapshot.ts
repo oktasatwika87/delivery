@@ -144,8 +144,8 @@ class RouteSnapshotServiceImpl implements RouteSnapshotService {
 
   /**
    * Enforce retention LRU, hapus entry paling lama sampai count <= MAX_SNAPSHOTS.
-   * Dipanggil sekali saat app boot (lihat App.tsx useEffect), supaya hemat
-   * interval & baterai (keputusan #8).
+   * Dipanggil sekali saat app dibuka (lihat useEffect di App.tsx), jadi tidak
+   * butuh timer berkala yang memakan baterai.
    *
    * Return jumlah row yang dihapus.
    */

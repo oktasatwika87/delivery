@@ -91,8 +91,7 @@ describe('outbox enqueue - regression prepareCreateFromDirtyRaw with real LokiJS
     // Re-import outbox setelah reset modules agar binding database fresh.
     const { enqueueReject: enqueue } = require('./outbox');
 
-    // Seed order dummy supaya find() tidak throw (enqueueReject juga
-    // update order row).
+    // Seed order dummy.
     await db.write(async () => {
       const preparedOrder = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
         id: 'order-reject-1',

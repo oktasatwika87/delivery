@@ -31,13 +31,10 @@ export interface Payment {
   orderId: string;
 
   /**
-   * Idempotency key, UUID v4-based identifier for COD sync.
-   *
-   * Format: `cod:${uuid}` where `uuid` is RFC 4122 v4. Generated once
-   * client-side when driver taps "Terima Cash COD" and persisted on the
-   * local row. Stability across retries is guaranteed by the fact that
-   * the key is read from the row (not regenerated). Prevents double-charge
-   * via unique constraint on this column.
+   * Kunci idempotensi COD, format `cod:<uuid v4>`. Dibuat di HP saat driver
+   * mengetuk tombol COD dan disimpan di aksi outbox, jadi kiriman ulang
+   * memakai kunci yang sama. Kolom ini unik di server, jadi satu kunci
+   * hanya menjadi satu payment.
    */
   idempotencyKey: string;
 

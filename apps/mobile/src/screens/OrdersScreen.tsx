@@ -418,10 +418,18 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
         return;
       }
 
+      // _getRaw karena dekorator model tidak aktif di Jest. Baris pool selalu
+      // membawa versi dari server; kalau tidak ada, jangan kirim apa pun.
+      const serverVersion = order._getRaw('server_version');
+      if (typeof serverVersion !== 'number') {
+        console.warn('[OrdersScreen] handleAccept: server_version bukan angka', order.id);
+        Alert.alert('Gagal', 'Terima order gagal. Coba lagi.');
+        return;
+      }
+
       let response: Awaited<ReturnType<typeof acceptOrder>>;
       try {
-        // _getRaw karena dekorator model tidak aktif di Jest.
-        response = await acceptOrder(order.id, order._getRaw('server_version') as number);
+        response = await acceptOrder(order.id, serverVersion);
       } catch (err: unknown) {
         // Hanya ApiError dengan status 409 dianggap konflik (status backend
         // ConflictException, code bisa ORDER_UNAVAILABLE atau VERSION_CONFLICT).

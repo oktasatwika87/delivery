@@ -133,12 +133,6 @@ export async function enqueueReject(orderId: string, expectedVersion: number): P
         updated_at: now,
       });
       await database.batch(preparedRecord);
-
-      // Mark order with pending action flag
-      const order = await database.get<OrderModel>('orders').find(orderId);
-      await order.update((o) => {
-        (o as any)._raw._status = 'synced'; // not dirty, just flagging
-      });
     });
 
     console.log(`[outbox] enqueued reject action for order ${orderId}, pendingActionId=${pendingActionId}`);

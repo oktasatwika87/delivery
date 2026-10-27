@@ -1,25 +1,10 @@
 /**
- * Idempotency key generation for COD sync (offline-first).
+ * Kunci idempotensi COD, format `cod:<uuid v4>`.
  *
- * Format: cod:${uuid}, UUID v4 (RFC 4122).
- *
- * The UUID is the single source of uniqueness for the payment. Generated
- * ONCE when the driver taps "Terima Cash COD" and stored permanently on
- * the local PaymentModel row. Stability across retries is guaranteed by
- * the fact that the key lives on the row, `collectDirty()` reads it
- * from `row.idempotencyKey` rather than regenerating.
- *
- * UI-level guards prevent double-tapping from generating duplicate keys:
- *   - Inflight mutex in `handleCollectCod()` (tier 2 EC6)
- *   - `hasCodPayment` check before showing COD button (tier 2 Task 3)
- *
- * Why not the previous `cod:${orderId}:${deviceId}:${Date.now()}`:
- *   The `Date.now()` component made the key non-deterministic if the
- *   local row was ever re-created (app reinstall, DB corruption, debug
- *   insertion). Re-creation produced a new key, server's unique
- *   constraint couldn't dedupe, duplicate payment record. UUID v4
- *   eliminates this foot-gun by making the key a single global UUID
- *   with 2^122 collision space.
+ * Kunci dibuat sekali saat driver mengetuk tombol COD dan disimpan di aksi
+ * `collect_cod` di outbox. Kiriman ulang dan Coba lagi memakai kunci yang
+ * sama, jadi server hanya mencatat satu COD walau request terkirim lebih
+ * dari sekali.
  */
 
 import reactNativeUUID from 'react-native-uuid';
