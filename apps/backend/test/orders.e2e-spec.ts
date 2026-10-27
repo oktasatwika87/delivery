@@ -216,6 +216,34 @@ describe('Orders (e2e) - accept/reject', () => {
         await cleanupOrder(orderId);
       }
     });
+
+    test('200: Terima dikirim ulang driver yang sama dengan versi lama', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000a09';
+      await createAssignedOrder(orderId, customerUserId);
+      try {
+        const first = await request(app.getHttpServer())
+          .post(`/orders/${orderId}/accept`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ version: 1 })
+          .expect(200);
+        expect(first.body.version).toBe(2);
+
+        const resp = await request(app.getHttpServer())
+          .post(`/orders/${orderId}/accept`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ version: 1 })
+          .expect(200);
+
+        expect(resp.body.status).toBe(OrderStatus.PREPARING);
+        expect(resp.body.driverId).toBe(driverUserId);
+        expect(resp.body.version).toBe(2);
+
+        const row = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(row?.version).toBe(2);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
   });
 
   describe('POST /orders/:id/reject', () => {

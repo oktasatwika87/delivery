@@ -261,12 +261,17 @@ export class OrdersService {
     const current = await this.prisma.order.findUnique({ where: { id } });
     if (!current) throw new NotFoundException(`Order ${id} tidak ditemukan`);
 
+    // Terima yang dikirim ulang oleh driver yang sama, misalnya karena
+    // respons pertama hilang di jalan: order sudah miliknya, jadi dibalas
+    // apa adanya tanpa menulis dan tanpa event baru.
+    if (current.driverId === driverId && current.status === OrderStatusDb.PREPARING) {
+      return this.toDomain(current);
+    }
+
     // Role check: harus DRIVER (dipastikan di controller via @CurrentUser('role'))
-    // Status check: harus ASSIGNED baru bisa di-accept.
-    // Order yang sudah di-unassign cron (kembali ke CONFIRMED) atau sudah
-    // pindah status (PREPARING, dst.) dianggap tidak lagi tersedia untuk
-    // driver yang sedang menekan Terima, kembalikan 409 ORDER_UNAVAILABLE
-    // supaya client tahu pool perlu refresh, bukan pesan gagal umum.
+    // Order hanya bisa diterima dari pool (ASSIGNED tanpa driver). Status lain
+    // dibalas 409 ORDER_UNAVAILABLE supaya client menyegarkan daftar Tersedia,
+    // bukan menampilkan pesan gagal umum.
     if (current.status !== OrderStatusDb.ASSIGNED) {
       throw new ConflictException({
         code: 'ORDER_UNAVAILABLE',
@@ -274,8 +279,7 @@ export class OrdersService {
       });
     }
 
-    // Ownership: order harus belum di-accept driver lain (driverId === null berarti belum ada yang accept)
-    // Kalau driverId === driverId (driver yang sama), bisa jadi retry, OCC akan handle
+    // Order ASSIGNED yang sudah punya driver lain juga tidak tersedia.
     if (current.driverId !== null && current.driverId !== driverId) {
       throw new ConflictException({
         code: 'ORDER_UNAVAILABLE',

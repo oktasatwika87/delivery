@@ -296,6 +296,45 @@ describe('OrdersService', () => {
       expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
 
+    test('driver yang sama mengirim ulang Terima untuk order PREPARING miliknya: dibalas order apa adanya tanpa menulis', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        ...mockOrderAssigned,
+        status: OrderStatusDb.PREPARING,
+        driverId,
+        version: version + 1,
+      });
+
+      const result = await service.acceptOrder(orderId, version, driverId);
+
+      expect(result.status).toBe('PREPARING');
+      expect(result.driverId).toBe(driverId);
+      expect(result.version).toBe(version + 1);
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+      expect(mockGateway.emitOrderAccepted).not.toHaveBeenCalled();
+      expect(mockGateway.emitOrderUnavailable).not.toHaveBeenCalled();
+    });
+
+    test('driver yang sama, order sudah OUT_FOR_DELIVERY: tetap 409 ORDER_UNAVAILABLE', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        ...mockOrderAssigned,
+        status: OrderStatusDb.OUT_FOR_DELIVERY,
+        driverId,
+        version: version + 1,
+      });
+
+      let caught: unknown;
+      try {
+        await service.acceptOrder(orderId, version, driverId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = caught instanceof ConflictException ? caught.getResponse() : undefined;
+      expect(response).toMatchObject({ code: 'ORDER_UNAVAILABLE' });
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
     test('gagal: order tidak ditemukan', async () => {
       mockPrisma.order.findUnique.mockResolvedValue(null);
 
