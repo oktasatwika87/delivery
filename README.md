@@ -24,9 +24,16 @@ jadi app yang dibuka tanpa sinyal tetap nampilin order terakhir. Sinkron jalan t
 tarik perubahan dari server pakai cursor per perangkat, kirim perubahan lokal. Tiap baris punya
 `version` di server. Kalau versi yang dikirim udah basi, server balas konflik plus data terbarunya.
 
-Aksi driver nggak semuanya boleh diantre. Batal dan catat COD masuk tabel `pending_actions` dan
-dikirim berurutan pas online. Terima order sengaja harus online, karena itu rebutan sama driver
-lain. Kalau ikut diantre, dua driver bisa sama-sama ngira dapet order yang sama.
+Aksi driver nggak semuanya boleh diantre. Mulai antar, catat COD, Selesai diantar, dan batal masuk
+tabel `pending_actions` dan dikirim berurutan per order pas online. Selesai diantar baru dikirim
+setelah COD-nya tercatat, dan server juga nolak order selesai tanpa COD. Terima order sengaja harus
+online, karena itu rebutan sama driver lain. Kalau ikut diantre, dua driver bisa sama-sama ngira
+dapet order yang sama.
+
+Aksi yang ditolak server berhenti diulang dan ditampilkan ke driver. Tiap sinkron HP juga ngirim
+daftar order yang menurutnya masih dipegang driver, lalu server balas mana yang udah bukan miliknya.
+Order itu hilang dari Order Saya driver lama, dan kalau balik ke Tersedia dia lihat di sana kayak
+driver lain.
 
 Status dan pemilik order cuma bisa berubah lewat endpoint REST (buat, terima, ubah status, batal,
 COD), masing-masing dicek peran dan versinya. Push sinkron dari app untuk order dan pembayaran
@@ -34,15 +41,22 @@ ditolak server, dan jumlah COD diambil dari total order di server, bukan dari ap
 
 Order baru langsung masuk daftar Tersedia. Order yang dibatalin driver, atau yang drivernya nggak
 aktif 15 menit (50 menit kalau udah di jalan), dibalikin ke daftar itu lewat satu fungsi yang sama,
-lalu driver lain dikabarin lewat socket.
+lalu driver lain dan customer dikabarin lewat socket. Order yang COD-nya udah tercatat nggak pernah
+dibalikin, biar uang tunainya nggak bisa ditagih dua kali.
+
+Data di HP cuma punya satu pemilik. Keluar ngosongin database lokal kalau semua udah terkirim. Kalau
+masih ada yang antre, datanya tetap disimpan dan akun lain nggak bisa masuk di HP itu sampai akun
+pemiliknya masuk lagi dan datanya terkirim. Token yang ditolak server, lewat REST maupun socket,
+bikin app balik ke layar Masuk tanpa ngehapus apa-apa, dan login lagi langsung nyambungin sinkron
+dan socket.
 
 Event order ke customer dan chat lewat socket.io. Socket nyoba nyambung lagi terus tanpa batas, dan
 tiap nyambung daftar Tersedia diambil ulang. Pesan chat yang ditulis tanpa sinyal ikut sinkron
 biasa, pengirim dan waktunya ditentuin server.
 
 Peta pakai tile server sendiri (tileserver-gl, data OSM Bali dibikin pakai planetiler). Area
-Denpasar, Kuta, dan Ubud bisa diunduh buat dipakai tanpa sinyal. Rute dari GraphHopper, rute yang
-udah tampil tetap ada pas offline.
+Denpasar, Kuta, dan Ubud bisa diunduh buat dipakai tanpa sinyal. Rute dari GraphHopper, dihitung
+begitu order diterima lalu disimpan, jadi tetap ada tanpa sinyal walau peta belum sempat dibuka.
 
 `packages/shared` isinya tipe dan kontrak event yang dipakai backend dan mobile.
 
@@ -96,20 +110,12 @@ dijalankan ke database yang datanya penting.
 
 ## Yang lagi dikerjakan
 
-- Order yang dipindah ke driver lain pas driver lama offline. Driver lama dikasih tahu, dan aksi
-  yang masih antre buat order itu berhenti dan ditampilkan, bukan diulang terus.
-- Mulai antar dan Selesai diantar bisa ditekan tanpa sinyal, antre berurutan bareng COD. Sekarang
-  dua tombol itu masih harus online.
-- Token kedaluwarsa: keluar dengan rapi tanpa ngilangin aksi yang belum terkirim, sekalian data
-  akun sebelumnya dibersihin pas logout.
-- Rute disimpan begitu order diterima, jadi ada walau peta belum dibuka. Status jaringan juga harus
-  bener dari awal pas app dibuka tanpa sinyal.
-- COD yang gagal bisa diulang tanpa mungkin tercatat dua kali.
+- Tampilan baru buat semua layar. Sekarang masih seadanya, fungsi dulu.
 
 ## Yang belum beres
 
 - Belum di-deploy. Backend dan tile server jalan di PC, HP nyambung lewat Tailscale pas demo.
-- Android aja. Tampilannya juga masih seadanya, fungsi dulu.
+- Android aja.
 - Titik antar selalu posisi GPS HP customer pas order dibuat, belum bisa dipilih di peta. Alamat
   diketik manual.
 - Customer belum bisa batalin order.
@@ -120,6 +126,13 @@ dijalankan ke database yang datanya penting.
 - Belum ada notifikasi chat di luar layar chat.
 - Peta tanpa nama jalan. Kadang ubin baru gagal dimuat setelah offline lalu online sampai app
   ditutup, ubin yang udah tersimpan tetap tampil.
+- Order yang COD-nya udah tercatat lalu drivernya hilang tetap punya driver itu, nggak dibalikin
+  ke Tersedia. Belum ada alat buat support nyelesaiin order kayak gitu.
+- Kalau ada COD yang terus ditolak server, HP itu nggak bisa dipakai akun lain sampai urusannya
+  beres lewat support.
+- COD yang dicatat buat order yang ternyata udah pindah driver dilaporin ke support lewat email.
+  Laporannya nggak dikirim ulang kalau koneksi putus pas itu, dan catatannya di HP ikut kehapus
+  pas data lokal dibersihin.
 - Kunci GraphHopper ikut di APK. Harusnya rute lewat backend.
 - Daftar jadi driver terbuka buat siapa aja, token berlaku 30 hari tanpa diperpanjang otomatis,
   dan percobaan login belum dibatasi.
