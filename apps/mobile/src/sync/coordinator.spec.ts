@@ -63,6 +63,7 @@ jest.mock('./outbox', () => ({
 }));
 
 import { SyncCoordinator } from './coordinator';
+import * as client from './client';
 import type { Payment } from '@delivery/shared';
 
 type SyncRecordPull = {
@@ -72,15 +73,6 @@ type SyncRecordPull = {
   serverChangedAt: string;
   deleted: boolean;
   data: Record<string, unknown>;
-};
-
-type SyncRecordPush = {
-  entityType: string;
-  id: string;
-  data: Record<string, unknown>;
-  op: 'create' | 'update' | 'delete';
-  clientChangedAt: string;
-  baseVersion: number | null;
 };
 
 type SyncPullResponse = {
@@ -1292,11 +1284,24 @@ describe('SyncCoordinator', () => {
     });
   });
 
-  describe('markRecordsFailed, timeout handling', () => {
-    test('markRecordsFailed increment counter untuk records yang di-timeout', async () => {
-      const row = createMockRow('payment-timeout-1', 'created');
+  describe('flushNow: push habis waktu', () => {
+    let pushSpy: jest.SpiedFunction<typeof client.pushBatch>;
+
+    beforeEach(() => {
+      // pushBatch membalas acks kosong saat request dibatalkan setelah 8 detik.
+      pushSpy = jest.spyOn(client, 'pushBatch').mockResolvedValue({ acks: [], pullDelta: undefined });
+      // @ts-expect-error - akses field private untuk tes
+      coordinator.db = mockDb;
+    });
+
+    afterEach(() => {
+      pushSpy.mockRestore();
+    });
+
+    function seedPayment(id: string, failedSyncAttempts: number): void {
+      const row = createMockRow(id, 'created');
       row.serverVersion = 0;
-      row.failedSyncAttempts = 0;
+      row.failedSyncAttempts = failedSyncAttempts;
       row.status = 'CAPTURED';
       row.orderId = 'order-1';
       row.idempotencyKey = 'idem-1';
@@ -1304,86 +1309,71 @@ describe('SyncCoordinator', () => {
       row.amountCents = 50000;
       row.currency = 'IDR';
       row.kind = 'PAYMENT';
-      state.records.get('payments')!.set('payment-timeout-1', row);
+      row.createdAt = Date.now();
+      row.updatedAt = Date.now();
+      state.records.get('payments')!.set(id, row);
+    }
 
-      const records: SyncRecordPush[] = [
-        {
-          entityType: 'payment',
-          id: 'payment-timeout-1',
-          data: {},
-          op: 'create',
-          clientChangedAt: new Date().toISOString(),
-          baseVersion: null,
-        },
-      ];
-
-      // @ts-expect-error - accessing private method for testing
-      await coordinator.markRecordsFailed(records, mockDb);
-
-      const updatedRow = state.records.get('payments')!.get('payment-timeout-1')!;
-      expect(updatedRow.failedSyncAttempts).toBe(1);
-      expect((updatedRow as any).status).not.toBe('FAILED');
-    });
-
-    test('markRecordsFailed flip status ke FAILED setelah MAX_SYNC_ATTEMPTS timeouts', async () => {
-      const row = createMockRow('payment-timeout-fail', 'created');
+    function seedChat(id: string, failedSyncAttempts: number): void {
+      const row = createMockRow(id, 'created');
       row.serverVersion = 0;
-      row.failedSyncAttempts = 4; // satu lagi akan mentrigger cap
-      row.status = 'CAPTURED';
-      row.orderId = 'order-1';
-      row.idempotencyKey = 'idem-1';
-      row.method = 'CASH';
-      row.amountCents = 50000;
-      row.currency = 'IDR';
-      row.kind = 'PAYMENT';
-      state.records.get('payments')!.set('payment-timeout-fail', row);
-
-      const records: SyncRecordPush[] = [
-        {
-          entityType: 'payment',
-          id: 'payment-timeout-fail',
-          data: {},
-          op: 'create',
-          clientChangedAt: new Date().toISOString(),
-          baseVersion: null,
-        },
-      ];
-
-      // @ts-expect-error - accessing private method for testing
-      await coordinator.markRecordsFailed(records, mockDb);
-
-      const updatedRow = state.records.get('payments')!.get('payment-timeout-fail')!;
-      expect(updatedRow.failedSyncAttempts).toBe(5);
-      expect((updatedRow as any).status).toBe('FAILED');
-    });
-
-    test('markRecordsFailed untuk chat_message flip status ke FAILED', async () => {
-      const row = createMockRow('chat-timeout-fail', 'created');
-      row.serverVersion = 0;
-      row.failedSyncAttempts = 4;
-      (row as any).status = 'pending_send';
+      row.failedSyncAttempts = failedSyncAttempts;
+      row.status = 'pending_send';
       row.roomId = 'room-1';
       row.senderId = 'user-1';
       row.body = 'test';
-      state.records.get('chat_messages')!.set('chat-timeout-fail', row);
+      row.clientCreatedAt = Date.now();
+      row.createdAt = Date.now();
+      row.updatedAt = Date.now();
+      state.records.get('chat_messages')!.set(id, row);
+    }
 
-      const records: SyncRecordPush[] = [
-        {
-          entityType: 'chat_message',
-          id: 'chat-timeout-fail',
-          data: {},
-          op: 'create',
-          clientChangedAt: new Date().toISOString(),
-          baseVersion: null,
-        },
-      ];
+    test('push habis waktu tidak menaikkan failedSyncAttempts', async () => {
+      seedPayment('payment-timeout-1', 0);
 
-      // @ts-expect-error - accessing private method for testing
-      await coordinator.markRecordsFailed(records, mockDb);
+      await coordinator.flushNow();
+
+      const updatedRow = state.records.get('payments')!.get('payment-timeout-1')!;
+      expect(pushSpy).toHaveBeenCalledTimes(1);
+      expect(updatedRow.failedSyncAttempts).toBe(0);
+    });
+
+    test('push habis waktu tidak menandai payment FAILED', async () => {
+      seedPayment('payment-timeout-fail', 4);
+
+      await coordinator.flushNow();
+
+      const updatedRow = state.records.get('payments')!.get('payment-timeout-fail')!;
+      expect(pushSpy).toHaveBeenCalledTimes(1);
+      expect(updatedRow.failedSyncAttempts).toBe(4);
+      expect(updatedRow.status).toBe('CAPTURED');
+    });
+
+    test('push habis waktu tidak menandai pesan chat FAILED', async () => {
+      seedChat('chat-timeout-fail', 4);
+
+      const result = await coordinator.flushNow();
 
       const updatedRow = state.records.get('chat_messages')!.get('chat-timeout-fail')!;
-      expect(updatedRow.failedSyncAttempts).toBe(5);
-      expect((updatedRow as any).status).toBe('FAILED');
+      expect(pushSpy).toHaveBeenCalledTimes(1);
+      expect(updatedRow.failedSyncAttempts).toBe(4);
+      expect(updatedRow.status).toBe('pending_send');
+      expect(result).toBeNull();
+    });
+
+    test('pesan chat tetap dikirim setelah enam kali push habis waktu', async () => {
+      seedChat('chat-timeout-ulang', 0);
+
+      for (let i = 0; i < 7; i++) {
+        await coordinator.flushNow();
+      }
+
+      expect(pushSpy).toHaveBeenCalledTimes(7);
+      expect(pushSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          records: [expect.objectContaining({ id: 'chat-timeout-ulang' })],
+        }),
+      );
     });
   });
 

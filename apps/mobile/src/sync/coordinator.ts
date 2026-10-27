@@ -33,15 +33,9 @@ import { OrderModel } from '../db/models/OrderModel';
 import { PendingActionModel } from '../db/models/PendingActionModel';
 
 /**
- * Maximum consecutive failed sync attempts per record. After this many
- * `rejected` acks for the same row, sync coordinator stops collecting it
- * and flips the row to `FAILED_SYNC` status (where the model supports a
- * domain status field; otherwise stops silently). Prevents infinite
- * silent retry storms when the server consistently rejects a record.
- *
- * Sync tick adalah 30 detik, jadi 5 attempts sekitar 2.5 menit. Cukup untuk
- * ride out window offline pendek, cukup pendek agar kegagalan
- * permanen surfaced ke user.
+ * Batas ack 'rejected' berturut-turut untuk satu baris. Setelah batas ini
+ * baris tidak dikirim lagi, dan pesan chat atau payment ditandai FAILED.
+ * Push yang habis waktu dan galat jaringan tidak dihitung.
  */
 const MAX_SYNC_ATTEMPTS = 5;
 
@@ -238,11 +232,13 @@ export class SyncCoordinator implements Coordinator {
       return null;
     }
 
-    // Check if push timed out (empty acks means no server response)
+    // Acks kosong berarti request habis waktu (pushBatch membatalkannya
+    // setelah 8 detik). Diperlakukan sama seperti galat jaringan: baris tetap
+    // kotor, dikirim lagi di sinkron berikutnya, dan tidak dihitung ke batas
+    // percobaan.
     if (resp.acks.length === 0 && payload.records.length > 0) {
-      // Timeout: increment failedSyncAttempts for all attempted records
-      console.warn('[flushNow] pushBatch returned empty acks, treating as timeout');
-      await this.markRecordsFailed(payload.records, this.db);
+      console.warn('[flushNow] push habis waktu, dikirim lagi di sinkron berikutnya');
+      return null;
     }
 
     // Process acks: conflict = timpa local row dengan data server
@@ -256,60 +252,6 @@ export class SyncCoordinator implements Coordinator {
     if (resp.pullDelta) await this.applyPull(resp.pullDelta, undefined, pullGen);
 
     return resp;
-  }
-
-  /**
-   * Mark records as failed due to timeout (no ack from server).
-   * Increments failedSyncAttempts and flips status to FAILED if at cap.
-   */
-  private async markRecordsFailed(
-    records: SyncRecordPush[],
-    db: Database,
-  ): Promise<void> {
-    const batch: any[] = [];
-
-    for (const record of records) {
-      const collection = this.collectionFor(record.entityType, db);
-      if (!collection) continue;
-
-      const existing = await collection.find(record.id).catch(() => null);
-      if (existing) {
-        const currentAttempts = (existing as any).failedSyncAttempts ?? 0;
-        const nextAttempts = currentAttempts + 1;
-
-        batch.push(existing.prepareUpdate((r: any) => {
-          r.failedSyncAttempts = nextAttempts;
-          // For chat messages and payments, flip domain status to FAILED so UI can surface it
-          if ((record.entityType === 'chat_message' || record.entityType === 'payment') && nextAttempts >= MAX_SYNC_ATTEMPTS) {
-            (r as any).status = 'FAILED';
-            console.error(
-              `[markRecordsFailed] Record timed out after ${MAX_SYNC_ATTEMPTS} attempts, ${record.entityType} id=${record.id} marked FAILED.`,
-            );
-          } else if (nextAttempts >= MAX_SYNC_ATTEMPTS) {
-            console.error(
-              `[markRecordsFailed] Record timed out after ${MAX_SYNC_ATTEMPTS} attempts, ${record.entityType} id=${record.id}.`,
-            );
-          }
-        }));
-
-        if (nextAttempts < MAX_SYNC_ATTEMPTS) {
-          console.warn(
-            `[markRecordsFailed] Record timed out: entityType=${record.entityType}, id=${record.id}`,
-            `attempt ${nextAttempts}/${MAX_SYNC_ATTEMPTS}`,
-          );
-        }
-      }
-    }
-
-    if (batch.length > 0) {
-      try {
-        await db.write(async () => {
-          await db.batch(...batch);
-        });
-      } catch (err) {
-        console.error('[markRecordsFailed] Failed to write batch:', err);
-      }
-    }
   }
 
   // ============ pull ============
