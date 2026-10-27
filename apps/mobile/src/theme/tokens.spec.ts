@@ -5,9 +5,15 @@
  * fontFamily, dan tidak ada gaya yang mengandalkan fontWeight.
  */
 
+/// <reference types="node" />
+import fs from 'fs';
+import path from 'path';
+
 import { colors, fontFamily, type } from './tokens';
 
 const POLA_HEX = /^#([0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+const FOLDER_FONT = path.join(__dirname, '..', '..', 'assets', 'fonts');
 
 describe('token tema', () => {
   it('semua nilai colors berupa hex 6 atau 8 digit', () => {
@@ -30,6 +36,13 @@ describe('token tema', () => {
   it('tidak ada gaya teks yang memakai fontWeight', () => {
     for (const gaya of Object.values(type)) {
       expect('fontWeight' in gaya).toBe(false);
+    }
+  });
+
+  it('setiap fontFamily punya berkas ttf dengan nama sama', () => {
+    const isi = fs.readdirSync(FOLDER_FONT);
+    for (const nama of Object.values(fontFamily)) {
+      expect(isi).toContain(`${nama}.ttf`);
     }
   });
 });
