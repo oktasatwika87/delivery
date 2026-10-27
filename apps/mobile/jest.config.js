@@ -12,6 +12,7 @@ module.exports = {
     '^react-native-keychain$': '<rootDir>/src/__mocks__/react-native-keychain.ts',
     '^@react-native-async-storage/async-storage$': '<rootDir>/src/__mocks__/@react-native-async-storage/async-storage.ts',
     '^@maplibre/maplibre-react-native$': '<rootDir>/src/__mocks__/@maplibre/maplibre-react-native.ts',
+    '^react-native-svg$': '<rootDir>/src/__mocks__/react-native-svg.ts',
     // Stub minimal react-native - package asli Flow-typed & platform-specific
     // (./Utilities/Platform.android.js, dll) gagal resolve di jest runtime.
     // Untuk component test cukup StyleSheet + View/Text/TouchableOpacity/
