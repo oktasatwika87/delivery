@@ -89,6 +89,8 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
   const [pendingActions, setPendingActions] = useState<PendingActionModel[]>([]);
   // Jumlah aksi yang masih antre, dipakai ConnectionBar.
   const pendingActionCountRef = useRef(0);
+  // Fetch pertama sudah selesai, berhasil atau gagal.
+  const [, setFirstFetchDone] = useState(false);
 
   // GPS location state
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -128,7 +130,7 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
   }, [database]);
 
   // Fetch available pool from REST
-  const fetchPool = useCallback(async (): Promise<void> => {
+  const runFetchPool = useCallback(async (): Promise<void> => {
     let response: Awaited<ReturnType<typeof fetchAvailableOrders>>;
     try {
       response = await fetchAvailableOrders();
@@ -295,13 +297,43 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
       .fetch();
     setPoolOrders(pool);
   }, [database]);
+
+  // Penanda fetch pertama tetap terisi walau fetch gagal, supaya layar tahu
+  // daftar sudah ditanyakan ke server.
+  const fetchPool = useCallback(async (): Promise<void> => {
+    try {
+      await runFetchPool();
+    } finally {
+      setFirstFetchDone(true);
+    }
+  }, [runFetchPool]);
+
   // Sinkronkan ref agar tes bisa memanggil langsung dari luar komponen.
   fetchPoolRef.current = fetchPool;
 
-  // Initial fetch
+  // Baca daftar pool dari database dulu, baru panggil fetchPool. Urutan ini
+  // penting: kalau keduanya jalan bersamaan, bacaan awal bisa menimpa hasil
+  // fetchPool dan mengembalikan order yang server sudah hapus.
   useEffect(() => {
-    fetchPool();
-  }, [fetchPool]);
+    let cancelled = false;
+    const loadPool = async (): Promise<void> => {
+      const pool = await database
+        .get<OrderModel>('orders')
+        .query(
+          Q.where('driver_id', null),
+          Q.where('status', 'ASSIGNED'),
+          Q.where('deleted_at', null),
+        )
+        .fetch();
+      if (cancelled) return;
+      setPoolOrders(pool);
+      await fetchPool();
+    };
+    void loadPool();
+    return () => {
+      cancelled = true;
+    };
+  }, [database, fetchPool]);
 
   // Listen for pool-refresh events (emitted by handleAccept on 409 conflict).
   useEffect(() => {

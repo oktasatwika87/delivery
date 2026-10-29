@@ -2025,3 +2025,93 @@ describe('lencana sinkron kartu Order Saya', () => {
     expect(queryAllByText(/PREPARING/)).toHaveLength(0);
   });
 });
+
+// Daftar pool dibaca dari database dulu, sebelum fetch pertama selesai.
+// Waktu offline daftar tetap tampil dari isi database, dan hasil fetch yang
+// menyusul tidak boleh mengembalikan order yang sudah dihapus server.
+describe('daftar pool dari database sebelum fetch pertama', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = buildTestDatabase();
+    jest.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  const defaultRowFields = {
+    customer_id: '',
+    driver_id: null,
+    status: 'ASSIGNED',
+    items_json: '[]',
+    address_json: '{}',
+    total_cents: 55000,
+    currency: 'IDR',
+    notes: null,
+    server_version: 3,
+    deleted_at: null,
+    failed_sync_attempts: 0,
+    cancelled_by: null,
+    cancel_reason: null,
+    last_conflict_reason: null,
+    last_conflict_at: null,
+    created_at: 1_600_000_000_000,
+    updated_at: 1_600_000_000_000,
+  };
+
+  async function seedPoolRow(rowId: string): Promise<void> {
+    await db.write(async () => {
+      const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+        id: rowId,
+        _status: 'synced',
+        _changed: '',
+        ...defaultRowFields,
+      });
+      await db.batch(prepared);
+    });
+  }
+
+  it('kartu dari database tetap tampil saat fetch pertama gagal', async () => {
+    const client = jest.requireMock('../sync/client') as { fetchAvailableOrders: jest.Mock };
+    client.fetchAvailableOrders.mockRejectedValue(new Error('Network error'));
+    await seedPoolRow('pool-offline-1');
+
+    const { queryAllByText } = render(
+      <OrdersScreenBase database={db} myOrders={[]} />,
+    );
+
+    await waitFor(() => {
+      expect(queryAllByText(/pool-off/).length).toBeGreaterThan(0);
+    });
+  });
+
+  it('akhirnya hanya order dari server yang tampil', async () => {
+    const client = jest.requireMock('../sync/client') as { fetchAvailableOrders: jest.Mock };
+    client.fetchAvailableOrders.mockResolvedValue({
+      items: [
+        {
+          orderId: 'pool-baru-b',
+          totalCents: 22000,
+          currency: 'IDR',
+          itemsCount: 1,
+          city: 'Kota B',
+          createdAt: '2026-02-01T08:00:00.000Z',
+          version: 1,
+        },
+      ],
+      hasMore: false,
+    });
+    await seedPoolRow('pool-lama-a');
+
+    const { queryAllByText } = render(
+      <OrdersScreenBase database={db} myOrders={[]} />,
+    );
+
+    await waitFor(() => {
+      expect(queryAllByText(/pool-bar/).length).toBeGreaterThan(0);
+    });
+    expect(queryAllByText(/pool-lam/)).toHaveLength(0);
+  });
+});
