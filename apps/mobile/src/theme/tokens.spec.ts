@@ -26,6 +26,10 @@ describe('token tema', () => {
     expect(Object.keys(colors)).toHaveLength(32);
   });
 
+  it('teks tombol nonaktif sama dengan warna teks muted', () => {
+    expect(colors.onActionDisabled).toBe(colors.textMuted);
+  });
+
   it('setiap gaya teks memakai fontFamily yang ada di daftar', () => {
     const tersedia = Object.values(fontFamily);
     for (const gaya of Object.values(type)) {

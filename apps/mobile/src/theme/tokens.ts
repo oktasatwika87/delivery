@@ -46,7 +46,7 @@ export const colors = {
   actionPressed: ink800,
   onAction: white,
   actionDisabled: ink200,
-  onActionDisabled: ink500,
+  onActionDisabled: ink600,
   brandRed: red600,
   brandRedInverse: red500,
   danger: red600,
