@@ -12,7 +12,7 @@ import type { NetworkStatus } from '../map/networkMonitor';
 import { Icon } from '../theme/Icon';
 import { colors, fontFamily, size, space, type } from '../theme/tokens';
 
-const TITIK_TENGAH = '·';
+const TITIK_TENGAH = '\u00b7';
 
 export interface ConnectionBarProps {
   status: NetworkStatus;

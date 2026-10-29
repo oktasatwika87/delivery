@@ -12,7 +12,7 @@ import { ConnectionBar } from './ConnectionBar';
 import { Icon } from '../theme/Icon';
 import { colors } from '../theme/tokens';
 
-const TITIK_TENGAH = '·';
+const TITIK_TENGAH = '\u00b7';
 
 describe('ConnectionBar', () => {
   it('offline menampilkan teks lengkap', () => {
