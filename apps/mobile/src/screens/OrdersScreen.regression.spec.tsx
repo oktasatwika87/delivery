@@ -105,8 +105,12 @@ jest.mock('../sync/syncEvents', () => ({
   },
 }));
 
-// outbox: dipakai lewat hasPendingAction dan hasStalePendingAction. Meski tidak dipanggil saat myOrders kosong, mengimpor outbox menarik '../db' (adapter SQLite) yang gagal di Jest, jadi ditiru.
+// outbox: layar membaca batas basi aksi dari modul ini lewat orderSyncView.
+// Modul asli juga menarik '../db' (adapter SQLite) yang gagal dimuat di Jest,
+// jadi '../db' ditiru dan bagian lain dibiarkan apa adanya.
+jest.mock('../db', () => ({ database: {} })); // adapter SQLite tidak bisa dimuat di Jest.
 jest.mock('../sync/outbox', () => ({
+  ...jest.requireActual('../sync/outbox'),
   hasPendingAction: jest.fn().mockResolvedValue(false),
   hasStalePendingAction: jest.fn().mockResolvedValue(false),
 }));
@@ -1908,5 +1912,116 @@ describe('handleAccept - accept order lewat REST', () => {
     expect(row._getRaw('status')).toBe('ASSIGNED');
     expect(row._getRaw('driver_id')).toBe(null);
     expect(row._getRaw('server_version')).toBe(3);
+  });
+});
+
+// Lencana sinkron di kartu Order Saya.
+//
+// Lencana dihitung dari langganan pending_actions, jadi lencana hilang
+// sendiri begitu baris aksinya dihapus, tanpa tarik-segarkan.
+describe('lencana sinkron kartu Order Saya', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = buildTestDatabase();
+    jest.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS);
+    const client = jest.requireMock('../sync/client') as { fetchAvailableOrders: jest.Mock };
+    client.fetchAvailableOrders.mockResolvedValue({ items: [], hasMore: false });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  async function seedOrderMilikDriver(rowId: string, status: string): Promise<OrderModel> {
+    await db.write(async () => {
+      const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+        id: rowId,
+        _status: 'synced',
+        _changed: '',
+        customer_id: 'cust-sync-1',
+        driver_id: 'driver-sync-1',
+        status,
+        items_json: '[]',
+        address_json: '{"street":"Jl. Sinkron 1","city":"Badung"}',
+        total_cents: 15000,
+        currency: 'IDR',
+        notes: null,
+        server_version: 3,
+        deleted_at: null,
+        failed_sync_attempts: 0,
+        cancelled_by: null,
+        cancel_reason: null,
+        last_conflict_reason: null,
+        last_conflict_at: null,
+        created_at: FIXED_NOW_MS - 60000,
+        updated_at: FIXED_NOW_MS - 60000,
+      });
+      await db.batch(prepared);
+    });
+    return db.get<OrderModel>('orders').find(rowId);
+  }
+
+  async function seedAksi(fields: Record<string, unknown>): Promise<void> {
+    await db.write(async () => {
+      const prepared = db
+        .get<PendingActionModel>('pending_actions')
+        .prepareCreateFromDirtyRaw({
+          id: 'pa-sync-1',
+          _status: 'synced',
+          _changed: '',
+          action_type: 'update_status',
+          target_order_id: 'order-sync-1',
+          expected_version: 3,
+          idempotency_key: 'pa-sync-1',
+          payload_json: '{"status":"DELIVERED"}',
+          status: 'pending',
+          created_at: FIXED_NOW_MS,
+          updated_at: FIXED_NOW_MS,
+          ...fields,
+        });
+      await db.batch(prepared);
+    });
+  }
+
+  it('"Menunggu sinkronisasi" tampil saat ada aksi pending lalu hilang sendiri setelah aksinya dihapus', async () => {
+    const order = await seedOrderMilikDriver('order-sync-1', 'PREPARING');
+    await seedAksi({});
+
+    const { queryAllByText } = render(
+      <OrdersScreenBase database={db} myOrders={[order]} />,
+    );
+
+    await waitFor(() => {
+      expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(1);
+    });
+
+    // Aksi dihapus dari database, tanpa tarik-segarkan.
+    await db.write(async () => {
+      const action = await db.get<PendingActionModel>('pending_actions').find('pa-sync-1');
+      await db.batch(action.prepareDestroyPermanently());
+    });
+
+    await waitFor(() => {
+      expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(0);
+    });
+  });
+
+  it('kartu menampilkan status target aksi update_status yang antre', async () => {
+    const order = await seedOrderMilikDriver('order-sync-2', 'PREPARING');
+    await seedAksi({
+      id: 'pa-sync-2',
+      target_order_id: 'order-sync-2',
+    });
+
+    const { queryAllByText } = render(
+      <OrdersScreenBase database={db} myOrders={[order]} />,
+    );
+
+    await waitFor(() => {
+      expect(queryAllByText(/DELIVERED/).length).toBeGreaterThan(0);
+    });
+    // Status baris (PREPARING) tidak dipakai karena ada aksi status yang antre.
+    expect(queryAllByText(/PREPARING/)).toHaveLength(0);
   });
 });

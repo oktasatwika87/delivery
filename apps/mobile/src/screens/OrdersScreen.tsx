@@ -14,6 +14,7 @@ import { Q } from '@nozbe/watermelondb';
 import { withDatabase, withObservables } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
 import { of } from 'rxjs';
+import { OrderStatus } from '@delivery/shared';
 
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
@@ -22,7 +23,7 @@ import { getCurrentUserId } from '../sync/session';
 import { fetchAvailableOrders, UnauthorizedError, acceptOrder, ApiError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
-import { hasPendingAction, hasStalePendingAction } from '../sync/outbox';
+import { deriveOrderSyncView } from '../sync/orderSyncView';
 import { buildPoolRow, poolAddressJson } from './buildPoolRow';
 import {
   ReleasedOrdersNotice,
@@ -46,6 +47,29 @@ interface Props {
   releasedOrders?: OrderModel[];
 }
 
+const ORDER_STATUS_VALUES: readonly string[] = Object.values(OrderStatus);
+
+function isOrderStatus(value: string): value is OrderStatus {
+  return ORDER_STATUS_VALUES.includes(value);
+}
+
+// Status baris dibaca mentah karena dekorator model tidak aktif di Jest.
+function readOrderStatus(row: OrderModel): OrderStatus {
+  const raw = row._getRaw('status');
+  if (typeof raw === 'string' && isOrderStatus(raw)) return raw;
+  return OrderStatus.PENDING;
+}
+
+function readTotalCents(row: OrderModel): number {
+  const raw = row._getRaw('total_cents');
+  return typeof raw === 'number' ? raw : 0;
+}
+
+function readCurrency(row: OrderModel): string {
+  const raw = row._getRaw('currency');
+  return typeof raw === 'string' ? raw : '';
+}
+
 // Exported (in addition to the default HOC-wrapped OrdersScreen below) so
 // tests can render it directly with plain-object props, bypassing the
 // withDatabase/withObservables HOC chain entirely, that chain is mocked as
@@ -60,8 +84,11 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
   const [poolOrders, setPoolOrders] = useState<OrderModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean>(networkMonitor.getStatus() === 'online');
-  const [pendingOrderIds, setPendingOrderIds] = useState<Set<string>>(new Set());
-  const [staleOrderIds, setStaleOrderIds] = useState<Set<string>>(new Set());
+  // Semua aksi outbox, untuk semua order. Satu langganan untuk seluruh
+  // layar, jadi lencana hilang sendiri begitu aksi terkirim dan dihapus.
+  const [pendingActions, setPendingActions] = useState<PendingActionModel[]>([]);
+  // Jumlah aksi yang masih antre, dipakai ConnectionBar.
+  const pendingActionCountRef = useRef(0);
 
   // GPS location state
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -287,31 +314,42 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
     };
   }, [fetchPool]);
 
-  // Check pending actions for myOrders
+  // Langganan semua aksi outbox. Dibuka saat layar dipasang dan ditutup
+  // saat dilepas, jadi lencana ikut hilang sendiri begitu aksi dihapus
+  // dari database tanpa perlu refresh.
   useEffect(() => {
-    let cancelled = false;
-    const checkPending = async () => {
-      if (!myOrders?.length) return;
-      try {
-        const pendingResults = await Promise.all(myOrders.map((o) => hasPendingAction(o.id)));
-        const staleResults = await Promise.all(myOrders.map((o) => hasStalePendingAction(o.id)));
-        if (!cancelled) {
-          const pending = new Set<string>();
-          const stale = new Set<string>();
-          myOrders.forEach((o, i) => {
-            if (pendingResults[i]) pending.add(o.id);
-            if (staleResults[i]) stale.add(o.id);
-          });
-          setPendingOrderIds(pending);
-          setStaleOrderIds(stale);
-        }
-      } catch (err) {
-        console.warn('[OrdersScreen] failed to check pending actions:', err);
-      }
+    const subscription = database
+      .get<PendingActionModel>('pending_actions')
+      .query()
+      .observeWithColumns(['status'])
+      .subscribe((actions) => {
+        setPendingActions(actions);
+        pendingActionCountRef.current = actions.filter((action) => {
+          const status = action._getRaw('status');
+          return status === 'pending' || status === 'syncing';
+        }).length;
+      });
+    return () => {
+      subscription.unsubscribe();
     };
-    checkPending();
-    return () => { cancelled = true; };
-  }, [myOrders]);
+  }, [database]);
+
+  // Aksi dikelompokkan per order, supaya tiap kartu cuma melihat aksinya
+  // sendiri.
+  const actionsByOrderId = useMemo(() => {
+    const grouped = new Map<string, PendingActionModel[]>();
+    for (const action of pendingActions) {
+      const orderId = action._getRaw('target_order_id');
+      if (typeof orderId !== 'string' || orderId.length === 0) continue;
+      const list = grouped.get(orderId);
+      if (list) {
+        list.push(action);
+      } else {
+        grouped.set(orderId, [action]);
+      }
+    }
+    return grouped;
+  }, [pendingActions]);
 
   // Socket subscription
   useEffect(() => {
@@ -358,25 +396,8 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchPool();
-    // Re-check pending actions after pool refresh
-    if (myOrders?.length) {
-      try {
-        const pendingResults = await Promise.all(myOrders.map((o) => hasPendingAction(o.id)));
-        const staleResults = await Promise.all(myOrders.map((o) => hasStalePendingAction(o.id)));
-        const pending = new Set<string>();
-        const stale = new Set<string>();
-        myOrders.forEach((o, i) => {
-          if (pendingResults[i]) pending.add(o.id);
-          if (staleResults[i]) stale.add(o.id);
-        });
-        setPendingOrderIds(pending);
-        setStaleOrderIds(stale);
-      } catch (err) {
-        console.warn('[OrdersScreen] onRefresh: failed to check pending actions:', err);
-      }
-    }
     setRefreshing(false);
-  }, [fetchPool, myOrders]);
+  }, [fetchPool]);
 
   // Accept order
   const handleAccept = useCallback(
@@ -497,8 +518,10 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
   const renderItem = ({ item, section }: { item: OrderModel; section: SectionData }) => {
     const isPool = section.title === 'Tersedia';
     const isMyOrder = section.title === 'Order Saya';
-    const hasPending = isMyOrder && pendingOrderIds.has(item.id);
-    const isStale = isMyOrder && staleOrderIds.has(item.id);
+    // Kartu Order Saya memakai status yang sedang berlaku: kalau ada aksi
+    // status yang antre, status targetnya yang tampil.
+    const actions = isMyOrder ? actionsByOrderId.get(item.id) ?? [] : [];
+    const { displayStatus, syncState } = deriveOrderSyncView(readOrderStatus(item), actions);
     return (
       <TouchableOpacity
         style={styles.card}
@@ -507,14 +530,14 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
         <View style={styles.cardMain}>
           <Text style={styles.cardTitle}>Order #{item.id.slice(0, 8)}</Text>
           <Text style={styles.cardMeta}>
-            {item.status} · {item.totalCents} {item.currency}
+            {displayStatus} · {readTotalCents(item)} {readCurrency(item)}
           </Text>
-          {hasPending && !isStale && (
+          {syncState === 'pending' && (
             <Text style={styles.pendingBadge}>Menunggu sinkronisasi</Text>
           )}
-          {isStale && (
+          {syncState === 'stale' && (
             <Text style={styles.stalePendingBadge}>
-              Belum tersinkron dari sejam lalu — cek koneksi internet kamu
+              Belum tersinkron dari seam lalu
             </Text>
           )}
         </View>
@@ -590,7 +613,7 @@ const OrdersScreenWithObservables = withDatabase(
               Q.where('deleted_at', null),
               Q.sortBy('updated_at', Q.desc),
             )
-            .observe()
+            .observeWithColumns(['status', 'updated_at'])
         : of<OrderModel[]>([]),
       // Baris order dengan driver_id null dan last_conflict_reason 'released'
       // atau 'reassigned', untuk kotak pemberitahuan order yang lepas.

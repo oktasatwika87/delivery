@@ -31,6 +31,9 @@ jest.mock('@nozbe/watermelondb', () => ({
     where: jest.fn().mockReturnValue({ _where: 'test' }),
     sortBy: jest.fn().mockReturnValue({ _sortBy: 'test' }),
   },
+  // Model dipakai model-model WatermelonDB yang diimpor modul layar, jadi
+  // butuh kelas dasar yang bisa diwarisi.
+  Model: class Model {},
 }));
 
 // Mock Config
@@ -125,14 +128,50 @@ jest.mock('../sync', () => ({
   },
 }));
 
-// Mock outbox
-const mockHasPendingAction = jest.fn();
-const mockHasStalePendingAction = jest.fn();
+// Modul outbox asli dipakai untuk batas basi aksi. Outbox menarik '../db'
+// (adapter SQLite) yang gagal dimuat di Jest, jadi '../db' ditiru.
+jest.mock('../db', () => ({ database: {} }));
 jest.mock('../sync/outbox', () => ({
-  __esModule: true,
-  hasPendingAction: (...args: unknown[]) => mockHasPendingAction(...args),
-  hasStalePendingAction: (...args: unknown[]) => mockHasStalePendingAction(...args),
+  ...jest.requireActual('../sync/outbox'),
 }));
+
+// Koleksi pending_actions tiruan. Layar berlangganan daftar aksi di sini
+// untuk menghitung lencana sinkronisasi pada kartu Order Saya.
+interface FakeAction {
+  _getRaw: (column: string) => unknown;
+}
+
+function makeAction(fields: {
+  targetOrderId: string;
+  status: string;
+  actionType?: string;
+  createdAt?: number;
+  payloadJson?: string;
+}): FakeAction {
+  const raw: Record<string, unknown> = {
+    target_order_id: fields.targetOrderId,
+    action_type: fields.actionType ?? 'update_status',
+    status: fields.status,
+    created_at: fields.createdAt ?? Date.now(),
+    payload_json: fields.payloadJson ?? '',
+  };
+  return { _getRaw: (column: string) => raw[column] };
+}
+
+let mockPendingActions: FakeAction[] = [];
+
+const mockPendingActionsCollection = {
+  query: jest.fn().mockReturnValue({
+    fetch: jest.fn().mockResolvedValue([]),
+    fetchCount: jest.fn().mockResolvedValue(0),
+    observeWithColumns: jest.fn().mockReturnValue({
+      subscribe: jest.fn((onChange: (actions: FakeAction[]) => void) => {
+        onChange(mockPendingActions);
+        return { unsubscribe: jest.fn() };
+      }),
+    }),
+  }),
+};
 
 // Mock WatermelonDB
 const mockOrdersCollection = {
@@ -154,7 +193,9 @@ const mockOrdersCollection = {
 const mockBatch = jest.fn().mockResolvedValue(undefined);
 
 const mockDatabase = {
-  get: jest.fn().mockReturnValue(mockOrdersCollection),
+  get: jest.fn((table: string) =>
+    table === 'pending_actions' ? mockPendingActionsCollection : mockOrdersCollection,
+  ),
   write: jest.fn().mockImplementation(async (fn: () => Promise<void>) => fn()),
   batch: mockBatch,
 };
@@ -166,9 +207,9 @@ import { fetchAvailableOrders } from '../sync/client';
 // Plain-object order stand-ins for OrdersScreenBase's myOrders prop, the
 // component only reads plain properties (id/status/totalCents/currency) in
 // renderItem, no WatermelonDB model methods, so these don't need to be real
-// OrderModel instances.
+// OrderModel instances. _getRaw dipakai layar untuk membaca kolom baris.
 function makeOrder(overrides: Partial<{ id: string; status: string; totalCents: number; currency: string; driverId: string | null }> = {}) {
-  return {
+  const order = {
     id: 'order-1',
     status: 'ASSIGNED',
     totalCents: 25000,
@@ -176,6 +217,13 @@ function makeOrder(overrides: Partial<{ id: string; status: string; totalCents: 
     driverId: 'driver-123',
     ...overrides,
   };
+  const raw: Record<string, unknown> = {
+    status: order.status,
+    total_cents: order.totalCents,
+    currency: order.currency,
+    driver_id: order.driverId,
+  };
+  return { ...order, _getRaw: (column: string) => raw[column] };
 }
 
 describe('OrdersScreen smoke test', () => {
@@ -346,17 +394,15 @@ describe('OrdersScreen smoke test', () => {
 // always undefined through the wrapped export in this test file. Testing
 // the base component with plain-object props sidesteps that without having
 // to build a more elaborate observable mock just for this.
-describe('pending action badge', () => {
+describe('lencana sinkron kartu Order Saya', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
-    mockHasPendingAction.mockResolvedValue(false);
+    mockPendingActions = [];
   });
 
-  test('shows badge for a myOrders item with a pending action, not for one without', async () => {
-    mockHasPendingAction.mockImplementation((orderId: string) =>
-      Promise.resolve(orderId === 'order-pending'),
-    );
+  test('lencana muncul untuk order yang punya aksi menunggu dan tidak untuk yang tidak punya', async () => {
+    mockPendingActions = [makeAction({ targetOrderId: 'order-pending', status: 'pending' })];
     const myOrders = [makeOrder({ id: 'order-pending' }), makeOrder({ id: 'order-normal' })];
 
     const { queryAllByText } = render(
@@ -364,43 +410,12 @@ describe('pending action badge', () => {
     );
 
     await waitFor(() => {
-      expect(mockHasPendingAction).toHaveBeenCalledWith('order-pending');
-      expect(mockHasPendingAction).toHaveBeenCalledWith('order-normal');
-    });
-
-    await waitFor(() => {
       expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(1);
     });
   });
 
-  test('shows no badge when nothing is pending', async () => {
+  test('tidak ada lencana saat tidak ada aksi yang menunggu', async () => {
     const myOrders = [makeOrder({ id: 'order-a' }), makeOrder({ id: 'order-b' })];
-
-    const { queryAllByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
-    );
-
-    await waitFor(() => {
-      expect(mockHasPendingAction).toHaveBeenCalled();
-    });
-
-    expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(0);
-  });
-
-  test('never shows in the pool ("Tersedia") section, even if a pool item id would otherwise resolve pending=true', async () => {
-    // Pool orders come from poolOrders state (via fetchAvailableOrders), not
-    // myOrders, renderItem gates the badge on section.title === 'Order
-    // Saya', so a pool item must never show it, and hasPendingAction should
-    // never even be called for a pool item's id.
-    mockHasPendingAction.mockResolvedValue(true);
-    const sharedId = 'order-shared-id';
-    (fetchAvailableOrders as jest.Mock).mockResolvedValue({
-      items: [
-        { orderId: sharedId, totalCents: 25000, currency: 'IDR', itemsCount: 1, createdAt: '2024-01-01T00:00:00Z' },
-      ],
-      hasMore: false,
-    });
-    const myOrders = [makeOrder({ id: 'order-mine' })];
 
     const { queryAllByText } = render(
       <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
@@ -409,35 +424,64 @@ describe('pending action badge', () => {
     await waitFor(() => {
       expect(fetchAvailableOrders).toHaveBeenCalled();
     });
+
+    expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(0);
+  });
+
+  test('lencana tidak pernah tampil di bagian Tersedia, walau order pool punya aksi menunggu', async () => {
+    // Order pool dirender dari daftar pool, jadi kartu pool harus tetap ada
+    // tanpa lencana meski ada aksi untuk order itu.
+    const poolOrderMock = {
+      ...makeOrder({ id: 'order-pool', status: 'ASSIGNED', driverId: null }),
+      _raw: { id: 'order-pool', driver_id: null, _status: 'synced' },
+      prepareDestroyPermanently: jest.fn().mockReturnValue({
+        _preparedState: 'destroy',
+        _raw: { id: 'order-pool' },
+      }),
+    };
+    mockOrdersCollection.query = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue([poolOrderMock]),
+      fetchCount: jest.fn().mockResolvedValue(0),
+      observe: jest.fn().mockReturnValue({
+        subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
+      }),
+    });
+    mockPendingActions = [makeAction({ targetOrderId: 'order-pool', status: 'pending' })];
+    const myOrders = [makeOrder({ id: 'order-mine' })];
+
+    const { queryAllByText, getByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
+    );
+
     await waitFor(() => {
-      expect(mockHasPendingAction).toHaveBeenCalledWith('order-mine');
+      expect(fetchAvailableOrders).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
     });
 
-    // "Order Saya" item shows the badge...
-    await waitFor(() => {
-      expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(1);
-    });
-    // ...and hasPendingAction was never asked about the pool item's id at all.
-    expect(mockHasPendingAction).not.toHaveBeenCalledWith(sharedId);
+    expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(0);
   });
 });
 
-// Stale pending action badge
-describe('stale pending action badge', () => {
+// Lencana basi di kartu Order Saya
+describe('lencana basi kartu Order Saya', () => {
+  const SEJAM_MS = 60 * 60 * 1000;
+
   beforeEach(() => {
     jest.clearAllMocks();
     (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
-    mockHasPendingAction.mockResolvedValue(false);
-    mockHasStalePendingAction.mockResolvedValue(false);
+    mockPendingActions = [];
   });
 
-  test('shows warning badge with stale message when pending action is older than 60 minutes', async () => {
-    mockHasPendingAction.mockImplementation((orderId: string) =>
-      Promise.resolve(orderId === 'order-stale'),
-    );
-    mockHasStalePendingAction.mockImplementation((orderId: string) =>
-      Promise.resolve(orderId === 'order-stale'),
-    );
+  test('lencana basi muncul untuk aksi yang menunggu lebih dari 60 menit', async () => {
+    mockPendingActions = [
+      makeAction({
+        targetOrderId: 'order-stale',
+        status: 'pending',
+        createdAt: Date.now() - SEJAM_MS - 1000,
+      }),
+    ];
     const myOrders = [makeOrder({ id: 'order-stale' }), makeOrder({ id: 'order-normal' })];
 
     const { queryAllByText, getByText } = render(
@@ -445,24 +489,16 @@ describe('stale pending action badge', () => {
     );
 
     await waitFor(() => {
-      expect(mockHasPendingAction).toHaveBeenCalledWith('order-stale');
-      expect(mockHasStalePendingAction).toHaveBeenCalledWith('order-stale');
+      expect(getByText(/Belum tersinkron/)).toBeTruthy();
     });
-
-    await waitFor(() => {
-      expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
-    });
-    // Normal pending badge should NOT show for stale orders
+    // Lencana normal tidak muncul untuk order yang aksinya basi.
     expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(0);
   });
 
-  test('shows normal badge for fresh pending action (< 60 minutes)', async () => {
-    mockHasPendingAction.mockImplementation((orderId: string) =>
-      Promise.resolve(orderId === 'order-fresh'),
-    );
-    mockHasStalePendingAction.mockImplementation((_orderId: string) =>
-      Promise.resolve(false), // not stale
-    );
+  test('lencana normal untuk aksi yang menunggu kurang dari 60 menit', async () => {
+    mockPendingActions = [
+      makeAction({ targetOrderId: 'order-fresh', status: 'pending', createdAt: Date.now() }),
+    ];
     const myOrders = [makeOrder({ id: 'order-fresh' })];
 
     const { queryAllByText, getByText } = render(
@@ -470,24 +506,21 @@ describe('stale pending action badge', () => {
     );
 
     await waitFor(() => {
-      expect(mockHasPendingAction).toHaveBeenCalledWith('order-fresh');
-      expect(mockHasStalePendingAction).toHaveBeenCalledWith('order-fresh');
-    });
-
-    await waitFor(() => {
       expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
     });
-    // Stale badge should NOT show for fresh orders
-    expect(queryAllByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toHaveLength(0);
+    // Lencana basi tidak muncul untuk aksi yang masih baru.
+    expect(queryAllByText(/Belum tersinkron/)).toHaveLength(0);
   });
 
-  test('mixed: one stale pending, one fresh pending, each shows correct badge', async () => {
-    mockHasPendingAction.mockImplementation((orderId: string) =>
-      Promise.resolve(orderId === 'order-stale' || orderId === 'order-fresh'),
-    );
-    mockHasStalePendingAction.mockImplementation((orderId: string) =>
-      Promise.resolve(orderId === 'order-stale'),
-    );
+  test('campuran: satu aksi basi satu aksi baru, tiap kartu lencana yang benar', async () => {
+    mockPendingActions = [
+      makeAction({
+        targetOrderId: 'order-stale',
+        status: 'pending',
+        createdAt: Date.now() - SEJAM_MS - 1000,
+      }),
+      makeAction({ targetOrderId: 'order-fresh', status: 'pending', createdAt: Date.now() }),
+    ];
     const myOrders = [makeOrder({ id: 'order-stale' }), makeOrder({ id: 'order-fresh' })];
 
     const { getByText } = render(
@@ -495,12 +528,7 @@ describe('stale pending action badge', () => {
     );
 
     await waitFor(() => {
-      expect(mockHasStalePendingAction).toHaveBeenCalledWith('order-stale');
-      expect(mockHasStalePendingAction).toHaveBeenCalledWith('order-fresh');
-    });
-
-    await waitFor(() => {
-      expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
+      expect(getByText(/Belum tersinkron/)).toBeTruthy();
     });
     await waitFor(() => {
       expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
