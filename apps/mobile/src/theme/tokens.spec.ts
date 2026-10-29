@@ -22,8 +22,8 @@ describe('token tema', () => {
     }
   });
 
-  it('jumlah kunci colors 32', () => {
-    expect(Object.keys(colors)).toHaveLength(32);
+  it('jumlah kunci colors 33', () => {
+    expect(Object.keys(colors)).toHaveLength(33);
   });
 
   it('teks tombol nonaktif sama dengan warna teks muted', () => {

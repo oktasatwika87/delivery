@@ -34,6 +34,8 @@ export const colors = {
   surfaceMuted: ink50,
   surfaceInverse: ink950,
   fillNeutral: ink200,
+  /** Warna isi pada latar gelap, misalnya pil hitungan tab yang tidak aktif. */
+  fillInverse: ink700,
   text: ink950,
   textMuted: ink600,
   textSubtle: ink500,
