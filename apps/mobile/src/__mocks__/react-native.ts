@@ -82,7 +82,9 @@ const Pressable = (props: Record<string, unknown>) => {
   const { style, children, ...rest } = props;
   const gaya = adalahGayaFungsi(style) ? style({ pressed: false }) : style;
   const isi = adalahAnakFungsi(children) ? children({ pressed: false }) : children;
-  return React.createElement('Pressable', { ...rest, style: gaya }, isi);
+  // Tombol nonaktif tidak memanggil aksi, jadi aksinya dikosongkan saja.
+  const aksi = rest.disabled === true ? () => {} : rest.onPress;
+  return React.createElement('Pressable', { ...rest, onPress: aksi, style: gaya }, isi);
 };
 Pressable.displayName = 'Pressable';
 // SectionList stub, makeComponent() alone only renders props.children, but
