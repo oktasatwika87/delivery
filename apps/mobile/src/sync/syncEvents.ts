@@ -8,14 +8,10 @@
  */
 export interface OrderConflictEvent {
   orderId: string;
-  reason: 'reassigned' | 'order-status-conflict' | 'accepted-by-other' | 'rejected-oc' | 'cancelled-by-server';
+  reason: 'reassigned' | 'order-status-conflict' | 'rejected-oc' | 'cancelled-by-server';
   serverStatus: string;
   serverChangedAt: string;
   ackReason?: string; // dari server, kalau ada
-}
-
-export interface OrderRemovedFromViewEvent {
-  orderId: string;
 }
 
 export interface OrderRejectedEvent {
@@ -38,7 +34,6 @@ export interface AuthExpiredEvent {
 /** Event names supported by syncEvents */
 export type SyncEventName =
   | 'orderConflict'
-  | 'orderRemovedFromView'
   | 'orderRejected'
   | 'pool-refresh'
   | 'auth-expired';

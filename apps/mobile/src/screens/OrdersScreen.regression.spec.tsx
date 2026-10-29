@@ -96,7 +96,7 @@ jest.mock('../sync/ordersSocket', () => ({
   },
 }));
 
-// syncEvents: useEffect berlangganan orderRemovedFromView.
+// syncEvents: dipakai layar untuk pool-refresh.
 jest.mock('../sync/syncEvents', () => ({
   syncEvents: {
     emit: jest.fn(),

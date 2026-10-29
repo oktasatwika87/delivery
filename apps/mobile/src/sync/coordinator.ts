@@ -963,29 +963,15 @@ export class SyncCoordinator implements Coordinator {
 
           // Emit event untuk order entity
           if (ack.entityType === 'order') {
-            const serverDriverId = (ack.serverData as any).driverId;
-            // currentUserId hanya dibutuhkan untuk deteksi order di-accept
-            // oleh driver lain (orderRemovedFromView). Tidak lagi di-hoist
-            // untuk prepareUpdate callback, Temuan 1: cancel-offline
-            // discriminator sudah dipindah ke outbox.ts handleVersionConflict.
-            const currentUserId = await getCurrentUserId();
-            const isAcceptedByOther = serverDriverId != null && serverDriverId !== currentUserId;
-
-            const reason = isAcceptedByOther ? 'accepted-by-other' : 'order-status-conflict';
-
+            // Order yang lepas dari driver ditandai lewat pull dan tampil
+            // di kotak "Order sudah tidak ditugaskan ke Anda", jadi di sini
+            // tidak ada lagi pemberitahuan order diambil driver lain.
             syncEvents.emit('orderConflict', {
               orderId: ack.id,
-              reason,
+              reason: 'order-status-conflict',
               serverStatus: (ack.serverData as any).status ?? 'unknown',
               serverChangedAt: ack.serverChangedAt ?? new Date().toISOString(),
             });
-
-            // orderRemovedFromView HANYA emit kalau order di-accept oleh driver lain
-            if (isAcceptedByOther) {
-              syncEvents.emit('orderRemovedFromView', {
-                orderId: ack.id,
-              });
-            }
           }
         }
       } else if (ack.status === 'accepted') {

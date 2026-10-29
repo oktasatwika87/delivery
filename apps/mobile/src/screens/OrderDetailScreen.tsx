@@ -86,7 +86,7 @@ interface OrderConflictBannerProps {
 function OrderConflictBanner({ event, onDismiss }: OrderConflictBannerProps): React.JSX.Element | null {
   if (!event) return null;
 
-  const isActionNeeded = event.reason === 'reassigned' || event.reason === 'rejected-oc' || event.reason === 'accepted-by-other';
+  const isActionNeeded = event.reason === 'reassigned' || event.reason === 'rejected-oc';
   const backgroundColor = isActionNeeded ? '#fef3c7' : '#e5e7eb';
   const borderColor = isActionNeeded ? '#fcd34d' : '#d1d5db';
   const textColor = isActionNeeded ? '#92400e' : '#374151';
@@ -97,9 +97,6 @@ function OrderConflictBanner({ event, onDismiss }: OrderConflictBannerProps): Re
     }
     if (event.reason === 'rejected-oc') {
       return event.ackReason ?? 'Order tidak bisa diperbarui — status di server sudah berubah.';
-    }
-    if (event.reason === 'accepted-by-other') {
-      return 'Order ini sudah diambil driver lain. Pilih order lain dari daftar Tersedia.';
     }
     // order-status-conflict
     return `Status order diperbarui server — sekarang ${event.serverStatus}.`;

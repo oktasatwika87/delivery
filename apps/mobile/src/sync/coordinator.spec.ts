@@ -1717,7 +1717,7 @@ describe('SyncCoordinator', () => {
       expect(overwritten._raw._status).toBe('synced');
     });
 
-    test('conflict ack, driverId berbeda dari currentUserId -> reason accepted-by-other', async () => {
+    test('conflict ack, driverId berbeda dari currentUserId -> reason order-status-conflict', async () => {
       const orderRow = createMockRow('order-accepted-other', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'ASSIGNED';
@@ -1752,7 +1752,7 @@ describe('SyncCoordinator', () => {
 
       expect(emitMock).toHaveBeenCalledWith('orderConflict', expect.objectContaining({
         orderId: 'order-accepted-other',
-        reason: 'accepted-by-other',
+        reason: 'order-status-conflict',
         serverStatus: 'ASSIGNED',
       }));
     });
@@ -1841,7 +1841,7 @@ describe('SyncCoordinator', () => {
       }));
     });
 
-    test('conflict ack, isAcceptedByOther true -> emit orderRemovedFromView', async () => {
+    test('conflict ack, driverId berbeda -> orderRemovedFromView tidak pernah dipancarkan', async () => {
       const orderRow = createMockRow('order-removed-view', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'ASSIGNED';
@@ -1874,12 +1874,13 @@ describe('SyncCoordinator', () => {
       // @ts-expect-error - accessing private method for testing
       await coordinator.resolveAcks(acks, mockDb);
 
-      expect(emitMock).toHaveBeenCalledWith('orderRemovedFromView', expect.objectContaining({
-        orderId: 'order-removed-view',
-      }));
+      const removedCalls = emitMock.mock.calls.filter(
+        ([event]) => event === 'orderRemovedFromView'
+      );
+      expect(removedCalls).toHaveLength(0);
     });
 
-    test('conflict ack, isAcceptedByOther false, TIDAK emit orderRemovedFromView', async () => {
+    test('conflict ack, driverId sama -> orderRemovedFromView tidak pernah dipancarkan', async () => {
       const orderRow = createMockRow('order-keep-view', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'PREPARING';
