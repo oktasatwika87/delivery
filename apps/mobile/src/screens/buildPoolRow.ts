@@ -5,6 +5,9 @@
  *   id, _status, _changed, status, total_cents, currency, server_version,
  *   items_json, address_json, customer_id, driver_id, created_at, updated_at
  *
+ * address_json hanya berisi kota dari server. Alamat lengkap dan daftar
+ * barang baru datang dari respons Terima.
+ *
  * Tidak mengakses database dan tidak memanggil Date.now(). Waktu sekarang
  * (nowMs) diberikan dari luar oleh fetchPool.
  */
@@ -24,8 +27,21 @@ export interface PoolItem {
   orderId: string;
   totalCents: number;
   currency: string;
+  city?: string;
   createdAt: string;
   version: number;
+}
+
+/**
+ * Susun address_json untuk baris pool. Baris pool hanya boleh menyimpan
+ * kota dari server, bukan alamat lengkap dan bukan barang. Kalau kota tidak
+ * ada atau isinya cuma spasi, address_json jadi objek kosong.
+ */
+export function poolAddressJson(city: string | undefined): string {
+  if (typeof city === 'string' && city.trim().length > 0) {
+    return JSON.stringify({ city });
+  }
+  return '{}';
 }
 
 export function buildPoolRow(item: PoolItem, nowMs: number): Record<string, unknown> {
@@ -39,7 +55,7 @@ export function buildPoolRow(item: PoolItem, nowMs: number): Record<string, unkn
     currency: item.currency,
     server_version: item.version,
     items_json: '[]',
-    address_json: '{}',
+    address_json: poolAddressJson(item.city),
     customer_id: '',
     driver_id: null,
     created_at: createdAtMs,

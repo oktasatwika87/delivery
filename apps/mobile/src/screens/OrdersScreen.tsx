@@ -23,7 +23,7 @@ import { fetchAvailableOrders, UnauthorizedError, acceptOrder, ApiError } from '
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
 import { hasPendingAction, hasStalePendingAction } from '../sync/outbox';
-import { buildPoolRow } from './buildPoolRow';
+import { buildPoolRow, poolAddressJson } from './buildPoolRow';
 import {
   ReleasedOrdersNotice,
   dismissReleasedOrders,
@@ -174,11 +174,15 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
             // Status pool order selalu ASSIGNED (pool hanya berisi order ASSIGNED).
             // available order payload tidak mengirim status, jadi hardcode di sini.
             r._setRaw('status', 'ASSIGNED');
+            // Baris pool hanya boleh menyimpan kota dari server, jadi alamat
+            // lengkap dan barang lama dibuang.
+            r._setRaw('address_json', poolAddressJson(item.city));
+            r._setRaw('items_json', '[]');
             // Internal fields: not in schema, set directly on _raw.
             r._raw._status = 'synced';
             r._raw._changed = '';
             // updated_at tetap Date.now(), sama seperti buildPoolRow.
-            // created_at, items_json, address_json, customer_id tidak diubah.
+            // created_at dan customer_id tidak diubah.
             // last_conflict_* tidak diubah, supaya banner dan kotak
             // pemberitahuan tidak hilang karena fetchPool.
           }),
@@ -217,6 +221,10 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
               r._setRaw('currency', item.currency);
               // Status pool selalu ASSIGNED; order masuk daftar Tersedia.
               r._setRaw('status', 'ASSIGNED');
+              // Baris pool hanya boleh menyimpan kota dari server, jadi alamat
+              // lengkap dan barang lama dibuang.
+              r._setRaw('address_json', poolAddressJson(item.city));
+              r._setRaw('items_json', '[]');
               r._raw._status = 'synced';
               r._raw._changed = '';
               // last_conflict_* tidak diubah: banner masih berlaku.
@@ -229,6 +237,7 @@ export function OrdersScreenBase({ database, myOrders, releasedOrders = [] }: Pr
             orderId: item.orderId,
             totalCents: item.totalCents,
             currency: item.currency,
+            city: item.city,
             createdAt: item.createdAt,
             version: item.version,
           },

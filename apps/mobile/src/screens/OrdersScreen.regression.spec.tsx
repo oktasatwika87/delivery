@@ -184,13 +184,13 @@ const POOL_ITEM: AvailableOrderItem = {
 // waktu yang dikunci untuk Date.now() selama tes: harapan updated_at, dan pengganti created_at kalau createdAt tidak valid.
 const FIXED_NOW_MS = 1_750_000_000_000;
 
-// harapan per kolom, diturunkan dari item dan skema, bukan dari keluaran kode. customer_id dan driver_id kosong karena order pool belum punya customer dan driver. items_json '[]' dan address_json '{}' karena item pool tidak membawa daftar barang dan alamat. server_version diambil dari version pada item.
+// harapan per kolom, diturunkan dari item dan skema, bukan dari keluaran kode. customer_id dan driver_id kosong karena order pool belum punya customer dan driver. items_json '[]' karena item pool tidak membawa daftar barang. address_json hanya berisi kota dari server, tanpa alamat lengkap. server_version diambil dari version pada item.
 const POOL_ROW_EXPECTED: Record<string, unknown> = {
   customer_id: '',
   driver_id: null,
   status: 'ASSIGNED',
   items_json: '[]',
-  address_json: '{}',
+  address_json: JSON.stringify({ city: 'Kota Uji' }),
   total_cents: 23000,
   currency: 'IDR',
   notes: null,
@@ -322,9 +322,9 @@ describe('OrdersScreen fetchPool - regresi kunci camelCase di prepareCreateFromD
       expect(readJsonColumn(row, 'items_json')).toEqual([]);
     });
 
-    it('address_json berisi JSON yang bisa diurai jadi objek kosong (item pool tidak membawa alamat)', async () => {
+    it('address_json berisi JSON yang bisa diurai jadi objek dengan kota saja dari server (item pool tidak membawa alamat lengkap)', async () => {
       const row = await db.get<OrderModel>('orders').find(POOL_ID);
-      expect(readJsonColumn(row, 'address_json')).toEqual({});
+      expect(readJsonColumn(row, 'address_json')).toEqual({ city: 'Kota Uji' });
     });
 
     it('created_at sama dengan parseIsoMs(createdAt) dari data item server', async () => {
@@ -377,6 +377,39 @@ describe('OrdersScreen fetchPool - regresi kunci camelCase di prepareCreateFromD
     });
   });
 
+  describe('fetchPool dengan kota yang tidak ada atau spasi saja', () => {
+    it('item tanpa city: address_json tetap objek kosong', async () => {
+      const item: AvailableOrderItem = {
+        orderId: 'pool-tanpa-kota',
+        totalCents: 12000,
+        currency: 'IDR',
+        itemsCount: 1,
+        createdAt: '2026-03-01T00:00:00.000Z',
+        version: 1,
+      };
+      await renderAndAwaitPool(db, [item]);
+
+      const row = await db.get<OrderModel>('orders').find('pool-tanpa-kota');
+      expect(readJsonColumn(row, 'address_json')).toEqual({});
+    });
+
+    it('item dengan city spasi saja: address_json tetap objek kosong', async () => {
+      const item: AvailableOrderItem = {
+        orderId: 'pool-kota-spasi',
+        totalCents: 13000,
+        currency: 'IDR',
+        itemsCount: 1,
+        city: '   ',
+        createdAt: '2026-03-02T00:00:00.000Z',
+        version: 1,
+      };
+      await renderAndAwaitPool(db, [item]);
+
+      const row = await db.get<OrderModel>('orders').find('pool-kota-spasi');
+      expect(readJsonColumn(row, 'address_json')).toEqual({});
+    });
+  });
+
   describe('fetchPool dengan daftar kosong', () => {
     it('tidak menulis baris apa pun ke koleksi orders', async () => {
       await renderAndAwaitPool(db, []);
@@ -415,6 +448,7 @@ describe('OrdersScreen fetchPool - regresi kunci camelCase di prepareCreateFromD
         totalCents: 99000,
         currency: 'IDR',
         itemsCount: 1,
+        city: 'Kota Server',
         createdAt: POOL_CREATED_AT,
         version: 7,
       };
@@ -429,6 +463,9 @@ describe('OrdersScreen fetchPool - regresi kunci camelCase di prepareCreateFromD
       expect(row._getRaw('driver_id')).toBe('preexisting-driver');
       expect(row._getRaw('total_cents')).toBe(88000);
       expect(row._getRaw('server_version')).toBe(5);
+      // alamat dan barang baris lama tidak ditulis ulang dari kota server
+      expect(row._getRaw('address_json')).toBe('{"street":"preexisting"}');
+      expect(row._getRaw('items_json')).toBe('[{"id":"preexisting-item"}]');
       // _status tidak berubah (tetap seeded value, fetchPool tidak menyentuh non-pool).
       expect(row._raw._status).toBe('synced');
     });
@@ -583,6 +620,42 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
     });
   });
 
+  // Tes 1b: baris pool yang sudah ada ditulis ulang dari kota server.
+  // Alamat lengkap dan barang lama harus hilang, created_at dan customer_id tetap.
+  describe('tes 1b: baris pool yang sudah ada ditulis ulang dari kota server', () => {
+    it('address_json jadi hanya kota dari server, items_json jadi [], created_at dan customer_id tetap', async () => {
+      const rowId = 'pool-t1b-1';
+      await seedPoolRow(rowId, {
+        ...defaultRowFields,
+        customer_id: 'cust-tetap',
+        address_json: '{"street":"Jl. Lama 1","city":"Badung"}',
+        items_json: '[{"name":"Lama"}]',
+        created_at: 1_600_000_000_000,
+        updated_at: 1_600_000_000_000,
+      });
+
+      const updatedItem: AvailableOrderItem = {
+        orderId: rowId,
+        totalCents: 77000,
+        currency: 'IDR',
+        itemsCount: 1,
+        city: 'Denpasar',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        version: 9,
+      };
+      await renderAndAwaitPool(db, [updatedItem]);
+
+      const row = await db.get<OrderModel>('orders').find(rowId);
+      expect(readJsonColumn(row, 'address_json')).toEqual({ city: 'Denpasar' });
+      expect(readJsonColumn(row, 'items_json')).toEqual([]);
+      expect(row._getRaw('created_at')).toBe(1_600_000_000_000);
+      expect(row._getRaw('customer_id')).toBe('cust-tetap');
+      // baris pool hasil tulis ulang tetap synced dan tidak akan di-push
+      expect(row._raw._status).toBe('synced');
+      expect(row._raw._changed).toBe('');
+    });
+  });
+
   // Tes 2: baris pool yang hilang dari daftar (hasMore false) terhapus permanen.
   describe('tes 2: baris pool yang hilang dari daftar (hasMore false) dihapus permanen', () => {
     it('baris tidak ada di adapter setelah fetchPool dan tidak akan di-push', async () => {
@@ -648,6 +721,8 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
       await seedPoolRow(pendingRowId, {
         ...defaultRowFields,
         total_cents: 33000,
+        address_json: '{"street":"Jl. Lama 1","city":"Badung"}',
+        items_json: '[{"name":"Lama"}]',
         server_version: 2,
         created_at: 1_500_000_000_000,
         updated_at: 1_500_000_000_000,
@@ -681,6 +756,7 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
           totalCents: 77000,
           currency: 'IDR',
           itemsCount: 1,
+          city: 'Denpasar',
           createdAt: '2026-01-01T00:00:00.000Z',
           version: 8,
         },
@@ -692,6 +768,9 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
       expect(row._getRaw('total_cents')).toBe(33000); // tidak berubah
       expect(row._getRaw('server_version')).toBe(2);  // tidak berubah
       expect(row._getRaw('updated_at')).toBe(1_500_000_000_000); // tidak berubah
+      // alamat dan barang lama tidak ditulis ulang
+      expect(row._getRaw('address_json')).toBe('{"street":"Jl. Lama 1","city":"Badung"}');
+      expect(row._getRaw('items_json')).toBe('[{"name":"Lama"}]');
       expect(row._raw._status).toBe('synced');
     });
   });
@@ -707,6 +786,8 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
           _changed: '',
           ...defaultRowFields,
           total_cents: 44000,   // nilai lokal yang berbeda
+          address_json: '{"street":"Jl. Lama 1","city":"Badung"}',
+          items_json: '[{"name":"Lama"}]',
           server_version: 2,
           created_at: 1_500_000_000_000,
           updated_at: 1_500_000_000_000,
@@ -720,6 +801,7 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
           totalCents: 88000,  // nilai server berbeda
           currency: 'IDR',
           itemsCount: 1,
+          city: 'Denpasar',
           createdAt: '2026-01-01T00:00:00.000Z',
           version: 7,
         },
@@ -731,6 +813,9 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
       expect(row._raw._status).toBe('updated');
       // total_cents lokal TIDAK ditimpa server
       expect(row._getRaw('total_cents')).toBe(44000);
+      // alamat dan barang lokal TIDAK ditulis ulang dari kota server
+      expect(row._getRaw('address_json')).toBe('{"street":"Jl. Lama 1","city":"Badung"}');
+      expect(row._getRaw('items_json')).toBe('[{"name":"Lama"}]');
     });
   });
 
@@ -1037,8 +1122,8 @@ describe('fetchPool - baris lepas (driver_id null, last_conflict_reason terisi) 
       customer_id: 'cust-rel-1',
       driver_id: null,
       status: 'PREPARING',
-      items_json: '[]',
-      address_json: '{}',
+      items_json: '[{"name":"Lama"}]',
+      address_json: '{"street":"Jl. Lama 1","city":"Badung"}',
       total_cents: 12000,
       currency: 'IDR',
       notes: null,
@@ -1061,6 +1146,7 @@ describe('fetchPool - baris lepas (driver_id null, last_conflict_reason terisi) 
           totalCents: 25000,
           currency: 'SGD',
           itemsCount: 2,
+          city: 'Ubud',
           createdAt: '2026-02-01T08:00:00.000Z',
           version: 9,
         },
@@ -1080,6 +1166,9 @@ describe('fetchPool - baris lepas (driver_id null, last_conflict_reason terisi) 
     expect(row._getRaw('server_version')).toBe(9);
     expect(row._getRaw('total_cents')).toBe(25000);
     expect(row._getRaw('currency')).toBe('SGD');
+    // alamat lengkap dan barang lama hilang, diganti kota dari server
+    expect(readJsonColumn(row, 'address_json')).toEqual({ city: 'Ubud' });
+    expect(readJsonColumn(row, 'items_json')).toEqual([]);
     // _status synced, _changed kosong
     expect(row._raw._status).toBe('synced');
     expect(row._raw._changed).toBe('');
