@@ -15,6 +15,8 @@
  * Komponen yang di-export HARUS mencakup semua yang dipakai oleh:
  *   - MapScreen.tsx: View, Text, TouchableOpacity, ActivityIndicator, Linking,
  *     StyleSheet.
+ *   - Komponen di src/components: View, Text, TextInput, Pressable,
+ *     ActivityIndicator, StyleSheet.
  *   - @testing-library/react-native (detectHostComponentNames):
  *     View, Text, TextInput, Image, Switch, ScrollView, Modal.
  *     Jika salah satu undefined, RNTL throw "Element type is invalid".
@@ -58,6 +60,31 @@ const Switch = makeComponent('Switch');
 const ScrollView = makeComponent('ScrollView');
 const Modal = makeComponent('Modal');
 const TouchableOpacity = makeComponent('TouchableOpacity');
+
+// Pressable stub. Gaya dan isi boleh berupa fungsi yang menerima keadaan
+// tekan, jadi dipanggil dengan keadaan tidak ditekan.
+interface StateTekan {
+  pressed: boolean;
+}
+
+type GayaFungsi = (state: StateTekan) => unknown;
+type AnakFungsi = (state: StateTekan) => ReactNode;
+
+function adalahGayaFungsi(nilai: unknown): nilai is GayaFungsi {
+  return typeof nilai === 'function';
+}
+
+function adalahAnakFungsi(nilai: unknown): nilai is AnakFungsi {
+  return typeof nilai === 'function';
+}
+
+const Pressable = (props: Record<string, unknown>) => {
+  const { style, children, ...rest } = props;
+  const gaya = adalahGayaFungsi(style) ? style({ pressed: false }) : style;
+  const isi = adalahAnakFungsi(children) ? children({ pressed: false }) : children;
+  return React.createElement('Pressable', { ...rest, style: gaya }, isi);
+};
+Pressable.displayName = 'Pressable';
 // SectionList stub, makeComponent() alone only renders props.children, but
 // the real SectionList takes no children: it renders `sections` itself via
 // renderItem/renderSectionHeader. A dumb passthrough stub silently renders
@@ -245,6 +272,7 @@ module.exports = {
   PermissionsAndroid,
   PixelRatio,
   Platform,
+  Pressable,
   RefreshControl,
   ScrollView,
   SectionList,
