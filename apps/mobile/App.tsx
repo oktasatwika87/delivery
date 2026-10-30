@@ -15,7 +15,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Button, View, StyleSheet } from 'react-native';
+import { ActivityIndicator, Alert, AppState, View, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -352,17 +352,9 @@ function App(): React.JSX.Element {
             )
           ) : role === UserRole.DRIVER ? (
             <Stack.Navigator screenOptions={{ headerShown: false }}>
-              <Stack.Screen
-                name="Orders"
-                component={OrdersScreen}
-                options={{
-                  headerShown: true,
-                  title: 'Order',
-                  headerRight: () => (
-                    <Button title="Keluar" onPress={handleLogout} />
-                  ),
-                }}
-              />
+              <Stack.Screen name="Orders">
+                {() => <OrdersScreen onLogout={handleLogout} />}
+              </Stack.Screen>
               <Stack.Screen name="OrderDetail" component={OrderDetailScreen} />
               <Stack.Screen name="Chat" component={ChatScreen} />
               <Stack.Screen name="Map" component={MapScreen} />

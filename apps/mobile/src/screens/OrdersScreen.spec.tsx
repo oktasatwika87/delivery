@@ -201,7 +201,7 @@ const mockDatabase = {
 };
 
 // Import after mocks
-import { OrdersScreen, OrdersScreenBase } from './OrdersScreen';
+import { OrdersScreen, OrdersScreenBase, handleAcceptRef } from './OrdersScreen';
 import { fetchAvailableOrders } from '../sync/client';
 
 // Plain-object order stand-ins for OrdersScreenBase's myOrders prop, the
@@ -246,7 +246,7 @@ describe('OrdersScreen smoke test', () => {
 
     try {
       // Render synchronously, async HOC chain causes loading state but doesn't throw
-      const { UNSAFE_root } = render(<OrdersScreen database={mockDatabase as never} />);
+      const { UNSAFE_root } = render(<OrdersScreen database={mockDatabase as never} onLogout={jest.fn()} />);
       // Access root to prevent "unused variable" warning
       expect(UNSAFE_root).toBeTruthy();
     } catch (e) {
@@ -265,7 +265,7 @@ describe('OrdersScreen smoke test', () => {
     ];
     (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: poolItems, hasMore: false });
 
-    render(<OrdersScreen database={mockDatabase as never} />);
+    render(<OrdersScreen database={mockDatabase as never} onLogout={jest.fn()} />);
 
     await waitFor(() => {
       expect(fetchAvailableOrders).toHaveBeenCalled();
@@ -310,7 +310,7 @@ describe('OrdersScreen smoke test', () => {
 
     let caughtError: Error | null = null;
     try {
-      render(<OrdersScreen database={mockDatabase as never} />);
+      render(<OrdersScreen database={mockDatabase as never} onLogout={jest.fn()} />);
       await waitFor(() => {
         expect(fetchAvailableOrders).toHaveBeenCalled();
       });
@@ -339,7 +339,7 @@ describe('OrdersScreen smoke test', () => {
 
     let caughtError: Error | null = null;
     try {
-      render(<OrdersScreen database={mockDatabase as never} />);
+      render(<OrdersScreen database={mockDatabase as never} onLogout={jest.fn()} />);
       await waitFor(() => {
         expect(fetchAvailableOrders).toHaveBeenCalled();
       });
@@ -364,7 +364,7 @@ describe('OrdersScreen smoke test', () => {
     ];
     (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: poolItems, hasMore: false });
 
-    render(<OrdersScreen database={mockDatabase as never} />);
+    render(<OrdersScreen database={mockDatabase as never} onLogout={jest.fn()} />);
 
     await waitFor(() => {
       expect(fetchAvailableOrders).toHaveBeenCalled();
@@ -403,10 +403,14 @@ describe('lencana sinkron kartu Order Saya', () => {
 
   test('lencana muncul untuk order yang punya aksi menunggu dan tidak untuk yang tidak punya', async () => {
     mockPendingActions = [makeAction({ targetOrderId: 'order-pending', status: 'pending' })];
-    const myOrders = [makeOrder({ id: 'order-pending' }), makeOrder({ id: 'order-normal' })];
+    // Status PREPARING supaya tab awal Order Saya, tempat kartu ini tampil.
+    const myOrders = [
+      makeOrder({ id: 'order-pending', status: 'PREPARING' }),
+      makeOrder({ id: 'order-normal', status: 'PREPARING' }),
+    ];
 
     const { queryAllByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -415,10 +419,13 @@ describe('lencana sinkron kartu Order Saya', () => {
   });
 
   test('tidak ada lencana saat tidak ada aksi yang menunggu', async () => {
-    const myOrders = [makeOrder({ id: 'order-a' }), makeOrder({ id: 'order-b' })];
+    const myOrders = [
+      makeOrder({ id: 'order-a', status: 'PREPARING' }),
+      makeOrder({ id: 'order-b', status: 'PREPARING' }),
+    ];
 
     const { queryAllByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -450,7 +457,7 @@ describe('lencana sinkron kartu Order Saya', () => {
     const myOrders = [makeOrder({ id: 'order-mine' })];
 
     const { queryAllByText, getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -482,10 +489,10 @@ describe('lencana basi kartu Order Saya', () => {
         createdAt: Date.now() - SEJAM_MS - 1000,
       }),
     ];
-    const myOrders = [makeOrder({ id: 'order-stale' }), makeOrder({ id: 'order-normal' })];
+    const myOrders = [makeOrder({ id: 'order-stale', status: 'PREPARING' }), makeOrder({ id: 'order-normal', status: 'PREPARING' })];
 
     const { queryAllByText, getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -499,10 +506,10 @@ describe('lencana basi kartu Order Saya', () => {
     mockPendingActions = [
       makeAction({ targetOrderId: 'order-fresh', status: 'pending', createdAt: Date.now() }),
     ];
-    const myOrders = [makeOrder({ id: 'order-fresh' })];
+    const myOrders = [makeOrder({ id: 'order-fresh', status: 'PREPARING' })];
 
     const { queryAllByText, getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -521,10 +528,10 @@ describe('lencana basi kartu Order Saya', () => {
       }),
       makeAction({ targetOrderId: 'order-fresh', status: 'pending', createdAt: Date.now() }),
     ];
-    const myOrders = [makeOrder({ id: 'order-stale' }), makeOrder({ id: 'order-fresh' })];
+    const myOrders = [makeOrder({ id: 'order-stale', status: 'PREPARING' }), makeOrder({ id: 'order-fresh', status: 'PREPARING' })];
 
     const { getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -578,7 +585,7 @@ describe('Accept order online gating', () => {
     });
 
     const { getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} onLogout={jest.fn()} />,
     );
 
     // Wait for pool to load
@@ -600,8 +607,9 @@ describe('Accept order online gating', () => {
     // Reset mock write call count before testing guard behavior
     mockDatabase.write.mockClear();
 
-    // Manually trigger handleAccept to test the guard (bypasses disabled prop)
-    await acceptButton?.props.onPress();
+    // Panggil handleAccept langsung. Tombolnya nonaktif, jadi tidak bisa
+    // ditekan untuk menguji penjaga offline.
+    await handleAcceptRef.current?.(poolOrderMock as never);
 
     const Alert = require('react-native').Alert;
     await waitFor(() => {
@@ -624,7 +632,12 @@ describe('Accept order online gating', () => {
       ...makeOrder({ id: 'pool-order-2', status: 'ASSIGNED', driverId: null }),
       _raw: { id: 'pool-order-2', driver_id: null, _status: 'synced' },
       // handleAccept membaca versi baris lewat _getRaw sebelum mengirim Terima.
-      _getRaw: jest.fn((key: string) => (key === 'server_version' ? 1 : undefined)),
+      _getRaw: jest.fn((key: string) => {
+        if (key === 'server_version') return 1;
+        if (key === 'currency') return 'IDR';
+        if (key === 'total_cents') return 25000;
+        return undefined;
+      }),
       prepareDestroyPermanently: jest.fn().mockReturnValue({ _preparedState: 'destroy', _raw: { id: 'pool-order-2' } }),
     };
     mockOrdersCollection.query = jest.fn().mockReturnValue({
@@ -640,7 +653,7 @@ describe('Accept order online gating', () => {
     });
 
     const { getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} onLogout={jest.fn()} />,
     );
 
     // Wait for pool to load
@@ -689,7 +702,7 @@ describe('ambil ulang pool saat ordersSocket connect', () => {
   });
 
   test('event connect memanggil fetchPool (terlihat dari pemanggilan fetchAvailableOrders)', async () => {
-    render(<OrdersScreenBase database={mockDatabase as never} myOrders={[]} />);
+    render(<OrdersScreenBase database={mockDatabase as never} myOrders={[]} onLogout={jest.fn()} />);
 
     // Tunggu sampai OrdersScreen mendaftarkan callback 'connect'
     await waitFor(() => {
@@ -709,7 +722,7 @@ describe('ambil ulang pool saat ordersSocket connect', () => {
   });
 
   test('unmount memanggil unsubscribe untuk listener connect', async () => {
-    const { unmount } = render(<OrdersScreenBase database={mockDatabase as never} myOrders={[]} />);
+    const { unmount } = render(<OrdersScreenBase database={mockDatabase as never} myOrders={[]} onLogout={jest.fn()} />);
 
     // Tunggu sampai listener terdaftar dan unsubscribeRef terisi
     await waitFor(() => {
@@ -781,6 +794,8 @@ describe('Terima order menulis data lengkap dari respons', () => {
       _getRaw: jest.fn((key: string) => {
         if (key === 'server_version') return serverVersion;
         if (key === 'address_json') return null;
+        if (key === 'currency') return 'IDR';
+        if (key === 'total_cents') return 25000;
         return undefined;
       }),
       prepareUpdate: jest.fn((cb: (r: typeof rowForUpdate) => void) => {
@@ -837,7 +852,7 @@ describe('Terima order menulis data lengkap dari respons', () => {
     });
 
     const { getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -909,7 +924,7 @@ describe('Terima order menulis data lengkap dari respons', () => {
     });
 
     const { getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -948,7 +963,7 @@ describe('Terima order menulis data lengkap dari respons', () => {
     });
 
     const { getByText } = render(
-      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} />,
+      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {

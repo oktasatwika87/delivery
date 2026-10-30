@@ -147,6 +147,8 @@ function SectionList(props: any) {
 }
 SectionList.displayName = 'SectionList';
 const RefreshControl = makeComponent('RefreshControl');
+// StatusBar stub: layar Order mengatur warna status bar Android.
+const StatusBar = makeComponent('StatusBar');
 const Button = (props: any) => {
   const { title, ...rest } = props;
   // Render as Text inside View so getByText can find the title
@@ -278,6 +280,7 @@ module.exports = {
   RefreshControl,
   ScrollView,
   SectionList,
+  StatusBar,
   StyleSheet,
   Switch,
   Text,

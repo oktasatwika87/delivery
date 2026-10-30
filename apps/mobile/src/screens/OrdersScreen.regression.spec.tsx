@@ -219,7 +219,7 @@ async function renderAndAwaitPool(
   const client = jest.requireMock('../sync/client') as { fetchAvailableOrders: jest.Mock };
   client.fetchAvailableOrders.mockResolvedValue({ items: poolItems, hasMore });
 
-  render(<OrdersScreenBase database={db} myOrders={[]} />);
+  render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
   await waitFor(() => {
     expect(client.fetchAvailableOrders).toHaveBeenCalled();
   });
@@ -835,7 +835,7 @@ describe('fetchPool -tes regresi dengan hasMore', () => {
       const client = jest.requireMock('../sync/client') as { fetchAvailableOrders: jest.Mock };
       client.fetchAvailableOrders.mockRejectedValue(new Error('Network error'));
 
-      render(<OrdersScreenBase database={db} myOrders={[]} />);
+      render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
       // fetchPool gagal di catch, tidak ada batch. Tapi tetap tunggu 1 tick agar efek cleanup selesai.
       await new Promise<void>((resolve) => { setImmediate(resolve); });
 
@@ -1007,7 +1007,7 @@ describe('fetchPool - terima serentak tidak menghapus atau menimpa order', () =>
       return { items: [], hasMore: false };
     });
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(client.fetchAvailableOrders).toHaveBeenCalled();
     });
@@ -1054,7 +1054,7 @@ describe('fetchPool - terima serentak tidak menghapus atau menimpa order', () =>
       };
     });
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(client.fetchAvailableOrders).toHaveBeenCalled();
     });
@@ -1158,7 +1158,7 @@ describe('fetchPool - baris lepas (driver_id null, last_conflict_reason terisi) 
       hasMore: true,
     });
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
     });
@@ -1228,7 +1228,7 @@ describe('fetchPool - baris lepas (driver_id null, last_conflict_reason terisi) 
       hasMore: true,
     });
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
     });
@@ -1292,7 +1292,7 @@ describe('fetchPool - baris lepas (driver_id null, last_conflict_reason terisi) 
       hasMore: true,
     });
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
     });
@@ -1349,7 +1349,7 @@ describe('fetchPool - baris lepas (driver_id null, last_conflict_reason terisi) 
       hasMore: true,
     });
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
     });
@@ -1402,7 +1402,7 @@ describe('fetchPool - baris lepas (driver_id null, last_conflict_reason terisi) 
       hasMore: true,
     });
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
     });
@@ -1445,7 +1445,7 @@ describe('fetchPool - baris lepas (driver_id null, last_conflict_reason terisi) 
       hasMore: false,
     });
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(releaseClient.fetchAvailableOrders).toHaveBeenCalled();
     });
@@ -1559,7 +1559,7 @@ describe('handleAccept - last_conflict_reason dan last_conflict_at dikosongkan p
       handleAcceptRef: { current: ((order: OrderModel) => Promise<void>) | null };
     };
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(handleAcceptRef.current).not.toBeNull();
     });
@@ -1700,7 +1700,7 @@ describe('handleAccept - accept order lewat REST', () => {
     await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
     buildFetchPoolMock(rowId, poolAcceptFields);
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(handleAcceptRef.current).not.toBeNull();
     });
@@ -1740,7 +1740,7 @@ describe('handleAccept - accept order lewat REST', () => {
     await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
     buildFetchPoolMock(rowId, poolAcceptFields);
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(handleAcceptRef.current).not.toBeNull();
     });
@@ -1785,7 +1785,7 @@ describe('handleAccept - accept order lewat REST', () => {
     await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
     buildFetchPoolMock(rowId, poolAcceptFields);
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(handleAcceptRef.current).not.toBeNull();
     });
@@ -1832,7 +1832,7 @@ describe('handleAccept - accept order lewat REST', () => {
     await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
     buildFetchPoolMock(rowId, poolAcceptFields);
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(handleAcceptRef.current).not.toBeNull();
     });
@@ -1871,7 +1871,7 @@ describe('handleAccept - accept order lewat REST', () => {
     await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
     buildFetchPoolMock(rowId, poolAcceptFields);
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(handleAcceptRef.current).not.toBeNull();
     });
@@ -1899,7 +1899,7 @@ describe('handleAccept - accept order lewat REST', () => {
     await seedPoolRow(rowId, { ...poolAcceptFields, id: rowId });
     buildFetchPoolMock(rowId, poolAcceptFields);
 
-    render(<OrdersScreenBase database={db} myOrders={[]} />);
+    render(<OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />);
     await waitFor(() => {
       expect(handleAcceptRef.current).not.toBeNull();
     });
@@ -1989,7 +1989,7 @@ describe('lencana sinkron kartu Order Saya', () => {
     await seedAksi({});
 
     const { queryAllByText } = render(
-      <OrdersScreenBase database={db} myOrders={[order]} />,
+      <OrdersScreenBase database={db} myOrders={[order]} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
@@ -2015,14 +2015,14 @@ describe('lencana sinkron kartu Order Saya', () => {
     });
 
     const { queryAllByText } = render(
-      <OrdersScreenBase database={db} myOrders={[order]} />,
+      <OrdersScreenBase database={db} myOrders={[order]} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
-      expect(queryAllByText(/DELIVERED/).length).toBeGreaterThan(0);
+      expect(queryAllByText(/Selesai/).length).toBeGreaterThan(0);
     });
     // Status baris (PREPARING) tidak dipakai karena ada aksi status yang antre.
-    expect(queryAllByText(/PREPARING/)).toHaveLength(0);
+    expect(queryAllByText(/Diterima/)).toHaveLength(0);
   });
 });
 
@@ -2079,11 +2079,11 @@ describe('daftar pool dari database sebelum fetch pertama', () => {
     await seedPoolRow('pool-offline-1');
 
     const { queryAllByText } = render(
-      <OrdersScreenBase database={db} myOrders={[]} />,
+      <OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
-      expect(queryAllByText(/pool-off/).length).toBeGreaterThan(0);
+      expect(queryAllByText(/POOL-OFF/).length).toBeGreaterThan(0);
     });
   });
 
@@ -2106,12 +2106,12 @@ describe('daftar pool dari database sebelum fetch pertama', () => {
     await seedPoolRow('pool-lama-a');
 
     const { queryAllByText } = render(
-      <OrdersScreenBase database={db} myOrders={[]} />,
+      <OrdersScreenBase database={db} myOrders={[]} onLogout={jest.fn()} />,
     );
 
     await waitFor(() => {
-      expect(queryAllByText(/pool-bar/).length).toBeGreaterThan(0);
+      expect(queryAllByText(/POOL-BAR/).length).toBeGreaterThan(0);
     });
-    expect(queryAllByText(/pool-lam/)).toHaveLength(0);
+    expect(queryAllByText(/POOL-LAM/)).toHaveLength(0);
   });
 });
