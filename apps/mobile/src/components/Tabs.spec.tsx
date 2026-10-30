@@ -72,6 +72,18 @@ describe('Tabs', () => {
     expect(gaya.borderBottomColor).toBe(colors.brandRedInverse);
   });
 
+  it('gaya tab punya flexDirection row biar pil angka sejajar sama label', () => {
+    const { UNSAFE_getAllByType } = render(
+      <Tabs
+        tabs={[{ key: 'tersedia', label: 'Tersedia', count: 3 }]}
+        activeKey="tersedia"
+        onChange={() => {}}
+      />,
+    );
+    const gaya = StyleSheet.flatten(UNSAFE_getAllByType(Pressable)[0].props.style);
+    expect(gaya.flexDirection).toBe('row');
+  });
+
   it('tekan tab lain memanggil onChange dengan key-nya', () => {
     const onChange = jest.fn();
     const { UNSAFE_getAllByType } = render(

@@ -2,7 +2,7 @@
  * Baris tab.
  *
  * Dipakai di layar utama untuk berpindah antara daftar, misalnya order yang
- * tersedia dan order yang sedang dimakan.
+ * tersedia dan order yang sedang dikerjakan.
  */
 
 import React from 'react';
@@ -81,6 +81,7 @@ const styles = StyleSheet.create({
   },
   tab: {
     flex: 1,
+    flexDirection: 'row',
     height: TINGGI_TAB,
     alignItems: 'center',
     justifyContent: 'center',
