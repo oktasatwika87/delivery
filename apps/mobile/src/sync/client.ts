@@ -271,6 +271,10 @@ export interface FetchAvailableOrdersResult {
 /**
  * Ambil daftar order yang tersedia di driver pool.
  * AbortController 8 detik, fail fast kalau network unreachable.
+ *
+ * Timeout dilempar sebagai galat AbortError, bukan hasil kosong. Pemanggil
+ * harus tahu kalau daftarnya tidak dapat diambil, supaya daftar pool yang
+ * tersimpan tidak ikut terhapus.
  */
 export async function fetchAvailableOrders(take?: number): Promise<FetchAvailableOrdersResult> {
   let url = `${API_BASE}/orders/available`;
@@ -293,8 +297,7 @@ export async function fetchAvailableOrders(take?: number): Promise<FetchAvailabl
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
-      console.warn('[fetchAvailableOrders] Request aborted due to 8s timeout, returning empty');
-      return { items: [], hasMore: false };
+      console.warn('[fetchAvailableOrders] Request aborted due to 8s timeout');
     }
     throw err;
   }
@@ -381,10 +384,8 @@ export async function createOrder(input: CreateOrderInput): Promise<Order> {
  * validate ownership (customer hanya bisa baca order miliknya sendiri,
  * kalau bukan jadi 403 ForbiddenException).
  *
- * Throw pada error, tracking screen harus tau kalau gagal fetch
- * (beda dengan fetchAvailableOrders yang return [] karena driver pool
- * tolerates stale data). Di sini, customer yang baru saja create order
- * WAJUM liat status aktualnya.
+ * Throw pada error, tracking screen harus tau kalau gagal fetch. Customer
+ * yang baru saja create order wajib liat status aktualnya.
  */
 export async function getOrderById(orderId: string): Promise<Order> {
   const controller = new AbortController();

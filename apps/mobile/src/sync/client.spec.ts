@@ -256,4 +256,59 @@ describe('fetchWithAuth: 401 memicu auth-expired dengan token yang dipakai', () 
   });
 });
 
+describe('fetchAvailableOrders: timeout 8 detik', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    jest.resetModules();
+    globalThis.fetch = jest.fn();
+    jest.doMock('./session', () => ({
+      getCurrentToken: jest.fn().mockResolvedValue('test-token'),
+    }));
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    globalThis.fetch = originalFetch;
+    jest.clearAllMocks();
+    jest.resetModules();
+  });
+
+  it('request dibatalkan timeout: fungsi melempar galat AbortError, bukan daftar kosong', async () => {
+    const { fetchAvailableOrders } = jest.requireActual<typeof import('./client')>('./client');
+
+    // Fetch tiruan menolak dengan galat bernama AbortError kalau signal-nya
+    // di-abort. Kalau signal sudah di-abort sebelum fetch dipanggil, langsung
+    // menolak juga.
+    (globalThis.fetch as jest.Mock).mockImplementation(
+      (_url: string, options: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          const batal = () => {
+            const err = new Error('The operation was aborted');
+            err.name = 'AbortError';
+            reject(err);
+          };
+          if (options.signal?.aborted) {
+            batal();
+            return;
+          }
+          options.signal?.addEventListener('abort', batal);
+        }),
+    );
+
+    const panggil = fetchAvailableOrders();
+    const harapan = expect(panggil).rejects.toMatchObject({ name: 'AbortError' });
+
+    // Beri waktu modul client menyelesaikan await token dan memanggil fetch.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    jest.advanceTimersByTime(8000);
+
+    await harapan;
+  });
+});
+
 void syncEventsModule;
