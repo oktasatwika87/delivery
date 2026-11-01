@@ -48,6 +48,7 @@ apps/mobile/ios/build/
 xcuserdata/
 *.xcuserstate
 **/.xcode.env.local
+apps/mobile/ios/DeliveryMobile.xcodeproj/project.xcworkspace/
 apps/mobile/android/.gradle/
 apps/mobile/android/build/
 apps/mobile/android/app/build/
