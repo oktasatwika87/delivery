@@ -67,7 +67,6 @@ Desktop, emulator Android Studio, dan satu HP Android. iOS belum pernah dicoba.
 
 ```
 pnpm install
-pnpm build:shared
 docker compose up -d
 ```
 
