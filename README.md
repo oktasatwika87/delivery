@@ -63,7 +63,7 @@ begitu order diterima lalu disimpan, jadi tetap ada tanpa sinyal walau peta belu
 ## Menjalankan
 
 Semua masih jalan lokal, belum ada yang di-deploy. Saya pakai Windows, Node 20, pnpm 9, Docker
-Desktop, emulator Android Studio, dan satu HP Android. iOS belum pernah dicoba.
+Desktop, emulator Android Studio, dan satu HP Android. iOS dicoba di simulator lewat Mac.
 
 ```
 pnpm install
@@ -101,6 +101,23 @@ Alamat di `.env.example` buat emulator (`10.0.2.2`). Buat HP asli, `API_BASE_URL
 `TILE_BASE_URL` harus alamat PC yang bisa dijangkau HP. Saya pakai Tailscale karena PC dan HP beda
 jaringan. Env dibaca pas build, jadi abis diganti harus build ulang, reload Metro nggak cukup.
 
+iOS (di Mac, perlu Xcode dan CocoaPods):
+
+```
+cd apps/mobile/ios
+pod install
+cd ..
+pnpm ios
+```
+
+`pod install` diulang tiap `pnpm install` masang ulang react-native, soalnya codegen naruh file di dalam
+`node_modules`. Kalau lupa, build gagal nyari `RCTThirdPartyFabricComponentsProvider.mm`.
+
+iOS nolak http ke alamat Tailscale, jadi backend sama tile server di PC saya buka lewat
+`tailscale serve --bg 3000` dan `tailscale serve --bg --https=8443 8080`. Di `.env` Mac,
+`API_BASE_URL` diisi `https://<nama-pc>.<tailnet>.ts.net` dan `TILE_BASE_URL` alamat yang sama
+ditambah `:8443`.
+
 Akun dibuat dari layar daftar di app. Peta offline diunduh dari Settings di layar peta.
 
 Tes: `pnpm --filter @delivery/backend test`, `pnpm --filter @delivery/mobile test`, dan
@@ -114,7 +131,8 @@ dijalankan ke database yang datanya penting.
 ## Yang belum beres
 
 - Belum di-deploy. Backend dan tile server jalan di PC, HP nyambung lewat Tailscale pas demo.
-- Android aja.
+- iOS baru dicoba di simulator, belum di iPhone asli. Header nabrak status bar, bundle id sama ikon
+  masih bawaan templat.
 - Titik antar selalu posisi GPS HP customer pas order dibuat, belum bisa dipilih di peta. Alamat
   diketik manual.
 - Customer belum bisa batalin order.
