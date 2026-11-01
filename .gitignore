@@ -45,6 +45,9 @@ apps/backend/prisma/dev.db*
 # Mobile native build artifacts
 apps/mobile/ios/Pods/
 apps/mobile/ios/build/
+xcuserdata/
+*.xcuserstate
+**/.xcode.env.local
 apps/mobile/android/.gradle/
 apps/mobile/android/build/
 apps/mobile/android/app/build/

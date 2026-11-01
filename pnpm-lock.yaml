@@ -156,6 +156,9 @@ importers:
       '@maplibre/maplibre-react-native':
         specifier: 10.2.1
         version: 10.2.1(@types/geojson@7946.0.16)(@types/react@18.3.31)(react-native@0.75.4(@babel/core@7.29.7)(@babel/preset-env@7.29.7(@babel/core@7.29.7))(@types/react@18.3.31)(react@18.3.1)(typescript@5.9.3))(react@18.3.1)
+      '@nozbe/simdjson':
+        specifier: 3.1.0-wmelon1
+        version: 3.1.0-wmelon1
       '@nozbe/watermelondb':
         specifier: ^0.27.1
         version: 0.27.1

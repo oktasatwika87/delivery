@@ -23,6 +23,10 @@ target 'DeliveryMobile' do
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
+  # Dibutuhkan WatermelonDB. @nozbe/simdjson sengaja didaftarkan di package.json mobile,
+  # karena pnpm tidak menaruhnya di node_modules app kalau hanya jadi dependensi watermelondb.
+  pod 'simdjson', path: '../node_modules/@nozbe/simdjson', modular_headers: true
+
   target 'DeliveryMobileTests' do
     inherit! :complete
     # Pods for testing
@@ -36,5 +40,8 @@ target 'DeliveryMobile' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
+
+    # Wajib untuk maplibre-react-native: memasang MapLibre Native sebagai Swift Package.
+    $MLRN.post_install(installer)
   end
 end
