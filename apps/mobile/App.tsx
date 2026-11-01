@@ -10,8 +10,8 @@
  *
  * Sesi sinkron dan socket dikelola lewat satu pasang fungsi
  * (beginSyncSession, endSyncSession dari ./src/sync/sessionControl).
- * sessionActiveRef menandai ada sesi; AppState 'active' cuma
- * memanggil beginSyncSession() kalau ref true.
+ * sessionActiveRef menandai ada sesi; aturan kapan sesi
+ * dijalankan lagi dari perubahan status aplikasi ada di AppStateControl.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -26,6 +26,7 @@ import { getToken, clearToken, getRole, getUserId } from './src/sync/token-stora
 import { isCurrentToken } from './src/sync/session';
 import { syncEvents, type AuthExpiredEvent } from './src/sync/syncEvents';
 import { beginSyncSession, endSyncSession } from './src/sync/sessionControl';
+import { AppStateControl } from './src/sync/appStateControl';
 import {
   countUnsentData,
   clearLocalDataForLogout,
@@ -67,6 +68,21 @@ function App(): React.JSX.Element {
   // endSyncSession() saat sesi berakhir.
   const sessionActiveRef = useRef<boolean>(false);
 
+  // Pengendali perubahan status aplikasi: dia yang menentukan kapan sinkron
+  // dan kedua socket dijalankan lagi setelah app masuk background.
+  const [appStateControl] = useState(
+    () =>
+      new AppStateControl({
+        isSessionActive: () => sessionActiveRef.current,
+        beginSession: () => beginSyncSession(database),
+        endSession: () => endSyncSession(),
+        recheckNetwork: () => {
+          networkMonitor.recheck().catch(() => {});
+        },
+        log: (message: string) => console.log(message),
+      }),
+  );
+
   // Status terakhir, supaya flushNow hanya dipicu perpindahan 'offline' -> 'online'.
   const prevNetworkStatusRef = useRef<NetworkStatus>('unknown');
 
@@ -82,6 +98,7 @@ function App(): React.JSX.Element {
    */
   const endSession = (reason: 'auth-expired' | 'manual'): void => {
     sessionActiveRef.current = false;
+    appStateControl.noteSessionEnded();
     endSyncSession();
     setLogoutReason(reason);
     setAuthenticated(false);
@@ -110,21 +127,12 @@ function App(): React.JSX.Element {
     networkMonitor.start();
 
     // --- AppState listener: pause/resume sync + sockets on background/foreground ---
-    // Sinkron dan socket hanya jalan selama ada sesi. Saat app aktif lagi
-    // dan ada sesi, beginSyncSession() menjalankan pull pertama lagi; tanpa
-    // sesi tidak ada yang dijalankan. Keadaan lain: endSyncSession().
+    // Aturannya ada di AppStateControl: 'background' menghentikan sinkron dan
+    // socket, 'inactive' dibiarkan apa adanya (di iOS status ini muncul tiap
+    // ada dialog izin lokasi atau Control Center), 'active' menjalankan lagi
+    // kalau sesi sebelumnya dijeda karena background.
     const appStateSubscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') {
-        console.log('[App] AppState active, restarting sync + resuming sockets');
-        networkMonitor.recheck().catch(() => {});
-        if (sessionActiveRef.current) {
-          beginSyncSession(database);
-        }
-      } else {
-        // 'background' atau 'inactive' - stop sync + sockets.
-        console.log('[App] AppState background/inactive, pausing sync + sockets');
-        endSyncSession();
-      }
+      appStateControl.handleChange(nextState);
     });
 
     // --- Auth-expired listener: force logout saat session expired detected ---
@@ -186,6 +194,7 @@ function App(): React.JSX.Element {
               sessionActiveRef.current = true;
               console.log('[App] User role:', userRole);
 
+              appStateControl.noteSessionStarted();
               beginSyncSession(database);
             }
           }
@@ -275,6 +284,7 @@ function App(): React.JSX.Element {
     sessionActiveRef.current = true;
     console.log('[App] Login success, user role:', userRole);
 
+    appStateControl.noteSessionStarted();
     beginSyncSession(database);
   };
 
