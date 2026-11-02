@@ -10,7 +10,7 @@
  *
  * 'inactive' di iOS muncul tiap ada lapisan sistem di atas app, misalnya
  * dialog izin lokasi atau Control Center. Kalau ikut memutus sesi di
- * sana, sinkron dan socket_putus nyambung lagi tanpa alasan.
+ * sana, sinkron dan socket putus nyambung lagi tanpa alasan.
  */
 
 import type { AppStateStatus } from 'react-native';
