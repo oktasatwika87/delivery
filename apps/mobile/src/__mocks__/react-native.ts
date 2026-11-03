@@ -226,6 +226,11 @@ class ActivityIndicator extends React.Component {
   }
 }
 
+// Alert stub, dipakai MapSettingsScreen untuk pesan error dan hapus region.
+const Alert = {
+  alert: jest.fn(),
+};
+
 class Linking {
   static openSettings() {
     return Promise.resolve();
@@ -265,6 +270,7 @@ const PixelRatio = { get: () => 2, getFontScale: () => 1 };
 
 module.exports = {
   ActivityIndicator,
+  Alert,
   AppRegistry,
   Button,
   FlatList,

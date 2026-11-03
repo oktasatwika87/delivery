@@ -11,7 +11,7 @@
  * di sana, pack info langsung dari native layer (MapLibre OfflineManager).
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -75,14 +75,28 @@ function MapSettingsBase(_props: Props): React.JSX.Element {
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
 
+  // Layar sudah ditutup, jangan sentuh state lagi.
+  const mountedRef = useRef(true);
+  // Pack yang sudah dibaca ulang setelah selesai, supaya event complete
+  // yang datang lebih dari sekali tidak memicu baca ulang berulang.
+  const selesaiRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
       const list = await offlineStorage.listPacks();
+      if (!mountedRef.current) return;
       setPacks(list);
     } catch (err) {
       console.warn('[MapSettings] listPacks failed:', err);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, []);
 
@@ -94,6 +108,8 @@ function MapSettingsBase(_props: Props): React.JSX.Element {
     async (preset: PresetRegion) => {
       setDownloadingName(preset.name);
       setDownloadProgress(0);
+      // Unduhan ulang untuk pack yang sama boleh memicu baca ulang lagi.
+      selesaiRef.current.delete(preset.name);
 
       const warning = await offlineStorage.checkStorageBeforeDownload();
       if (warning) setStorageWarning(warning);
@@ -107,19 +123,27 @@ function MapSettingsBase(_props: Props): React.JSX.Element {
             maxZoom: 16,
           },
           (progress) => {
+            if (!mountedRef.current) return;
             setDownloadProgress(progress.percentage);
+            // Unduhan selesai, baru daftar region dibaca ulang.
+            if (progress.state !== 'complete') return;
+            if (selesaiRef.current.has(preset.name)) return;
+            selesaiRef.current.add(preset.name);
+            setDownloadingName(null);
+            void refresh();
           },
           (error) => {
+            if (!mountedRef.current) return;
             Alert.alert('Download error', error.message);
+            setDownloadingName(null);
+            void refresh();
           },
         );
         await refresh();
       } catch (err) {
         // Error sudah di-handle di onError.
         console.warn('[MapSettings] download failed:', err);
-      } finally {
-        setDownloadingName(null);
-        setDownloadProgress(0);
+        if (mountedRef.current) setDownloadingName(null);
       }
     },
     [refresh],
@@ -176,7 +200,7 @@ function MapSettingsBase(_props: Props): React.JSX.Element {
             <View key={preset.name} style={styles.presetRow}>
               <View style={styles.presetInfo}>
                 <Text style={styles.presetLabel}>{preset.label}</Text>
-                {existing && (
+                {existing && !isDownloading && (
                   <Text style={styles.presetMeta}>{formatBytes(existing.completedTileSize)} · {existing.state}</Text>
                 )}
                 {isDownloading && (
