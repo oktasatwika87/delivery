@@ -56,6 +56,21 @@ const OfflineManager = {
   },
 };
 
+// Nomor state pack offline. Nilai asli datang dari native per platform
+// (iOS Unknown 0, Inactive 1, Active 2, Complete 3; Android Inactive 0,
+// Active 1, Complete 2). Mock ini memakai penomoran Android sebagai
+// default, tes bisa menukarnya untuk menguji penomoran iOS.
+export const OfflinePackDownloadState: {
+  Inactive: string | number;
+  Active: string | number;
+  Complete: string | number;
+  Unknown?: string | number;
+} = {
+  Inactive: 0,
+  Active: 1,
+  Complete: 2,
+};
+
 // LocationManager
 
 const locationListeners = new Set<(location: MockLocation) => void>();

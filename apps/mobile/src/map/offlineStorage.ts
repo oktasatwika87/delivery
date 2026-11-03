@@ -21,7 +21,12 @@
  *   }, onProgress);
  */
 
-import { OfflineManager, type OfflinePackStatus, OfflinePack } from '@maplibre/maplibre-react-native';
+import {
+  OfflineManager,
+  OfflinePackDownloadState,
+  type OfflinePackStatus,
+  OfflinePack,
+} from '@maplibre/maplibre-react-native';
 import Config from 'react-native-config';
 
 /**
@@ -56,8 +61,10 @@ export interface DownloadRegionInput {
 }
 
 /**
- * 0 = Inactive, 1 = Active, 2 = Complete, sesuai
- * MapLibre OfflineRegion.STATE_* di native (lihat MLRNOfflineModule.java).
+ * Nomor state pack offline berbeda per platform, jadi angkanya tidak
+ * disimpan di sini. Ambil dari konstanta native yang diekspor pustaka:
+ * iOS Unknown 0, Inactive 1, Active 2, Complete 3;
+ * Android Inactive 0, Active 1, Complete 2.
  */
 export type DownloadState = 'inactive' | 'active' | 'complete';
 
@@ -96,15 +103,17 @@ const STORAGE_WARNING_BYTES = 200 * 1024 * 1024;
 
 // State mapping
 
-const STATE_NUMBER: Record<number, DownloadState> = {
-  0: 'inactive',
-  1: 'active',
-  2: 'complete',
-};
-
-/** Exported untuk unit test, map state number ke DownloadState enum. */
+/**
+ * Exported untuk unit test, map nomor state pack ke DownloadState enum.
+ *
+ * Nomor state dibaca dari konstanta pustaka, bukan tabel angka tetap,
+ * karena penomorannya beda per platform. Selain Active dan Complete
+ * (termasuk Unknown di iOS) dianggap inactive.
+ */
 export function stateFromNumber(n: number): DownloadState {
-  return STATE_NUMBER[n] ?? 'inactive';
+  if (Number(OfflinePackDownloadState.Active) === n) return 'active';
+  if (Number(OfflinePackDownloadState.Complete) === n) return 'complete';
+  return 'inactive';
 }
 
 function packInfoFromStatus(pack: OfflinePack, status: OfflinePackStatus): PackInfo {

@@ -2,14 +2,14 @@
  * Unit tests untuk offlineStorage.ts
  *
  * Test focus:
- * - State number jadi DownloadState enum mapping (0/1/2 jadi inactive/active/complete)
+ * - Pemetaan nomor state pack jadi DownloadState, untuk penomoran iOS dan Android
  * - PackInfo transformation
  * - Retry logic
  * - listPacks, deletePack
  */
 
 import { offlineStorage, stateFromNumber } from './offlineStorage';
-import { OfflineManager } from '@maplibre/maplibre-react-native';
+import { OfflineManager, OfflinePackDownloadState } from '@maplibre/maplibre-react-native';
 
 // Mock react-native-config
 jest.mock('react-native-config', () => ({
@@ -19,6 +19,21 @@ jest.mock('react-native-config', () => ({
     TILE_BASE_URL: 'http://10.0.2.2:8080',
   },
 }));
+
+// Penomoran state pack offline, bedanya per platform.
+const NOMOR_IOS = { Inactive: 1, Active: 2, Complete: 3 };
+const NOMOR_ANDROID = { Inactive: 0, Active: 1, Complete: 2 };
+
+/** Ganti penomoran di konstanta pustaka, jadi tes bisa meniru tiap platform. */
+function pakaiNomorPlatform(nomor: {
+  Inactive: number;
+  Active: number;
+  Complete: number;
+}): void {
+  OfflinePackDownloadState.Inactive = nomor.Inactive;
+  OfflinePackDownloadState.Active = nomor.Active;
+  OfflinePackDownloadState.Complete = nomor.Complete;
+}
 
 // Helper: mock pack dengan status
 function mockPackWithStatus(name: string, state: number, percentage: number) {
@@ -39,23 +54,54 @@ describe('offlineStorage', () => {
     jest.clearAllMocks();
   });
 
+  afterEach(() => {
+    pakaiNomorPlatform(NOMOR_ANDROID);
+  });
+
   describe('stateFromNumber mapping', () => {
-    test('maps 0 -> inactive', () => {
-      expect(stateFromNumber(0)).toBe('inactive');
+    describe('penomoran iOS', () => {
+      beforeEach(() => {
+        pakaiNomorPlatform(NOMOR_IOS);
+      });
+
+      test('nomor complete jadi complete', () => {
+        expect(stateFromNumber(3)).toBe('complete');
+      });
+
+      test('nomor active jadi active', () => {
+        expect(stateFromNumber(2)).toBe('active');
+      });
+
+      test('nomor inactive jadi inactive', () => {
+        expect(stateFromNumber(1)).toBe('inactive');
+      });
+
+      test('nomor unknown jadi inactive', () => {
+        expect(stateFromNumber(0)).toBe('inactive');
+      });
     });
 
-    test('maps 1 -> active', () => {
-      expect(stateFromNumber(1)).toBe('active');
+    describe('penomoran Android', () => {
+      beforeEach(() => {
+        pakaiNomorPlatform(NOMOR_ANDROID);
+      });
+
+      test('nomor complete jadi complete', () => {
+        expect(stateFromNumber(2)).toBe('complete');
+      });
+
+      test('nomor active jadi active', () => {
+        expect(stateFromNumber(1)).toBe('active');
+      });
+
+      test('nomor inactive jadi inactive', () => {
+        expect(stateFromNumber(0)).toBe('inactive');
+      });
     });
 
-    test('maps 2 -> complete', () => {
-      expect(stateFromNumber(2)).toBe('complete');
-    });
-
-    test('unknown state defaults to inactive', () => {
+    test('nomor di luar penomoran jadi inactive', () => {
       expect(stateFromNumber(99)).toBe('inactive');
       expect(stateFromNumber(-1)).toBe('inactive');
-      expect(stateFromNumber(3)).toBe('inactive');
     });
   });
 
@@ -83,6 +129,18 @@ describe('offlineStorage', () => {
       expect(packs[1].percentage).toBe(50);
       expect(packs[2].state).toBe('complete');
       expect(packs[2].percentage).toBe(100);
+    });
+
+    test('pack complete versi iOS tetap lolos filter daftar region', async () => {
+      pakaiNomorPlatform(NOMOR_IOS);
+      const mockPacks = [mockPackWithStatus('denpasar', 3, 100)];
+      (OfflineManager.getPacks as jest.Mock).mockResolvedValue(mockPacks);
+
+      const packs = await offlineStorage.listPacks();
+      const lolos = packs.filter((p) => p.state === 'complete');
+
+      expect(lolos).toHaveLength(1);
+      expect(lolos[0].name).toBe('denpasar');
     });
 
     test('handles pack status() throwing gracefully', async () => {
