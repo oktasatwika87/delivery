@@ -36,8 +36,17 @@ interface CameraPropsSeen {
   defaultSettings?: { centerCoordinate?: [number, number]; zoomLevel?: number };
 }
 
+interface MapViewPropsSeen {
+  children?: ReactNode;
+  mapStyle?: {
+    sources: Record<string, { type: string; url?: string }>;
+    layers: Array<{ id: string; source?: string }>;
+  };
+}
+
 type MapLibreMockExports = {
   __cameraProps: jest.Mock<void, [CameraPropsSeen]>;
+  __mapViewProps: jest.Mock<void, [MapViewPropsSeen]>;
   __cameraRef: {
     setCamera: jest.Mock;
     fitBounds: jest.Mock;
@@ -51,6 +60,7 @@ const mapLibreMock = jest.requireMock<MapLibreMockExports>(
   '@maplibre/maplibre-react-native',
 );
 const cameraMock = mapLibreMock.__cameraProps;
+const mapViewMock = mapLibreMock.__mapViewProps;
 const mockCameraRef = mapLibreMock.__cameraRef;
 
 // Mock react-native components
@@ -71,6 +81,7 @@ jest.mock('@maplibre/maplibre-react-native', () => {
   // (variabel React yang di-import di top file dianggap out-of-scope).
   const React = require('react');
   const mockCameraProps = jest.fn<void, [CameraPropsSeen]>();
+  const mockMapViewProps = jest.fn<void, [MapViewPropsSeen]>();
   const mockCameraRef = {
     setCamera: jest.fn(),
     fitBounds: jest.fn(),
@@ -86,7 +97,10 @@ jest.mock('@maplibre/maplibre-react-native', () => {
   });
   Camera.displayName = 'Camera';
 
-  const MapView = ({ children }: { children: ReactNode }): ReactNode => children;
+  const MapView = (props: MapViewPropsSeen): ReactNode => {
+    mockMapViewProps(props);
+    return props.children ?? null;
+  };
   const ShapeSource = ({ children }: { children: ReactNode }): ReactNode => children;
   const LineLayer = (): null => null;
   const MarkerView = ({ children }: { children: ReactNode }): ReactNode => children;
@@ -100,6 +114,7 @@ jest.mock('@maplibre/maplibre-react-native', () => {
     LineLayer,
     MarkerView,
     __cameraProps: mockCameraProps,
+    __mapViewProps: mockMapViewProps,
     __cameraRef: mockCameraRef,
   };
 });
@@ -861,6 +876,158 @@ describe('MapScreen', () => {
       // Yang berlaku hasil permintaan 2 (isFromCache: false), jadi banner
       // cache tidak boleh muncul.
       expect(queryByText(/dari cache/i)).toBeNull();
+    });
+  });
+
+  describe('id sumber ubin saat koneksi pulih', () => {
+    type Status = 'online' | 'offline' | 'unknown';
+
+    /**
+     * Tangkap callback networkMonitor.subscribe supaya status jaringan bisa
+     * diputar manual, mengikuti pola mock di describe 'pemulihan online'.
+     */
+    function setupNetworkCapture(): { emit: (status: Status) => void } {
+      const holder: { current: ((status: Status) => void) | null } = { current: null };
+      jest.mocked(networkMonitor.subscribe).mockImplementation((listener) => {
+        holder.current = listener;
+        return () => {};
+      });
+      return {
+        emit: (status) => {
+          if (!holder.current) throw new Error('Subscriber jaringan belum terpasang');
+          holder.current(status);
+        },
+      };
+    }
+
+    async function waitForMapView(): Promise<void> {
+      await waitFor(() => {
+        expect(jest.mocked(mapViewMock)).toHaveBeenCalled();
+      });
+    }
+
+    /** Id sumber ubin dari prop mapStyle MapView terakhir. */
+    function lastTileSourceId(): string {
+      const calls = jest.mocked(mapViewMock).mock.calls;
+      if (calls.length === 0) throw new Error('MapView belum dirender');
+      const props = calls[calls.length - 1][0];
+      const ids = Object.keys(props.mapStyle?.sources ?? {}).filter((id) =>
+        id.startsWith('tiles-'),
+      );
+      return ids[0] ?? '';
+    }
+
+    beforeEach(() => {
+      mockFind.mockResolvedValue({ addressJson: { coordinates: [106.85, -6.2] } });
+    });
+
+    test('offline lalu online mengganti id sumber ubin', async () => {
+      const net = setupNetworkCapture();
+      await renderMapScreen();
+      await waitForMapView();
+      const before = lastTileSourceId();
+
+      act(() => {
+        net.emit('offline');
+      });
+      act(() => {
+        net.emit('online');
+      });
+
+      await waitFor(() => expect(lastTileSourceId()).not.toBe(before));
+    });
+
+    test('offline lalu unknown lalu online mengganti id sumber ubin', async () => {
+      const net = setupNetworkCapture();
+      await renderMapScreen();
+      await waitForMapView();
+      const before = lastTileSourceId();
+
+      act(() => {
+        net.emit('offline');
+      });
+      act(() => {
+        net.emit('unknown');
+      });
+      act(() => {
+        net.emit('online');
+      });
+
+      await waitFor(() => expect(lastTileSourceId()).not.toBe(before));
+    });
+
+    test('dua siklus offline online mengganti id sumber ubin lagi', async () => {
+      const net = setupNetworkCapture();
+      await renderMapScreen();
+      await waitForMapView();
+      const start = lastTileSourceId();
+
+      act(() => {
+        net.emit('offline');
+      });
+      act(() => {
+        net.emit('online');
+      });
+      await waitFor(() => expect(lastTileSourceId()).not.toBe(start));
+      const afterFirst = lastTileSourceId();
+
+      act(() => {
+        net.emit('offline');
+      });
+      act(() => {
+        net.emit('online');
+      });
+      await waitFor(() => expect(lastTileSourceId()).not.toBe(afterFirst));
+      expect(lastTileSourceId()).not.toBe(start);
+    });
+
+    test('layar dipasang saat offline lalu online mengganti id sumber ubin', async () => {
+      jest.mocked(networkMonitor.getStatus).mockReturnValue('offline');
+      const net = setupNetworkCapture();
+      await renderMapScreen();
+      await waitForMapView();
+      const before = lastTileSourceId();
+
+      act(() => {
+        net.emit('online');
+      });
+
+      await waitFor(() => expect(lastTileSourceId()).not.toBe(before));
+    });
+
+    test('unknown lalu online tanpa offline tidak mengganti id sumber ubin', async () => {
+      jest.mocked(networkMonitor.getStatus).mockReturnValue('unknown');
+      const net = setupNetworkCapture();
+      await renderMapScreen();
+      await waitForMapView();
+      const before = lastTileSourceId();
+
+      act(() => {
+        net.emit('unknown');
+      });
+      act(() => {
+        net.emit('online');
+      });
+
+      await waitFor(() => expect(jest.mocked(mapViewMock)).toHaveBeenCalled());
+      expect(lastTileSourceId()).toBe(before);
+    });
+
+    test('online lalu offline tidak mengganti id sumber ubin', async () => {
+      const net = setupNetworkCapture();
+      await renderMapScreen();
+      await waitForMapView();
+      const before = lastTileSourceId();
+
+      act(() => {
+        net.emit('online');
+      });
+      act(() => {
+        net.emit('offline');
+      });
+
+      await waitFor(() => expect(jest.mocked(mapViewMock)).toHaveBeenCalled());
+      expect(lastTileSourceId()).toBe(before);
     });
   });
 });

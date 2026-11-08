@@ -33,7 +33,7 @@ import { withDatabase } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
 
 import type { RootStackParamList } from '../../App';
-import { TILE_STYLE } from '../map/assets/style';
+import { buildTileStyle } from '../map/assets/style';
 import { offlineStorage } from '../map/offlineStorage';
 import { locationService } from '../map/location';
 import { networkMonitor, type NetworkStatus } from '../map/networkMonitor';
@@ -95,8 +95,14 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
   const [routeOrigin, setRouteOrigin] = useState<LngLat | null>(null);
   const [routeDestination, setRouteDestination] = useState<LngLat | null>(null);
 
+  // Naik tiap koneksi pulih setelah offline; dipakai sebagai id sumber ubin.
+  const [tileGeneration, setTileGeneration] = useState<number>(0);
+
+  // Pernah offline sejak terakhir online? Status unknown tidak mengubahnya.
+  const wasOfflineRef = useRef<boolean>(networkMonitor.getStatus() === 'offline');
+
   // Memoize style object agar MapLibre tidak re-init tiap render.
-  const mapStyle = useMemo(() => JSON.parse(TILE_STYLE), []);
+  const mapStyle = useMemo(() => buildTileStyle(tileGeneration), [tileGeneration]);
 
   // Memoize RouteService instance (sekali, jangan re-create tiap render)
   const routeService = useMemo(() => {
@@ -129,6 +135,15 @@ function MapScreenBase({ database }: Props): React.JSX.Element {
   useEffect(() => {
     const unsubscribe = networkMonitor.subscribe((status) => {
       setNetworkStatus(status);
+      if (status === 'offline') {
+        wasOfflineRef.current = true;
+      } else if (status === 'online' && wasOfflineRef.current) {
+        // Ubin yang gagal tidak pernah diminta ulang MapLibre, jadi id sumber
+        // ubin diganti supaya server ditanya lagi setelah koneksi pulih
+        // (maplibre-native #4773).
+        wasOfflineRef.current = false;
+        setTileGeneration((gen) => gen + 1);
+      }
     });
     networkMonitor.check().catch(() => {});
     return unsubscribe;
