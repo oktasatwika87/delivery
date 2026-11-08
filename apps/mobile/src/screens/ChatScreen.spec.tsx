@@ -8,7 +8,7 @@
  */
 
 import React from 'react';
-import { render, waitFor, act } from '@testing-library/react-native';
+import { render, waitFor, act, fireEvent } from '@testing-library/react-native';
 import { Database, appSchema, tableSchema } from '@nozbe/watermelondb';
 import type { Collection, Model } from '@nozbe/watermelondb';
 import type { RawRecord } from '@nozbe/watermelondb/RawRecord';
@@ -50,6 +50,12 @@ jest.mock('../sync/session', () => ({
   getCurrentUserId: () => mockGetCurrentUserId(),
 }));
 
+// --- Mock API client, dipakai jalur kirim lewat REST ---
+const mockSendChatMessage = jest.fn();
+jest.mock('../sync/client', () => ({
+  sendChatMessage: (...args: unknown[]) => mockSendChatMessage(...args),
+}));
+
 // --- Mock koleksi pesan chat, diam saja, supaya observe tidak error ---
 const mockCollectionQuery = jest.fn().mockReturnValue({
   observe: jest.fn().mockReturnValue({
@@ -79,17 +85,22 @@ interface MockChatSocketState {
   isConnected: boolean;
   joinRoomCalls: Array<{ roomId: string }>;
   leaveRoomCalls: Array<{ roomId: string }>;
+  sendMessageCalls: Array<{ id: string; roomId: string; body: string }>;
+  sendMessageSuccess: boolean;
   onCalls: Array<{ event: string }>;
   unsubscribes: jest.Mock<unknown[], []>[];
   connectImpl: () => Promise<void>;
   fireConnect: () => void;
   fireDisconnect: (disconnectReason?: string) => void;
+  fireNewMessage: (message: unknown) => void;
 }
 
 const mockSocketState: MockChatSocketState = {
   isConnected: false,
   joinRoomCalls: [],
   leaveRoomCalls: [],
+  sendMessageCalls: [],
+  sendMessageSuccess: true,
   onCalls: [],
   unsubscribes: [],
   connectImpl: () => Promise.resolve(),
@@ -97,6 +108,9 @@ const mockSocketState: MockChatSocketState = {
     /* diisi di bawah */
   },
   fireDisconnect: () => {
+    /* diisi di bawah */
+  },
+  fireNewMessage: () => {
     /* diisi di bawah */
   },
 };
@@ -116,6 +130,8 @@ function resetMockSocketState(): void {
   mockSocketState.isConnected = false;
   mockSocketState.joinRoomCalls = [];
   mockSocketState.leaveRoomCalls = [];
+  mockSocketState.sendMessageCalls = [];
+  mockSocketState.sendMessageSuccess = true;
   mockSocketState.onCalls = [];
   mockSocketState.unsubscribes = [];
   mockSocketState.connectImpl = () => Promise.resolve();
@@ -147,12 +163,37 @@ jest.mock('../sync/socket', () => ({
       mockSocketState.unsubscribes.push(unsub);
       return unsub;
     },
-    emitToServer: (event: string, payload: { roomId: string }, ack?: (response: unknown) => void): void => {
+    emitToServer: (
+      event: string,
+      payload: { roomId: string; id?: string; body?: string },
+      ack?: (response: unknown) => void,
+    ): void => {
       if (event === 'join_room') {
         mockSocketState.joinRoomCalls.push({ roomId: payload.roomId });
         if (ack) ack({ success: true });
       } else if (event === 'leave_room') {
         mockSocketState.leaveRoomCalls.push({ roomId: payload.roomId });
+      } else if (event === 'send_message') {
+        const id = payload.id ?? '';
+        mockSocketState.sendMessageCalls.push({
+          id,
+          roomId: payload.roomId,
+          body: payload.body ?? '',
+        });
+        if (ack) {
+          ack({
+            success: mockSocketState.sendMessageSuccess,
+            message: {
+              id,
+              roomId: payload.roomId,
+              body: payload.body,
+              senderId: 'user-driver-1',
+              version: 3,
+              clientCreatedAt: new Date().toISOString(),
+              serverCreatedAt: new Date().toISOString(),
+            },
+          });
+        }
       }
     },
   },
@@ -165,6 +206,9 @@ mockSocketState.fireConnect = (): void => {
 };
 mockSocketState.fireDisconnect = (disconnectReason = 'transport close'): void => {
   mockDisconnectListeners.forEach((cb) => cb(disconnectReason));
+};
+mockSocketState.fireNewMessage = (message: unknown): void => {
+  mockNewMessageListeners.forEach((cb) => cb(message));
 };
 
 // --- Mock database: observe() kosong untuk koleksi pesan ---
@@ -188,9 +232,9 @@ function renderChatScreen() {
 }
 
 // --- Database WatermelonDB sungguhan untuk tes status pesan ---
-// Tes label status butuh observe yang benar-benar memancarkan ulang saat
-// kolom status berubah, jadi dipakai database in-memory LokiJS dengan model
-// chat yang asli.
+// Tes label dan penanda kirim butuh observe yang benar-benar memancarkan
+// ulang saat kolom status berubah, jadi dipakai database in-memory LokiJS
+// dengan model chat yang asli.
 const schemaChat = appSchema({
   version: 1,
   tables: [
@@ -391,5 +435,94 @@ describe('ChatScreen: label status pesan', () => {
     });
 
     expect(await findByText(/terkirim/)).toBeTruthy();
+  });
+});
+
+// Baris pesan tidak boleh dikirim ulang sinkron setelah terkirim
+describe('ChatScreen: penanda kirim di baris pesan', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    resetMockSocketState();
+    mockSocketState.isConnected = false;
+    db = buatDatabase();
+  });
+
+  async function kirimPesan(): Promise<void> {
+    const { getByPlaceholderText, getByText } = render(<ChatScreen database={db} />);
+    await waitFor(() => {
+      expect(mockSocketState.joinRoomCalls.length).toBe(1);
+    });
+    await act(async () => {
+      fireEvent.changeText(getByPlaceholderText('Ketik pesan...'), 'halo');
+    });
+    await act(async () => {
+      fireEvent.press(getByText('Kirim'));
+    });
+  }
+
+  async function barisPesan(): Promise<ChatMessageModel[]> {
+    return db.get<ChatMessageModel>('chat_messages').query().fetch();
+  }
+
+  test('ack socket sukses: baris synced dan changed kosong', async () => {
+    mockSocketState.isConnected = true;
+
+    await kirimPesan();
+
+    await waitFor(async () => {
+      const baris = await barisPesan();
+      expect(baris).toHaveLength(1);
+      expect(baris[0]._raw._status).toBe('synced');
+      expect(baris[0]._raw._changed).toBe('');
+    });
+  });
+
+  test('kirim lewat REST sukses: baris synced dan changed kosong', async () => {
+    mockSocketState.isConnected = false;
+    mockSendChatMessage.mockResolvedValue({ id: 'pesan-rest', version: 5 });
+
+    await kirimPesan();
+
+    await waitFor(async () => {
+      const baris = await barisPesan();
+      expect(baris).toHaveLength(1);
+      expect(baris[0]._raw._status).toBe('synced');
+      expect(baris[0]._raw._changed).toBe('');
+    });
+  });
+
+  test('pesan sendiri dari new_message: baris synced dan changed kosong', async () => {
+    mockSocketState.isConnected = false;
+    // REST gagal, jadi baris masih PENDING_SEND saat echo new_message datang.
+    mockSendChatMessage.mockRejectedValue(new Error('jaringan mati'));
+
+    await kirimPesan();
+
+    await waitFor(() => {
+      expect(mockSendChatMessage).toHaveBeenCalledTimes(1);
+    });
+    const payload = mockSendChatMessage.mock.calls[0][0] as { id: string };
+    const idPesan = payload.id;
+
+    await act(async () => {
+      mockSocketState.fireNewMessage({
+        id: idPesan,
+        roomId: 'room-abc',
+        senderId: 'user-driver-1',
+        body: 'halo',
+        version: 3,
+        clientCreatedAt: new Date().toISOString(),
+        serverCreatedAt: new Date().toISOString(),
+      });
+    });
+
+    await waitFor(async () => {
+      const baris = await barisPesan();
+      expect(baris).toHaveLength(1);
+      expect(baris[0]._raw._status).toBe('synced');
+      expect(baris[0]._raw._changed).toBe('');
+    });
   });
 });

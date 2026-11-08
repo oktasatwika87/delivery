@@ -178,12 +178,15 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
 
           if (existing) {
             // Update status, message already inserted (from our own send or sync)
-            console.log(`[new_message] BEFORE update: id=${message.id}, _status=${(existing._raw as any)._status}, status=${existing.status}`);
+            console.log(`[new_message] BEFORE update: id=${message.id}, _status=${existing._raw._status}, status=${existing.status}`);
             await database.write(async () => {
               await existing.update((m) => {
                 m.status = 'SENT';
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                // Setter di atas menandai baris jadi kotor, jadi _status dan
+                // _changed ditulis paling akhir supaya sinkron tidak
+                // mengirim ulang pesan ini.
                 m._raw._status = 'synced';
+                m._raw._changed = '';
               });
             });
             console.log(`[new_message] AFTER update: id=${message.id}, _status=synced`);
@@ -285,10 +288,13 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
             if (localRecord) {
               await database.write(async () => {
                 await localRecord!.update((m) => {
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  m._raw._status = 'synced'; // Clear dirty flag
                   m.status = 'SENT';
                   m.serverVersion = ack.message!.version;
+                  // Setter di atas menandai baris jadi kotor, jadi _status dan
+                  // _changed ditulis paling akhir supaya sinkron tidak
+                  // mengirim ulang pesan ini.
+                  m._raw._status = 'synced';
+                  m._raw._changed = '';
                 });
               });
               console.log(`[handleSend] SOCKET ACK: updated id=${tempId}, _status=synced`);
@@ -320,10 +326,13 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
         if (localRecord) {
           await database.write(async () => {
             await localRecord!.update((m) => {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              m._raw._status = 'synced'; // Clear dirty flag
               m.status = 'SENT';
               m.serverVersion = response.version;
+              // Setter di atas menandai baris jadi kotor, jadi _status dan
+              // _changed ditulis paling akhir supaya sinkron tidak
+              // mengirim ulang pesan ini.
+              m._raw._status = 'synced';
+              m._raw._changed = '';
             });
           });
           console.log(`[handleSend] REST: updated id=${tempId}, _status=synced`);
