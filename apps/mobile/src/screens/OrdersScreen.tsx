@@ -646,6 +646,9 @@ export function OrdersScreenBase({
     }
   }, []);
 
+  // Kartu di Tersedia tidak dibuka ke detail: baris pool hanya berisi
+  // kota, jadi detailnya tampil seperti order rusak. Tombol Terima di
+  // dalam kartu tetap dipakai.
   const renderPoolItem = ({ item }: { item: OrderModel }) => {
     const alamat = readAlamat(item);
     return (
@@ -659,7 +662,6 @@ export function OrdersScreenBase({
         acceptDisabled={!online}
         acceptHelp={online ? undefined : TEKS_BUTUH_KONEKSI}
         acceptLoading={acceptingOrderId === item.id}
-        onPress={() => navigation.navigate('OrderDetail', { orderId: item.id })}
       />
     );
   };

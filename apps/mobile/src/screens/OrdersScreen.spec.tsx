@@ -7,7 +7,7 @@
  */
 
 import React from 'react';
-import { act, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
 // Mock @nozbe/watermelondb/react SEBELUM import component
 jest.mock('@nozbe/watermelondb/react', () => ({
@@ -88,10 +88,12 @@ jest.mock('../sync/ordersSocket', () => ({
 }));
 
 // Mock navigation
+// mockNavigate dipakai bersama supaya tes bisa memeriksa tujuan navigasi.
+const mockNavigate = jest.fn();
 jest.mock('@react-navigation/native', () => ({
   NavigationContainer: ({ children }: { children: React.ReactNode }) => children,
   useNavigation: () => ({
-    navigate: jest.fn(),
+    navigate: mockNavigate,
   }),
 }));
 
@@ -468,6 +470,79 @@ describe('lencana sinkron kartu Order Saya', () => {
     });
 
     expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(0);
+  });
+});
+
+// Kartu di Tersedia tidak membuka detail order
+//
+// Baris pool hanya berisi kota, jadi membuka OrderDetail dari kartu Tersedia
+// menampilkan detail yang terlihat seperti order rusak. Kartu Order Saya
+// tetap boleh membuka detail.
+describe('kartu Tersedia tidak membuka detail order', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    mockPendingActions = [];
+    mockOrdersCollection.query = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue([]),
+      fetchCount: jest.fn().mockResolvedValue(0),
+      observe: jest.fn().mockReturnValue({
+        subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
+      }),
+    });
+  });
+
+  test('kartu di Tersedia ditekan tidak memanggil navigasi ke OrderDetail', async () => {
+    const poolOrderMock = {
+      ...makeOrder({ id: 'pool-order-nav', status: 'ASSIGNED', driverId: null }),
+      _raw: { id: 'pool-order-nav', driver_id: null, _status: 'synced' },
+      prepareDestroyPermanently: jest.fn().mockReturnValue({
+        _preparedState: 'destroy',
+        _raw: { id: 'pool-order-nav' },
+      }),
+    };
+    mockOrdersCollection.query = jest.fn().mockReturnValue({
+      fetch: jest.fn().mockResolvedValue([poolOrderMock]),
+      fetchCount: jest.fn().mockResolvedValue(0),
+      observe: jest.fn().mockReturnValue({
+        subscribe: jest.fn().mockReturnValue({ unsubscribe: jest.fn() }),
+      }),
+    });
+
+    // myOrders kosong supaya tab awal masih Tersedia.
+    const { getByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} myOrders={[]} onLogout={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    // Tekan isi kartu pool, bukan tombol Terima di dalamnya.
+    await act(async () => {
+      fireEvent.press(getByText(/^ORDER #POOL-ORD/));
+    });
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  test('kartu di Order Saya ditekan membuka OrderDetail', async () => {
+    const myOrders = [makeOrder({ id: 'order-mine-nav', status: 'PREPARING' })];
+
+    const { getByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} onLogout={jest.fn()} />,
+    );
+
+    // Status PREPARING membuat tab awal Order Saya.
+    await waitFor(() => {
+      expect(getByText(/^ORDER #ORDER-MI/)).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText(/^ORDER #ORDER-MI/));
+    });
+
+    expect(mockNavigate).toHaveBeenCalledWith('OrderDetail', { orderId: 'order-mine-nav' });
   });
 });
 
