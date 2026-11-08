@@ -90,7 +90,13 @@ export class RouteService {
         await this.saveSnapshot(route);
         return { route, isFromCache: false };
       } catch (fetchError) {
-        // Fetch gagal, coba fallback ke snapshot
+        // Fetch gagal, catat galat aslinya supaya bisa ditelusuri, lalu
+        // coba fallback ke snapshot.
+        console.warn(
+          '[routeService] fetch rute gagal:',
+          fetchError instanceof Error ? fetchError.name : 'Error',
+          fetchError instanceof Error ? fetchError.message : String(fetchError),
+        );
         const snapshot = await this.findMatch(request);
 
         // Bedakan config error dari transient error
@@ -114,7 +120,7 @@ export class RouteService {
         }
         // Tidak ada snapshot, gagal total
         throw new RouteUnavailableError(
-          `Rute tidak tersedia, tidak ada koneksi dan tidak ada rute tersimpan untuk area ini.`,
+          'Rute belum bisa dihitung dan belum ada rute tersimpan untuk tujuan ini.',
         );
       }
     } else {

@@ -165,6 +165,41 @@ describe('GraphHopperRoutingProvider', () => {
       await expect(provider.getRoute(mockRequest)).rejects.not.toThrow(InvalidConfigError);
     });
 
+    test('galat HTTP memuat kode status dan pesan dari body server', async () => {
+      const provider = new GraphHopperRoutingProvider({ apiKey: 'test-key' });
+
+      const mockFetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        statusText: 'Bad Request',
+        text: () => Promise.resolve(JSON.stringify({ message: 'Point 0 is out of bounds' })),
+      }) as jest.MockedFunction<typeof fetch>;
+
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
+
+      await expect(provider.getRoute(mockRequest)).rejects.toThrow('HTTP 400');
+      await expect(provider.getRoute(mockRequest)).rejects.toThrow('Point 0 is out of bounds');
+      // API key tidak boleh ikut bocor ke pesan galat.
+      await expect(provider.getRoute(mockRequest)).rejects.not.toThrow('test-key');
+    });
+
+    test('galat HTTP 401 memuat pesan dari body server', async () => {
+      const provider = new GraphHopperRoutingProvider({ apiKey: 'test-key' });
+
+      const mockFetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        text: () => Promise.resolve(JSON.stringify({ message: 'Wrong API key' })),
+      }) as jest.MockedFunction<typeof fetch>;
+
+      jest.spyOn(globalThis, 'fetch').mockImplementation(mockFetch);
+
+      await expect(provider.getRoute(mockRequest)).rejects.toThrow(InvalidConfigError);
+      await expect(provider.getRoute(mockRequest)).rejects.toThrow('HTTP 401');
+      await expect(provider.getRoute(mockRequest)).rejects.toThrow('Wrong API key');
+    });
+
     test('handle GraphHopper API error message', async () => {
       const provider = new GraphHopperRoutingProvider({ apiKey: 'invalid-key' });
 

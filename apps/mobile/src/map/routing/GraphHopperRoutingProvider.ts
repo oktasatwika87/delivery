@@ -104,6 +104,35 @@ interface GraphHopperResponse {
   hints?: { message: string }[];
 }
 
+/**
+ * Baca pesan galat dari body balasan GraphHopper. Body dibaca sebagai teks
+ * lalu dicoba diurai jadi JSON, karena GraphHopper balas dengan objek
+ * { message, hints }. Body kosong atau bukan JSON dipakai apa adanya.
+ */
+async function bacaPesanServer(response: Response): Promise<string> {
+  let body: string;
+  try {
+    body = await response.text();
+  } catch {
+    return '';
+  }
+  if (!body) {
+    return '';
+  }
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed === 'object' && parsed !== null && 'message' in parsed) {
+      const pesan = (parsed as { message?: unknown }).message;
+      if (typeof pesan === 'string' && pesan.length > 0) {
+        return pesan;
+      }
+    }
+  } catch {
+    // Body bukan JSON, pakai isi mentahnya.
+  }
+  return body;
+}
+
 export class GraphHopperRoutingProvider implements RoutingProvider {
   private readonly apiKey: string;
   private readonly timeoutMs: number;
@@ -147,14 +176,21 @@ export class GraphHopperRoutingProvider implements RoutingProvider {
     }
 
     if (!response.ok) {
+      // Pesan balasan GraphHopper ikut dimasukkan supaya akar masalahnya
+      // kelihatan, bukan cuma kode status.
+      const pesanServer = await bacaPesanServer(response);
       // 401/403 = invalid/revoked API key, config error, bukan transient
       if (response.status === 401 || response.status === 403) {
         throw new InvalidConfigError(
           `GraphHopper API unauthorized (HTTP ${response.status}). ` +
-            'API key mungkin invalid atau telah di-revoke. Cek GRAPHHOPPER_API_KEY di .env.',
+            'API key mungkin invalid atau telah di-revoke. Cek GRAPHHOPPER_API_KEY di .env.' +
+            (pesanServer ? ` Balasan server: ${pesanServer}` : ''),
         );
       }
-      throw new Error(`GraphHopper API error: HTTP ${response.status} ${response.statusText}`);
+      throw new Error(
+        `GraphHopper API error: HTTP ${response.status} ${response.statusText}` +
+          (pesanServer ? ` - ${pesanServer}` : ''),
+      );
     }
 
     let data: GraphHopperResponse;

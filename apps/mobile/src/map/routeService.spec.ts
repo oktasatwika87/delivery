@@ -169,6 +169,38 @@ describe('RouteService', () => {
       });
     });
 
+    describe('Online tapi fetch gagal + tidak ada snapshot match', () => {
+      test('pesan galat baru dan console.warn dapat galat asli', async () => {
+        // Arrange: network online
+        jest.spyOn(networkMonitor, 'getStatus').mockReturnValue('online');
+
+        // Provider gagal dengan galat transient
+        const galatAsli = new Error('jaringan tidak stabil');
+        mockProvider.getRoute.mockRejectedValue(galatAsli);
+
+        // Tidak ada snapshot
+        jest.spyOn(routeSnapshotService, 'findMatch').mockResolvedValue(null);
+
+        // Spy console.warn supaya log tidak bocor ke test runner
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+        // Act & Assert
+        await expect(routeService.getRoute(testRequest)).rejects.toThrow(RouteUnavailableError);
+        await expect(routeService.getRoute(testRequest)).rejects.toThrow(
+          'Rute belum bisa dihitung dan belum ada rute tersimpan untuk tujuan ini.',
+        );
+
+        // Assert: console.warn dapat galat asli
+        expect(warnSpy).toHaveBeenCalledWith(
+          '[routeService] fetch rute gagal:',
+          'Error',
+          'jaringan tidak stabil',
+        );
+
+        warnSpy.mockRestore();
+      });
+    });
+
     describe('Offline + ada snapshot match', () => {
       test('return snapshot dengan isFromCache: true (tanpa fetch)', async () => {
         // Arrange: network offline
