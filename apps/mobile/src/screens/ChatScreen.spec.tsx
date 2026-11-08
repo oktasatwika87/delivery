@@ -9,6 +9,12 @@
 
 import React from 'react';
 import { render, waitFor, act } from '@testing-library/react-native';
+import { Database, appSchema, tableSchema } from '@nozbe/watermelondb';
+import type { Collection, Model } from '@nozbe/watermelondb';
+import type { RawRecord } from '@nozbe/watermelondb/RawRecord';
+import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
+
+import { ChatMessageModel } from '../db/models/ChatMessageModel';
 
 // --- Mock withDatabase: kembalikan komponen apa adanya ---
 // Ditulis langsung di dalam factory karena variabel tingkat modul tidak
@@ -18,13 +24,14 @@ jest.mock('@nozbe/watermelondb/react', () => ({
   withDatabase: (Component: React.ComponentType<object>) => Component,
 }));
 
-// --- Mock Q dari @nozbe/watermelondb ---
-jest.mock('@nozbe/watermelondb', () => ({
-  Q: {
-    where: jest.fn().mockReturnValue({ _where: 'test' }),
-    sortBy: jest.fn().mockReturnValue({ _sortBy: 'test' }),
-  },
-}));
+// --- WatermelonDB asli dipakai semua, termasuk Q dan Model ---
+// Model asli dipakai supaya model chat bisa diwarisi, dan tes status pesan
+// butuh observe yang benar-benar memancarkan ulang saat kolom status
+// berubah.
+jest.mock('@nozbe/watermelondb', () => {
+  const asli = jest.requireActual('@nozbe/watermelondb');
+  return { __esModule: true, ...asli };
+});
 
 // --- Mock react-native-config ---
 jest.mock('react-native-config', () => ({
@@ -46,6 +53,12 @@ jest.mock('../sync/session', () => ({
 // --- Mock koleksi pesan chat, diam saja, supaya observe tidak error ---
 const mockCollectionQuery = jest.fn().mockReturnValue({
   observe: jest.fn().mockReturnValue({
+    subscribe: jest.fn().mockImplementation((observer: { next: (records: unknown[]) => void }) => {
+      observer.next([]);
+      return { unsubscribe: jest.fn() };
+    }),
+  }),
+  observeWithColumns: jest.fn().mockReturnValue({
     subscribe: jest.fn().mockImplementation((observer: { next: (records: unknown[]) => void }) => {
       observer.next([]);
       return { unsubscribe: jest.fn() };
@@ -174,6 +187,57 @@ function renderChatScreen() {
   return render(<ChatScreen database={mockDatabase as never} />);
 }
 
+// --- Database WatermelonDB sungguhan untuk tes status pesan ---
+// Tes label status butuh observe yang benar-benar memancarkan ulang saat
+// kolom status berubah, jadi dipakai database in-memory LokiJS dengan model
+// chat yang asli.
+const schemaChat = appSchema({
+  version: 1,
+  tables: [
+    tableSchema({
+      name: 'chat_messages',
+      columns: [
+        { name: 'room_id', type: 'string', isIndexed: true },
+        { name: 'sender_id', type: 'string' },
+        { name: 'body', type: 'string' },
+        { name: 'attachment_json', type: 'string', isOptional: true },
+        { name: 'status', type: 'string', isIndexed: true },
+        { name: 'client_created_at', type: 'number' },
+        { name: 'server_created_at', type: 'number', isOptional: true },
+        { name: 'server_version', type: 'number' },
+        { name: 'deleted_at', type: 'number', isOptional: true },
+        { name: 'failed_sync_attempts', type: 'number' },
+        { name: 'created_at', type: 'number' },
+        { name: 'updated_at', type: 'number' },
+      ],
+    }),
+  ],
+});
+
+// Dekorator model tidak aktif di Jest: transformasi TypeScript membuat field
+// kelas sendiri yang menutupi accessor prototype, jadi baris tidak punya
+// getter status. Field milik instance dihapus supaya accessor dekorator,
+// sama seperti di aplikasi, yang dipakai.
+class PesanModel extends ChatMessageModel {
+  constructor(collection: Collection<Model>, raw: RawRecord) {
+    super(collection, raw);
+    for (const nama of Object.keys(this)) {
+      if (nama.startsWith('_') || nama === 'collection') continue;
+      Reflect.deleteProperty(this, nama);
+    }
+  }
+}
+
+function buatDatabase(): Database {
+  const adapter = new LokiJSAdapter({
+    schema: schemaChat,
+    useWebWorker: false,
+    useIncrementalIndexedDB: true,
+    dbName: 'tes-chat',
+  });
+  return new Database({ adapter, modelClasses: [PesanModel] });
+}
+
 describe('ChatScreen: join_room saat connect berulang', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -283,5 +347,49 @@ describe('ChatScreen: banner koneksi', () => {
     });
 
     expect(await findByText(/Koneksi real-time terputus/)).toBeTruthy();
+  });
+});
+
+// Label status pesan berubah tanpa layar ditutup
+describe('ChatScreen: label status pesan', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    resetMockSocketState();
+    mockSocketState.isConnected = false;
+    db = buatDatabase();
+  });
+
+  test('status PENDING_SEND lalu SENT: label terkirim tampil tanpa unmount', async () => {
+    const { findByText } = render(<ChatScreen database={db} />);
+
+    // Pesan dibuat dengan status PENDING_SEND.
+    await act(async () => {
+      await db.write(async () => {
+        await db.get<ChatMessageModel>('chat_messages').create((m) => {
+          m.roomId = 'room-abc';
+          m.senderId = 'user-driver-1';
+          m.body = 'halo';
+          m.status = 'PENDING_SEND';
+          m.clientCreatedAt = Date.now();
+          m.serverVersion = 0;
+        });
+      });
+    });
+
+    expect(await findByText(/mengirim/)).toBeTruthy();
+
+    // Status diubah ke SENT lewat database.write, layar tidak ditutup.
+    const baris = await db.get<ChatMessageModel>('chat_messages').query().fetch();
+    await act(async () => {
+      await db.write(async () => {
+        await baris[0].update((m) => {
+          m.status = 'SENT';
+        });
+      });
+    });
+
+    expect(await findByText(/terkirim/)).toBeTruthy();
   });
 });

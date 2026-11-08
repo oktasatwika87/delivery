@@ -59,12 +59,14 @@ function ChatScreenBase({ database }: Props): React.JSX.Element {
     const subscribe = async () => {
       try {
         const collection = database.get<ChatMessageModel>('chat_messages');
+        // observeWithColumns status supaya perubahan status pesan (misal
+        // PENDING_SEND jadi SENT) langsung digambar ulang.
         subscription = collection
           .query(
             Q.where('room_id', roomId),
             Q.sortBy('client_created_at', Q.asc)
           )
-          .observe()
+          .observeWithColumns(['status'])
           .subscribe({
             next: (records) => {
               setMessages(records);
