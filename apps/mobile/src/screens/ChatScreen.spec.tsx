@@ -10,8 +10,6 @@
 import React from 'react';
 import { render, waitFor, act, fireEvent } from '@testing-library/react-native';
 import { Database, appSchema, tableSchema } from '@nozbe/watermelondb';
-import type { Collection, Model } from '@nozbe/watermelondb';
-import type { RawRecord } from '@nozbe/watermelondb/RawRecord';
 import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
 
 import { ChatMessageModel } from '../db/models/ChatMessageModel';
@@ -258,20 +256,6 @@ const schemaChat = appSchema({
   ],
 });
 
-// Dekorator model tidak aktif di Jest: transformasi TypeScript membuat field
-// kelas sendiri yang menutupi accessor prototype, jadi baris tidak punya
-// getter status. Field milik instance dihapus supaya accessor dekorator,
-// sama seperti di aplikasi, yang dipakai.
-class PesanModel extends ChatMessageModel {
-  constructor(collection: Collection<Model>, raw: RawRecord) {
-    super(collection, raw);
-    for (const nama of Object.keys(this)) {
-      if (nama.startsWith('_') || nama === 'collection') continue;
-      Reflect.deleteProperty(this, nama);
-    }
-  }
-}
-
 function buatDatabase(): Database {
   const adapter = new LokiJSAdapter({
     schema: schemaChat,
@@ -279,7 +263,7 @@ function buatDatabase(): Database {
     useIncrementalIndexedDB: true,
     dbName: 'tes-chat',
   });
-  return new Database({ adapter, modelClasses: [PesanModel] });
+  return new Database({ adapter, modelClasses: [ChatMessageModel] });
 }
 
 describe('ChatScreen: join_room saat connect berulang', () => {

@@ -10,8 +10,8 @@
  * buildRawRowForCreate (coordinator.ts).
  *
  * Database Loki asli (sinkron, di memori). Yang ditiru hanya jaringan dan
- * modul pendukung layar. Kolom dibaca lewat _getRaw karena dekorator model
- * tidak aktif di Jest. Jalankan dengan --forceExit (timer simpan otomatis Loki).
+ * modul pendukung layar. Kolom dibaca lewat _getRaw karena yang diuji isi
+ * kolom mentah. Jalankan dengan --forceExit (timer simpan otomatis Loki).
  */
 
 import React from 'react';

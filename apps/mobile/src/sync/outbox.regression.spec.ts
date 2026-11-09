@@ -243,9 +243,6 @@ describe('outbox enqueue - regression prepareCreateFromDirtyRaw with real LokiJS
       expect(action!._getRaw('created_at')).toBeLessThanOrEqual(after);
       expect(action!._getRaw('updated_at')).toBe(action!._getRaw('created_at'));
     });
-
-    // isPendingActionStale tidak diuji di sini: decorator @date tidak aktif
-    // di Jest, jadi umur aksi selalu terbaca 0.
   });
 
   // Aksi update_status dipakai driver untuk Mulai antar dan Selesai diantar
