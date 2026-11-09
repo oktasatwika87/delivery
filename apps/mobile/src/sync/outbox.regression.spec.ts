@@ -391,5 +391,21 @@ describe('outbox enqueue - regression prepareCreateFromDirtyRaw with real LokiJS
         nowSpy.mockRestore();
       }
     });
+
+    it('aksi dengan created_at 0: umur 0 dan tidak basi', async () => {
+      const { getPendingActionAgeMs, isPendingActionStale } = require('./outbox');
+
+      const aksi = await seedAction('order-umur-nol', 0, 'pending');
+      expect(aksi._getRaw('created_at')).toBe(0);
+      expect(getPendingActionAgeMs(aksi)).toBe(0);
+      expect(isPendingActionStale(aksi)).toBe(false);
+    });
+
+    it('hasStalePendingAction: aksi pending dengan created_at 0 tidak dihitung basi', async () => {
+      const { hasStalePendingAction } = require('./outbox');
+
+      await seedAction('order-umur-nol-pending', 0, 'pending');
+      expect(await hasStalePendingAction('order-umur-nol-pending')).toBe(false);
+    });
   });
 });

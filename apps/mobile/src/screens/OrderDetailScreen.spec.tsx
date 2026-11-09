@@ -84,6 +84,7 @@ function computeIsPendingActionStale(action: MockPendingAction | null | undefine
   if (!action?.createdAt) return false;
   const createdAt = action.createdAt;
   const timestamp = createdAt instanceof Date ? createdAt.getTime() : Number(createdAt);
+  if (!timestamp) return false;
   return Date.now() - timestamp > STALE_THRESHOLD_MS;
 }
 const mockIsPendingActionStale = jest.fn().mockImplementation(computeIsPendingActionStale);

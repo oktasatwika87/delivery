@@ -358,6 +358,7 @@ export function getPendingActionAgeMs(action: PendingActionModel | null): number
   const createdAt = action.createdAt;
   // Support both Date objects and numeric timestamps
   const timestamp = typeof createdAt.getTime === 'function' ? createdAt.getTime() : Number(createdAt);
+  if (!timestamp) return 0;
   return Date.now() - timestamp;
 }
 
