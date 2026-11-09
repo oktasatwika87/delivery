@@ -302,4 +302,94 @@ describe('outbox enqueue - regression prepareCreateFromDirtyRaw with real LokiJS
       ]);
     });
   });
+
+  // Umur aksi dihitung dari created_at yang dibaca lewat getter model, jadi
+  // baris aksi dibuat di database Loki sungguhan.
+  describe('umur aksi dengan model asli', () => {
+    // Bantu: seed satu aksi dengan waktu dibuat dan status yang dikehendaki.
+    async function seedAction(
+      orderId: string,
+      createdAt: number,
+      status: 'pending' | 'syncing' | 'failed' = 'pending',
+    ): Promise<PendingActionModel> {
+      const actionId = `pa-umur-${orderId}`;
+      await db.write(async () => {
+        const prepared = db.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
+          id: actionId,
+          _status: 'synced',
+          _changed: '',
+          action_type: 'collect_cod',
+          target_order_id: orderId,
+          expected_version: 0,
+          idempotency_key: `cod:${orderId}`,
+          payload_json: JSON.stringify({ amountCents: 50000 }),
+          status,
+          created_at: createdAt,
+          updated_at: createdAt,
+        });
+        await db.batch(prepared);
+      });
+      return db.get<PendingActionModel>('pending_actions').find(actionId);
+    }
+
+    it('aksi baru dari enqueueCollectCod tidak basi', async () => {
+      const { enqueueCollectCod: enqueue, isPendingActionStale } = require('./outbox');
+
+      await enqueue('order-umur-baru', 50000);
+
+      const all = await db.get<PendingActionModel>('pending_actions').query().fetch();
+      const action = all.find((a) => a._getRaw('target_order_id') === 'order-umur-baru');
+      expect(action).toBeDefined();
+      expect(isPendingActionStale(action)).toBe(false);
+    });
+
+    it('umur tepat 60 menit belum basi, lewat 1 milidetik basi', async () => {
+      const { getPendingActionAgeMs, isPendingActionStale } = require('./outbox');
+
+      const now = 1700000000000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+      try {
+        const tepat = await seedAction('order-umur-tepat', now - 60 * 60 * 1000);
+        expect(getPendingActionAgeMs(tepat)).toBe(60 * 60 * 1000);
+        expect(isPendingActionStale(tepat)).toBe(false);
+
+        const lewat = await seedAction('order-umur-lewat', now - 60 * 60 * 1000 - 1);
+        expect(getPendingActionAgeMs(lewat)).toBe(60 * 60 * 1000 + 1);
+        expect(isPendingActionStale(lewat)).toBe(true);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('hasStalePendingAction: aksi lama berstatus pending atau syncing dihitung, failed tidak', async () => {
+      const { hasStalePendingAction } = require('./outbox');
+
+      const now = 1700000000000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+      try {
+        await seedAction('order-umur-pending', now - 61 * 60 * 1000, 'pending');
+        await seedAction('order-umur-syncing', now - 61 * 60 * 1000, 'syncing');
+        await seedAction('order-umur-failed', now - 61 * 60 * 1000, 'failed');
+
+        expect(await hasStalePendingAction('order-umur-pending')).toBe(true);
+        expect(await hasStalePendingAction('order-umur-syncing')).toBe(true);
+        expect(await hasStalePendingAction('order-umur-failed')).toBe(false);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('hasStalePendingAction: aksi yang masih baru tidak dihitung', async () => {
+      const { hasStalePendingAction } = require('./outbox');
+
+      const now = 1700000000000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(now);
+      try {
+        await seedAction('order-umur-segar', now - 1000, 'pending');
+        expect(await hasStalePendingAction('order-umur-segar')).toBe(false);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+  });
 });
