@@ -1,10 +1,12 @@
 /**
  * Tes regresi untuk jalur pull: applyPull -> buildRawRowForCreate ->
- * prepareCreateFromDirtyRaw.
+ * prepareCreateFromDirtyRaw, dan jalur pembaruan baris yang sudah ada
+ * (applyServerDataToLocalRow), termasuk balasan konflik dari server.
  *
  * Tujuan: setelah pull, baris baru di koleksi harus menyimpan semua kolom
  * sesuai payload server (dibaca dari raw snake_case), dan created_at/
- * updated_at harus terisi.
+ * updated_at harus terisi. Baris yang sudah ada harus ditimpa data server,
+ * sedangkan baris yang versinya lebih baru tidak boleh ditimpa.
  *
  * Sumber payload: nama dan tipe sesuai fungsi serializer
  * orderToDomain / paymentToDomain / chatToDomain di
@@ -18,15 +20,20 @@
  * (autosave timer LokiJS bikin proses menggantung jika exit normal.)
  *
  * Catatan baca kolom: kolom dibaca lewat row._getRaw(nama kolom snake_case)
- * atau JSON.parse(row._getRaw('items_json')) untuk kolom JSON. Getter dan
- * setter Model (@text/@field/@json) tidak berfungsi di runtime Jest ini,
- * jadi akses lewat field Model biasa tidak membaca _raw.
+ * atau JSON.parse(row._getRaw('items_json')) untuk kolom JSON.
  */
 
 import { Database } from '@nozbe/watermelondb';
 import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
 import type { Model } from '@nozbe/watermelondb';
-import type { Order, Payment, ChatMessage, SyncPullResponse } from '@delivery/shared';
+import type {
+  Order,
+  Payment,
+  ChatMessage,
+  SyncPullResponse,
+  SyncRecordPull,
+  SyncPushResponse,
+} from '@delivery/shared';
 
 import { schema } from '../db/schema';
 import { OrderModel } from '../db/models/OrderModel';
@@ -42,6 +49,7 @@ jest.mock('./client', () => {
   return {
     ...actual,
     pullBatch: jest.fn(),
+    pushBatch: jest.fn(),
   };
 });
 
@@ -1340,5 +1348,409 @@ describe('heldOrderIds dan releasedOrders', () => {
     );
     expect(poolRefreshCalls2).toHaveLength(0);
     expect(syncEvents.syncEvents.emit).not.toHaveBeenCalledWith('pool-refresh', { source: 'released' });
+  });
+});
+
+// =================================================================
+// Baris yang sudah ada diperbarui dari server
+// =================================================================
+
+// Nilai lama tiap kolom sengaja berbeda dari nilai di payload server, jadi
+// terlihat jelas kolom mana yang tertimpa dan mana yang tidak. Kolom enum
+// memakai nilai sah yang lain dari nilai di payload.
+const ORDER_LAMA: Record<string, unknown> = {
+  customer_id: 'cust-lama',
+  driver_id: 'driver-lama',
+  status: 'ASSIGNED',
+  items_json: '[{"id":"item-lama"}]',
+  address_json: '{"street":"Jl Lama"}',
+  total_cents: 111,
+  currency: 'USD',
+  notes: 'catatan lama',
+  server_version: 1,
+  deleted_at: null,
+  failed_sync_attempts: 0,
+  cancelled_by: 'driver-lama',
+  cancel_reason: 'alasan lama',
+  last_conflict_reason: null,
+  last_conflict_at: null,
+  created_at: 1700000000000,
+  updated_at: 1700000000000,
+};
+
+const PAYMENT_LAMA: Record<string, unknown> = {
+  order_id: 'order-lama',
+  idempotency_key: 'cod:lama',
+  method: 'CARD',
+  status: 'PENDING',
+  amount_cents: 11111,
+  currency: 'USD',
+  kind: 'TIP',
+  external_ref: 'ext-lama',
+  server_version: 1,
+  deleted_at: null,
+  failed_sync_attempts: 0,
+  created_at: 1700000000000,
+  updated_at: 1700000000000,
+};
+
+const CHAT_LAMA: Record<string, unknown> = {
+  room_id: 'room-lama',
+  sender_id: 'sender-lama',
+  body: 'body lama',
+  attachment_json: '{"kind":"image","url":"https://example.test/lama.png"}',
+  status: 'SENT',
+  client_created_at: 1500000000000,
+  server_created_at: 1500000000001,
+  server_version: 1,
+  deleted_at: null,
+  failed_sync_attempts: 0,
+  created_at: 1700000000000,
+  updated_at: 1700000000000,
+};
+
+// Bantu: bungkus satu record server jadi respons pull.
+function pullResponseFor(record: SyncRecordPull): SyncPullResponse {
+  return {
+    nextCursor: 'cursor-update-existing',
+    records: [record],
+    serverTime: '2026-01-20T10:00:00.000Z',
+  };
+}
+
+describe('baris yang sudah ada diperbarui dari server', () => {
+  let db: Database;
+  let coordinator: SyncCoordinator;
+  let pullBatchMock: jest.Mock;
+  let pushBatchMock: jest.Mock;
+
+  beforeEach(() => {
+    jest.resetModules();
+    db = buildTestDatabase();
+    const client = jest.requireMock<{ pullBatch: jest.Mock; pushBatch: jest.Mock }>('./client');
+    pullBatchMock = client.pullBatch;
+    pushBatchMock = client.pushBatch;
+    coordinator = jest.requireActual<typeof import('./coordinator')>('./coordinator').syncCoordinator;
+  });
+
+  afterEach(() => {
+    if (coordinator) coordinator.stop();
+  });
+
+  it('orders: kolom yang dikirim server menimpa nilai lama', async () => {
+    await seedSnakeCaseRow(db, 'orders', ORDER_ID, { ...ORDER_LAMA });
+
+    pullBatchMock.mockResolvedValue(ORDER_PULL_RESPONSE);
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find(ORDER_ID);
+    expect({
+      customer_id: row._getRaw('customer_id'),
+      driver_id: row._getRaw('driver_id'),
+      status: row._getRaw('status'),
+      items_json: row._getRaw('items_json'),
+      address_json: row._getRaw('address_json'),
+      total_cents: row._getRaw('total_cents'),
+      currency: row._getRaw('currency'),
+      notes: row._getRaw('notes'),
+      cancelled_by: row._getRaw('cancelled_by'),
+      cancel_reason: row._getRaw('cancel_reason'),
+      server_version: row._getRaw('server_version'),
+    }).toEqual({
+      customer_id: 'cust-regression-pull-1',
+      driver_id: 'driver-regression-pull-1',
+      status: 'CONFIRMED',
+      items_json: JSON.stringify(ORDER_PAYLOAD_DATA.items),
+      address_json: JSON.stringify(ORDER_PAYLOAD_DATA.deliveryAddress),
+      total_cents: 33333,
+      currency: 'IDR',
+      notes: 'regression order notes',
+      cancelled_by: 'driver-regression-pull-1',
+      cancel_reason: 'regression cancel reason',
+      server_version: 4,
+    });
+  });
+
+  it('orders: created_at tetap nilai lokal, updated_at diperbarui, _status synced', async () => {
+    await seedSnakeCaseRow(db, 'orders', ORDER_ID, { ...ORDER_LAMA });
+
+    pullBatchMock.mockResolvedValue(ORDER_PULL_RESPONSE);
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find(ORDER_ID);
+    expect(row._getRaw('created_at')).toBe(1700000000000);
+    expect(row._getRaw('updated_at')).toBeGreaterThan(1700000000000);
+    expect(row._raw._status).toBe('synced');
+  });
+
+  it('orders: driverId, notes, cancelledBy, cancelReason yang tidak dikirim server jadi null', async () => {
+    await seedSnakeCaseRow(db, 'orders', ORDER_ID, { ...ORDER_LAMA });
+
+    // Payload order tanpa keempat kolom opsional itu.
+    const orderTanpaKolomOpsional: Order = {
+      id: ORDER_ID,
+      customerId: 'cust-regression-pull-1',
+      status: 'CONFIRMED',
+      items: ORDER_PAYLOAD_DATA.items,
+      deliveryAddress: ORDER_PAYLOAD_DATA.deliveryAddress,
+      totalCents: 33333,
+      currency: 'IDR',
+      version: 4,
+      createdAt: ORDER_PAYLOAD_DATA.createdAt,
+      updatedAt: ORDER_PAYLOAD_DATA.updatedAt,
+    };
+
+    pullBatchMock.mockResolvedValue(pullResponseFor({
+      entityType: 'order',
+      id: ORDER_ID,
+      deleted: false,
+      serverVersion: 4,
+      serverChangedAt: '2026-01-20T10:00:00.000Z',
+      data: orderTanpaKolomOpsional,
+    }));
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find(ORDER_ID);
+    expect({
+      driver_id: row._getRaw('driver_id'),
+      notes: row._getRaw('notes'),
+      cancelled_by: row._getRaw('cancelled_by'),
+      cancel_reason: row._getRaw('cancel_reason'),
+    }).toEqual({
+      driver_id: null,
+      notes: null,
+      cancelled_by: null,
+      cancel_reason: null,
+    });
+  });
+
+  it('orders: versi lokal lebih besar dari data server, baris tidak berubah', async () => {
+    await seedSnakeCaseRow(db, 'orders', ORDER_ID, { ...ORDER_LAMA, server_version: 9 });
+
+    pullBatchMock.mockResolvedValue(ORDER_PULL_RESPONSE);
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find(ORDER_ID);
+    expect({
+      customer_id: row._getRaw('customer_id'),
+      driver_id: row._getRaw('driver_id'),
+      status: row._getRaw('status'),
+      items_json: row._getRaw('items_json'),
+      total_cents: row._getRaw('total_cents'),
+      currency: row._getRaw('currency'),
+      notes: row._getRaw('notes'),
+      cancelled_by: row._getRaw('cancelled_by'),
+      cancel_reason: row._getRaw('cancel_reason'),
+      server_version: row._getRaw('server_version'),
+    }).toEqual({
+      customer_id: 'cust-lama',
+      driver_id: 'driver-lama',
+      status: 'ASSIGNED',
+      items_json: '[{"id":"item-lama"}]',
+      total_cents: 111,
+      currency: 'USD',
+      notes: 'catatan lama',
+      cancelled_by: 'driver-lama',
+      cancel_reason: 'alasan lama',
+      server_version: 9,
+    });
+    expect(row._raw._status).toBe('synced');
+  });
+
+  it('orders: data terhapus di server mengisi deleted_at dan server_version, _status synced', async () => {
+    await seedSnakeCaseRow(db, 'orders', ORDER_ID, { ...ORDER_LAMA });
+
+    pullBatchMock.mockResolvedValue(pullResponseFor({
+      entityType: 'order',
+      id: ORDER_ID,
+      deleted: true,
+      serverVersion: 7,
+      serverChangedAt: '2026-02-01T00:00:00.000Z',
+      data: ORDER_PAYLOAD_DATA,
+    }));
+    await coordinator.start(db);
+
+    const row = await db.get<OrderModel>('orders').find(ORDER_ID);
+    expect(typeof row._getRaw('deleted_at')).toBe('number');
+    expect(row._getRaw('deleted_at')).toBeGreaterThan(0);
+    expect(row._getRaw('server_version')).toBe(7);
+    expect(row._raw._status).toBe('synced');
+  });
+
+  it('payments: kolom yang dikirim server menimpa nilai lama', async () => {
+    await seedSnakeCaseRow(db, 'payments', PAYMENT_ID, { ...PAYMENT_LAMA });
+
+    pullBatchMock.mockResolvedValue(PAYMENT_PULL_RESPONSE);
+    await coordinator.start(db);
+
+    const row = await db.get<PaymentModel>('payments').find(PAYMENT_ID);
+    expect({
+      order_id: row._getRaw('order_id'),
+      idempotency_key: row._getRaw('idempotency_key'),
+      method: row._getRaw('method'),
+      status: row._getRaw('status'),
+      amount_cents: row._getRaw('amount_cents'),
+      currency: row._getRaw('currency'),
+      kind: row._getRaw('kind'),
+      external_ref: row._getRaw('external_ref'),
+      server_version: row._getRaw('server_version'),
+    }).toEqual({
+      order_id: ORDER_ID,
+      idempotency_key: 'cod:regression-payment-stable-uuid-001',
+      method: 'CASH',
+      status: 'CAPTURED',
+      amount_cents: 99999,
+      currency: 'IDR',
+      kind: 'PAYMENT',
+      external_ref: 'regression-ext-ref-unique',
+      server_version: 2,
+    });
+  });
+
+  it('payments: externalRef yang tidak dikirim server jadi null', async () => {
+    await seedSnakeCaseRow(db, 'payments', PAYMENT_ID, { ...PAYMENT_LAMA });
+
+    // Payload payment tanpa externalRef.
+    const paymentTanpaExternalRef: Payment = {
+      id: PAYMENT_ID,
+      orderId: ORDER_ID,
+      idempotencyKey: 'cod:regression-payment-stable-uuid-001',
+      method: 'CASH',
+      status: 'CAPTURED',
+      amountCents: 99999,
+      currency: 'IDR',
+      kind: 'PAYMENT',
+      version: 2,
+      createdAt: PAYMENT_PAYLOAD_DATA.createdAt,
+      updatedAt: PAYMENT_PAYLOAD_DATA.updatedAt,
+    };
+
+    pullBatchMock.mockResolvedValue(pullResponseFor({
+      entityType: 'payment',
+      id: PAYMENT_ID,
+      deleted: false,
+      serverVersion: 2,
+      serverChangedAt: '2026-01-20T10:00:00.000Z',
+      data: paymentTanpaExternalRef,
+    }));
+    await coordinator.start(db);
+
+    const row = await db.get<PaymentModel>('payments').find(PAYMENT_ID);
+    expect(row._getRaw('external_ref')).toBeNull();
+  });
+
+  it('chat_messages: kolom yang dikirim server menimpa nilai lama', async () => {
+    await seedSnakeCaseRow(db, 'chat_messages', CHAT_ID, { ...CHAT_LAMA });
+
+    pullBatchMock.mockResolvedValue(CHAT_PULL_RESPONSE);
+    await coordinator.start(db);
+
+    const row = await db.get<ChatMessageModel>('chat_messages').find(CHAT_ID);
+    expect({
+      room_id: row._getRaw('room_id'),
+      sender_id: row._getRaw('sender_id'),
+      body: row._getRaw('body'),
+      status: row._getRaw('status'),
+      client_created_at: row._getRaw('client_created_at'),
+      server_created_at: row._getRaw('server_created_at'),
+      server_version: row._getRaw('server_version'),
+    }).toEqual({
+      room_id: 'room-regression-pull-1',
+      sender_id: 'sender-regression-pull-1',
+      body: 'regression chat body unique',
+      status: 'DELIVERED',
+      client_created_at: new Date(CHAT_PAYLOAD_DATA.clientCreatedAt).getTime(),
+      server_created_at: parseIsoMs(CHAT_PAYLOAD_DATA.serverCreatedAt),
+      server_version: 3,
+    });
+  });
+
+  it('chat_messages: lampiran yang tidak dikirim server jadi null', async () => {
+    await seedSnakeCaseRow(db, 'chat_messages', CHAT_ID, { ...CHAT_LAMA });
+
+    // Payload chat tanpa attachment.
+    const chatTanpaLampiran: ChatMessage = {
+      id: CHAT_ID,
+      roomId: 'room-regression-pull-1',
+      senderId: 'sender-regression-pull-1',
+      body: 'regression chat body unique',
+      status: 'DELIVERED',
+      clientCreatedAt: CHAT_PAYLOAD_DATA.clientCreatedAt,
+      serverCreatedAt: CHAT_PAYLOAD_DATA.serverCreatedAt,
+      version: 3,
+      createdAt: CHAT_PAYLOAD_DATA.createdAt,
+      updatedAt: CHAT_PAYLOAD_DATA.updatedAt,
+    };
+
+    pullBatchMock.mockResolvedValue(pullResponseFor({
+      entityType: 'chat_message',
+      id: CHAT_ID,
+      deleted: false,
+      serverVersion: 3,
+      serverChangedAt: '2026-01-20T10:00:00.000Z',
+      data: chatTanpaLampiran,
+    }));
+    await coordinator.start(db);
+
+    const row = await db.get<ChatMessageModel>('chat_messages').find(CHAT_ID);
+    expect(row._getRaw('attachment_json')).toBeNull();
+  });
+
+  it('balasan konflik dari server: kolom order mengikuti serverData, server_version dari balasan, _status synced', async () => {
+    // Baris order lokal sudah dirty, jadi ikut terkirim ke server.
+    await seedSnakeCaseRow(db, 'orders', ORDER_ID, { ...ORDER_LAMA, _status: 'updated' });
+
+    // Pull pertama tidak membawa apa-apa, supaya baris tetap dirty
+    // sampai flushNow() mengirimnya.
+    pullBatchMock.mockResolvedValue({
+      nextCursor: 'cursor-kosong',
+      records: [],
+      serverTime: '2026-01-20T10:00:00.000Z',
+    });
+
+    const pushResponse: SyncPushResponse = {
+      acks: [
+        {
+          id: ORDER_ID,
+          entityType: 'order',
+          status: 'conflict',
+          serverVersion: 9,
+          serverChangedAt: '2026-02-01T00:00:00.000Z',
+          serverData: ORDER_PAYLOAD_DATA,
+        },
+      ],
+    };
+    pushBatchMock.mockResolvedValue(pushResponse);
+
+    await coordinator.start(db);
+    await coordinator.flushNow();
+
+    const row = await db.get<OrderModel>('orders').find(ORDER_ID);
+    expect({
+      customer_id: row._getRaw('customer_id'),
+      driver_id: row._getRaw('driver_id'),
+      status: row._getRaw('status'),
+      items_json: row._getRaw('items_json'),
+      address_json: row._getRaw('address_json'),
+      total_cents: row._getRaw('total_cents'),
+      currency: row._getRaw('currency'),
+      notes: row._getRaw('notes'),
+      cancelled_by: row._getRaw('cancelled_by'),
+      cancel_reason: row._getRaw('cancel_reason'),
+      server_version: row._getRaw('server_version'),
+    }).toEqual({
+      customer_id: 'cust-regression-pull-1',
+      driver_id: 'driver-regression-pull-1',
+      status: 'CONFIRMED',
+      items_json: JSON.stringify(ORDER_PAYLOAD_DATA.items),
+      address_json: JSON.stringify(ORDER_PAYLOAD_DATA.deliveryAddress),
+      total_cents: 33333,
+      currency: 'IDR',
+      notes: 'regression order notes',
+      cancelled_by: 'driver-regression-pull-1',
+      cancel_reason: 'regression cancel reason',
+      server_version: 9,
+    });
+    expect(row._raw._status).toBe('synced');
   });
 });
