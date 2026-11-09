@@ -154,7 +154,5 @@ dijalankan ke database yang datanya penting.
 - Daftar jadi driver terbuka buat siapa aja, token berlaku 30 hari tanpa diperpanjang otomatis,
   dan percobaan login belum dibatasi.
 - Tes e2e jalan di database pengembangan, belum ada database tes sendiri.
-- Dekorator WatermelonDB nggak jalan di Jest, jadi sebagian jalur ubah data lokal cuma teruji di
-  perangkat.
 - Field `*Cents` isinya rupiah utuh, dan status `ASSIGNED` artinya ada di daftar Tersedia tapi
   belum ada driver. Dua-duanya sisa desain awal, namanya belum diganti.
