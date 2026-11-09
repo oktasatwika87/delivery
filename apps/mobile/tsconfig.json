@@ -13,7 +13,8 @@
       "@delivery/shared": ["../../packages/shared/src"],
       "@delivery/shared/*": ["../../packages/shared/src/*"]
     },
-    "types": ["react-native", "jest"]
+    "types": ["react-native", "jest"],
+    "useDefineForClassFields": false
   },
   "include": ["src/**/*", "App.tsx", "index.js"],
   "exclude": ["node_modules", "android", "ios", "build"]
