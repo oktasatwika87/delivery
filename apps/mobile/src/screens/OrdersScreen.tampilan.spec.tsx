@@ -97,8 +97,7 @@ jest.mock('../sync/outbox', () => ({
   ...jest.requireActual('../sync/outbox'),
 }));
 
-// Baris tiruan. Kolom dibaca layar lewat _getRaw karena dekorator model
-// tidak aktif di Jest.
+// Baris tiruan. Kolom dibaca layar lewat _getRaw.
 interface BarisPalsu {
   id: string;
   _getRaw: (column: string) => unknown;

@@ -49,9 +49,7 @@ export async function setLocalDataOwner(userId: string | null): Promise<void> {
 }
 
 /**
- * Hitung baris yang akan dikirim otomatis (belum terkirim). Pemeriksaan
- * lewat `Q.where` dan `fetchCount()`, bukan getter model, supaya bisa
- * dites dengan LokiJS (dekorator model tidak aktif di Jest).
+ * Hitung baris yang akan dikirim otomatis (belum terkirim).
  *
  * Dihitung:
  * - pending_actions berstatus 'pending', 'syncing', atau 'failed'

@@ -7,4 +7,4 @@ Sub-modules:
 - `models/` — model classes ber-decorator (satu file per entity).
 - `index.ts` — adapter + Database instance.
 
-Decorator `@field`/`@text`/`@date` adalah dari `@nozbe/watermelondb/decorators` — butuh plugin `babel-plugin-transform-decorators-legacy` di `babel.config.js`.
+Dekorator `@field`/`@text`/`@date`/`@json` dari `@nozbe/watermelondb/decorators` butuh `@babel/plugin-proposal-decorators` dengan `legacy: true` di `babel.config.js`.

@@ -425,8 +425,7 @@ export class SyncCoordinator implements Coordinator {
 
         // Aksi update_status, cancel, dan reject order ini dihapus, status apa
         // pun, sama seperti writeRejectConflictAndDelete untuk 'reassigned'.
-        // collect_cod tidak disentuh. Kolom dibaca lewat _getRaw karena
-        // dekorator @text tidak aktif di Jest.
+        // collect_cod tidak disentuh.
         const allForOrder = await pendingActionsCollection
           .query(Q.where('target_order_id', orderId))
           .fetch();

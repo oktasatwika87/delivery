@@ -3,8 +3,7 @@
  * sinkronisasi.
  *
  * Baris pending_actions dibuat di database Loki sungguhan karena fungsi ini
- * membaca kolom lewat _getRaw. Dekorator model tidak aktif di Jest, jadi
- * getter status, action_type, dan created_at selalu kosong.
+ * membaca kolom lewat _getRaw.
  */
 
 import { Database } from '@nozbe/watermelondb';

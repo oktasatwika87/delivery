@@ -4,8 +4,7 @@
  *
  * Aturan ini sama dengan yang dipakai OrderDetailScreen (lihat activeAction
  * sampai displayStatus di sana), supaya daftar Order dan detail order
- * selaras. Kolom aksi dibaca lewat _getRaw karena dekorator model tidak
- * aktif di Jest.
+ * selaras.
  */
 
 import { OrderStatus } from '@delivery/shared';

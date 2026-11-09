@@ -74,7 +74,6 @@ function isOrderStatus(value: string): value is OrderStatus {
   return ORDER_STATUS_VALUES.includes(value);
 }
 
-// Status baris dibaca mentah karena dekorator model tidak aktif di Jest.
 function readOrderStatus(row: OrderModel): OrderStatus {
   const raw = row._getRaw('status');
   if (typeof raw === 'string' && isOrderStatus(raw)) return raw;
@@ -528,8 +527,8 @@ export function OrdersScreenBase({
         return;
       }
 
-      // _getRaw karena dekorator model tidak aktif di Jest. Baris pool selalu
-      // membawa versi dari server; kalau tidak ada, jangan kirim apa pun.
+      // Baris pool selalu membawa versi dari server; kalau tidak ada, jangan
+      // kirim apa pun.
       const serverVersion = order._getRaw('server_version');
       if (typeof serverVersion !== 'number') {
         console.warn('[OrdersScreen] handleAccept: server_version bukan angka', order.id);
