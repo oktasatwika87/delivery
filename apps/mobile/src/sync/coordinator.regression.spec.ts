@@ -1696,6 +1696,44 @@ describe('baris yang sudah ada diperbarui dari server', () => {
     expect(row._getRaw('attachment_json')).toBeNull();
   });
 
+  it('chat_messages: lampiran dari server tersimpan sebagai string JSON', async () => {
+    await seedSnakeCaseRow(db, 'chat_messages', CHAT_ID, { ...CHAT_LAMA });
+
+    pullBatchMock.mockResolvedValue(CHAT_PULL_RESPONSE);
+    await coordinator.start(db);
+
+    const row = await db.get<ChatMessageModel>('chat_messages').find(CHAT_ID);
+    expect(readJsonColumn(row, 'attachment_json')).toEqual(CHAT_PAYLOAD_DATA.attachment);
+  });
+
+  it('chat_messages: lampiran ikut terkirim sebagai objek', async () => {
+    // Baris chat baru dibuat lokal, jadi ikut terkirim ke server.
+    await seedSnakeCaseRow(db, 'chat_messages', CHAT_ID, {
+      ...CHAT_LAMA,
+      _status: 'created',
+      attachment_json: JSON.stringify(CHAT_PAYLOAD_DATA.attachment),
+    });
+
+    pullBatchMock.mockResolvedValue({
+      nextCursor: 'cursor-kosong',
+      records: [],
+      serverTime: '2026-01-20T10:00:00.000Z',
+    });
+    pushBatchMock.mockResolvedValue({ acks: [] });
+
+    await coordinator.start(db);
+    await coordinator.flushNow();
+
+    const payload = pushBatchMock.mock.calls[0][0];
+    const chatRecord = payload.records.find(
+      (record: { entityType: string }) => record.entityType === 'chat_message',
+    );
+    expect(chatRecord).toBeDefined();
+    expect(chatRecord?.data).toEqual(
+      expect.objectContaining({ attachment: CHAT_PAYLOAD_DATA.attachment }),
+    );
+  });
+
   it('balasan konflik dari server: kolom order mengikuti serverData, server_version dari balasan, _status synced', async () => {
     // Baris order lokal sudah dirty, jadi ikut terkirim ke server.
     await seedSnakeCaseRow(db, 'orders', ORDER_ID, { ...ORDER_LAMA, _status: 'updated' });
