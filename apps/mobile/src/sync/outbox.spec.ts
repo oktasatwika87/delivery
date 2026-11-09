@@ -2888,21 +2888,23 @@ describe('outbox', () => {
       });
 
       // update_status 400, 403, 404: 'failed' dan tidak dikirim di putaran
-      // berikutnya.
+      // berikutnya. Tiap status pakai order sendiri, jadi aksi untuk order
+      // yang sama tidak saling menahan.
       test('update_status 400, 403, 404: failed, tidak dikirim di putaran berikutnya', async () => {
-        const order = {
-          id: 'order-us-4xx',
-          _raw: { id: 'order-us-4xx', _status: 'synced' },
-          status: 'PREPARING',
-          serverVersion: 1,
-        };
-        mockState.orders.set('order-us-4xx', order);
-
         for (const status of [400, 403, 404]) {
+          const orderId = `order-us-4xx-${status}`;
+          const order = {
+            id: orderId,
+            _raw: { id: orderId, _status: 'synced' },
+            status: 'PREPARING',
+            serverVersion: 1,
+          };
+          mockState.orders.set(orderId, order);
+
           const action = makeRecord({
             id: `us-4xx-${status}`,
             actionType: 'update_status',
-            targetOrderId: 'order-us-4xx',
+            targetOrderId: orderId,
             expectedVersion: 0,
             idempotencyKey: `status:us-4xx-${status}:OUT_FOR_DELIVERY`,
             payloadJson: { status: 'OUT_FOR_DELIVERY' },
