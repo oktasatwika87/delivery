@@ -56,7 +56,6 @@ describe('dekorator model WatermelonDB', () => {
         id = baris.id;
       });
 
-      // baris diambil ulang dari database, bukan objek yang tadi dibuat
       const baris = await db.get<ChatMessageModel>('chat_messages').find(id);
 
       expect(baris.roomId).toBe('room-1');
