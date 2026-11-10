@@ -9,5 +9,7 @@ module.exports = {
       { loose: true },
       // HARUS diletakkan setelah proposal-decorators
     ],
+    // Plugin reanimated HARUS plugin terakhir.
+    'react-native-reanimated/plugin',
   ],
 };
