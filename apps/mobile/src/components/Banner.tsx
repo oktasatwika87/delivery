@@ -8,12 +8,20 @@
 
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
 import { colors, fontFamily, radius, size, space, type } from '../theme/tokens';
+import { enterFromAbove, exitUp } from './motion/presets';
+import { useInitialWindow } from './motion/InitialWindow';
 
 const TEBAL_TEPI = 1.5;
+
+/** Masuk banner dari atas. */
+const MASUK = enterFromAbove();
+/** Keluar banner ke atas. */
+const KELUAR = exitUp();
 
 /** Sisa ukuran ikon supaya area sentuhnya tetap 48. */
 const SENTUH_IKON = {
@@ -99,11 +107,14 @@ export function Banner({
   onClose,
   action,
 }: BannerProps): React.JSX.Element {
+  const dalamJendela = useInitialWindow();
   const gaya = GAYA_TONE[tone];
   const namaIkon = icon ?? gaya.icon;
 
   return (
-    <View
+    <Animated.View
+      entering={dalamJendela ? undefined : MASUK}
+      exiting={dalamJendela ? undefined : KELUAR}
       style={[
         styles.wadah,
         {
@@ -138,7 +149,7 @@ export function Banner({
           <Icon name="close" size={size.iconSm} color={gaya.color} />
         </Pressable>
       ) : null}
-    </View>
+    </Animated.View>
   );
 }
 

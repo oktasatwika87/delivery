@@ -10,6 +10,7 @@ import { StyleSheet } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 
 import { Banner } from './Banner';
+import { InitialWindowProvider } from './motion/InitialWindow';
 import { Icon } from '../theme/Icon';
 import { colors } from '../theme/tokens';
 
@@ -81,5 +82,19 @@ describe('Banner', () => {
       render(<Banner tone="success" title="Judul" />).toJSON().props.style,
     );
     expect(sukses.backgroundColor).toBe(colors.successSoft);
+  });
+
+  it('di dalam jendela awal akar tidak punya entering', () => {
+    const { toJSON } = render(
+      <InitialWindowProvider>
+        <Banner tone="info" title="Judul" />
+      </InitialWindowProvider>,
+    );
+    expect(toJSON().props.entering).toBeUndefined();
+  });
+
+  it('tanpa penyedia akar punya entering', () => {
+    const { toJSON } = render(<Banner tone="info" title="Judul" />);
+    expect(toJSON().props.entering).toBeDefined();
   });
 });
