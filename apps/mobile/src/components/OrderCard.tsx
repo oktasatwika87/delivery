@@ -139,7 +139,7 @@ export function OrderCard(props: OrderCardProps): React.JSX.Element {
             ) : null}
           </View>
         </View>
-        {props.syncState ? <SyncBadge state={props.syncState} /> : null}
+        <SyncBadge state={props.syncState ?? null} />
         <View style={styles.garis} />
         <View style={styles.bawah}>
           <Text style={styles.jumlah}>{props.amountText}</Text>
