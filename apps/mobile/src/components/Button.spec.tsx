@@ -9,6 +9,7 @@ import { StyleSheet } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 
 import { Button } from './Button';
+import { CheckMark } from './motion/CheckMark';
 import { Icon } from '../theme/Icon';
 import { colors, size } from '../theme/tokens';
 
@@ -102,5 +103,68 @@ describe('Button', () => {
     );
     const gaya = StyleSheet.flatten(getByTestId('tombol').props.style);
     expect(gaya.height).toBe(size.controlLg);
+  });
+
+  it('tombol aktif punya penangan tekan dan menekan tidak mengganggu aksi', () => {
+    const onPress = jest.fn();
+    const { getByTestId } = render(
+      <Button title="Simpan" onPress={onPress} testID="tombol" />,
+    );
+
+    expect(getByTestId('tombol').props.onPressIn).toBeDefined();
+
+    fireEvent(getByTestId('tombol'), 'pressIn');
+    fireEvent.press(getByTestId('tombol'));
+
+    expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('tombol nonaktif, memuat, dan berhasil tidak punya penangan tekan', () => {
+    const nonaktif = render(
+      <Button title="Simpan" onPress={() => {}} disabled testID="tombol" />,
+    );
+    expect(nonaktif.getByTestId('tombol').props.onPressIn).toBeUndefined();
+
+    const memuat = render(
+      <Button title="Simpan" onPress={() => {}} loading testID="tombol" />,
+    );
+    expect(memuat.getByTestId('tombol').props.onPressIn).toBeUndefined();
+
+    const berhasil = render(
+      <Button title="Simpan" onPress={() => {}} success testID="tombol" />,
+    );
+    expect(berhasil.getByTestId('tombol').props.onPressIn).toBeUndefined();
+  });
+
+  it('tombol berhasil menampilkan centang dengan judulnya tetap ada', () => {
+    const { getByText, UNSAFE_getByType } = render(
+      <Button title="Simpan" onPress={() => {}} success />,
+    );
+
+    expect(UNSAFE_getByType(CheckMark)).toBeTruthy();
+    expect(getByText('Simpan')).toBeTruthy();
+  });
+
+  it('tombol berhasil tidak memanggil aksi dan tandai nonaktif bukan sibuk', () => {
+    const onPress = jest.fn();
+    const { getByTestId } = render(
+      <Button title="Simpan" onPress={onPress} success testID="tombol" />,
+    );
+
+    fireEvent.press(getByTestId('tombol'));
+
+    expect(onPress).not.toHaveBeenCalled();
+    expect(getByTestId('tombol').props.accessibilityState).toMatchObject({
+      disabled: true,
+      busy: false,
+    });
+  });
+
+  it('tombol berhasil tidak menampilkan ikon atau pemutar memuat', () => {
+    const { UNSAFE_queryByType } = render(
+      <Button title="Simpan" onPress={() => {}} icon="cloud_upload" success />,
+    );
+
+    expect(UNSAFE_queryByType(Icon)).toBeNull();
   });
 });

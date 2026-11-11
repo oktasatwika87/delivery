@@ -15,8 +15,11 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
+import Animated from 'react-native-reanimated';
 
 import { HelpLine } from './HelpLine';
+import { CheckMark } from './motion/CheckMark';
+import { usePressScale } from './motion/usePressScale';
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
 import {
@@ -51,6 +54,8 @@ export interface ButtonProps {
   icon?: IconName;
   disabled?: boolean;
   loading?: boolean;
+  /** Kalau true, tombol menampilkan centang dan tidak bisa ditekan lagi. */
+  success?: boolean;
   helpText?: string;
   testID?: string;
 }
@@ -71,11 +76,13 @@ export function Button({
   icon,
   disabled = false,
   loading = false,
+  success = false,
   helpText,
   testID,
 }: ButtonProps): React.JSX.Element {
-  const mati = disabled || loading;
-  const warnaTeks = warnaTeksButton(variant, disabled);
+  const mati = disabled || loading || success;
+  const skala = usePressScale(!mati);
+  const warnaTeks = warnaTeksButton(variant, disabled && !success);
 
   const gayaUkuran =
     size === 'lg' ? styles.ukuranLg : size === 'sm' ? styles.ukuranSm : styles.ukuranMd;
@@ -86,7 +93,7 @@ export function Button({
       : variant === 'secondary'
         ? styles.isiKedua
         : TANPA_ISI,
-    ...(disabled && variant !== 'ghost' && variant !== 'danger'
+    ...(disabled && !success && variant !== 'ghost' && variant !== 'danger'
       ? [styles.isiNonaktif]
       : []),
   ];
@@ -99,29 +106,40 @@ export function Button({
 
   return (
     <View>
-      <Pressable
-        testID={testID}
-        onPress={mati ? undefined : onPress}
-        disabled={mati}
-        accessibilityRole="button"
-        accessibilityLabel={title}
-        accessibilityState={{ disabled: mati, busy: loading }}
-        android_ripple={variant === 'primary' ? { color: colors.actionPressed } : undefined}
-        hitSlop={size === 'sm' ? SENTUH_SM : undefined}
-        style={({ pressed }) => [
-          styles.tombol,
-          gayaUkuran,
-          ...gayaIsi,
-          pressed && variant === 'primary' ? styles.isiPrimerDitekan : null,
-        ]}
-      >
-        {loading ? (
-          <ActivityIndicator size="small" color={warnaTeks} />
-        ) : icon ? (
-          <Icon name={icon} size={ukuranKontrol.iconSm} color={warnaTeks} />
-        ) : null}
-        <Text style={gayaTeks}>{title}</Text>
-      </Pressable>
+      <Animated.View style={skala.style}>
+        <Pressable
+          testID={testID}
+          onPress={mati ? undefined : onPress}
+          onPressIn={mati ? undefined : skala.onPressIn}
+          onPressOut={mati ? undefined : skala.onPressOut}
+          disabled={mati}
+          accessibilityRole="button"
+          accessibilityLabel={title}
+          accessibilityState={{ disabled: mati, busy: loading && !success }}
+          android_ripple={variant === 'primary' ? { color: colors.actionPressed } : undefined}
+          hitSlop={size === 'sm' ? SENTUH_SM : undefined}
+          style={({ pressed }) => [
+            styles.tombol,
+            gayaUkuran,
+            ...gayaIsi,
+            pressed && variant === 'primary' ? styles.isiPrimerDitekan : null,
+          ]}
+        >
+          {!success ? (
+            loading ? (
+              <ActivityIndicator size="small" color={warnaTeks} />
+            ) : icon ? (
+              <Icon name={icon} size={ukuranKontrol.iconSm} color={warnaTeks} />
+            ) : null
+          ) : null}
+          <Text style={[gayaTeks, success ? styles.teksTakTerlihat : null]}>{title}</Text>
+          {success ? (
+            <View style={styles.lapisanCentang} pointerEvents="none">
+              <CheckMark size={ukuranKontrol.iconSm} color={warnaTeks} />
+            </View>
+          ) : null}
+        </Pressable>
+      </Animated.View>
       {helpText ? <HelpLine text={helpText} /> : null}
     </View>
   );
@@ -169,5 +187,17 @@ const styles = StyleSheet.create({
   teksKecil: {
     ...type.bodySm,
     fontFamily: fontFamily.bold,
+  },
+  teksTakTerlihat: {
+    opacity: 0,
+  },
+  lapisanCentang: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
