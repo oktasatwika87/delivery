@@ -22,6 +22,7 @@ import { OrderModel } from '../db/models/OrderModel';
 import { PendingActionModel } from '../db/models/PendingActionModel';
 import { getCurrentUserId } from '../sync/session';
 import { fetchAvailableOrders, UnauthorizedError, acceptOrder, ApiError } from '../sync/client';
+import { hapticAccept, hapticError } from '../haptics';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
 import { deriveOrderSyncView } from '../sync/orderSyncView';
@@ -521,6 +522,7 @@ export function OrdersScreenBase({
   const handleAccept = useCallback(
     async (order: OrderModel): Promise<void> => {
       if (networkMonitor.getStatus() !== 'online') {
+        hapticError();
         Alert.alert(
           'Butuh Koneksi',
           'Terima order butuh koneksi internet biar nggak bentrok sama driver lain.',
@@ -539,6 +541,7 @@ export function OrdersScreenBase({
       const serverVersion = order._getRaw('server_version');
       if (typeof serverVersion !== 'number') {
         console.warn('[OrdersScreen] handleAccept: server_version bukan angka', order.id);
+        hapticError();
         Alert.alert('Gagal', 'Terima order gagal. Coba lagi.');
         return;
       }
@@ -554,6 +557,7 @@ export function OrdersScreenBase({
           // Pesan teks TIDAK lagi dicocokkan, backend kini mengirim body
           // { code, message } dan caller diharap pakai err.code, bukan parse pesan.
           if (err instanceof ApiError && err.status === 409) {
+            hapticError();
             Alert.alert(
               'Order sudah berubah atau diambil driver lain. Daftar diperbarui.',
             );
@@ -561,6 +565,7 @@ export function OrdersScreenBase({
             return;
           }
           console.error('[OrdersScreen] acceptOrder failed:', err);
+          hapticError();
           Alert.alert('Gagal', 'Terima order gagal. Coba lagi.');
           return;
         }
@@ -602,6 +607,9 @@ export function OrdersScreenBase({
           console.error('[OrdersScreen] acceptOrder: local write failed:', err);
           return;
         }
+
+        // Terima berhasil, jadi beri tahu lewat getaran.
+        hapticAccept();
 
         // Remove from pool (local state)
         setPoolOrders((prev) => prev.filter((o) => o.id !== order.id));

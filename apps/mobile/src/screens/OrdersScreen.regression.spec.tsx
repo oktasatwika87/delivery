@@ -121,6 +121,12 @@ jest.mock('../sync/session', () => ({
   getCurrentToken: jest.fn().mockResolvedValue(null),
 }));
 
+// getar: OrdersScreen memanggil modul haptics saat Terima berhasil atau gagal.
+jest.mock('../haptics', () => ({
+  hapticAccept: jest.fn(),
+  hapticError: jest.fn(),
+}));
+
 // withDatabase dan withObservables dipakai OrdersScreen yang terbungkus. Yang dirender OrdersScreenBase langsung, tapi modul OrdersScreen tetap diimpor dan ekspor terbungkusnya ikut dievaluasi, jadi keduanya ditiru sebagai fungsi identitas supaya tidak butuh konteks.
 jest.mock('@nozbe/watermelondb/react', () => ({
   withDatabase: (C: unknown) => C,
@@ -1608,6 +1614,12 @@ describe('handleAccept - accept order lewat REST', () => {
   beforeEach(() => {
     db = buildTestDatabase();
     jest.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS);
+    const haptics = jest.requireMock('../haptics') as {
+      hapticAccept: jest.Mock;
+      hapticError: jest.Mock;
+    };
+    haptics.hapticAccept.mockClear();
+    haptics.hapticError.mockClear();
   });
 
   afterEach(() => {
@@ -1715,6 +1727,14 @@ describe('handleAccept - accept order lewat REST', () => {
     expect(updatedRow._getRaw('server_version')).toBe(4);
     expect(updatedRow._raw._status).toBe('synced');
     expect(updatedRow._raw._changed).toBe('');
+
+    // Terima sukses: bergetar sekali dengan pola terima, bukan pola galat.
+    const haptics = jest.requireMock('../haptics') as {
+      hapticAccept: jest.Mock;
+      hapticError: jest.Mock;
+    };
+    expect(haptics.hapticAccept).toHaveBeenCalledTimes(1);
+    expect(haptics.hapticError).not.toHaveBeenCalled();
   });
 
   // Tes 2: 409 conflict, syncEvents.emit dipanggil, baris lama TIDAK dihapus manual
@@ -1799,6 +1819,13 @@ describe('handleAccept - accept order lewat REST', () => {
     );
     // syncEvents.emit('pool-refresh') dipicu oleh 409
     expect(syncEventsMod.syncEvents.emit).toHaveBeenCalledWith('pool-refresh', {});
+    // Konflik: bergetar dengan pola galat, bukan pola terima.
+    const haptics = jest.requireMock('../haptics') as {
+      hapticAccept: jest.Mock;
+      hapticError: jest.Mock;
+    };
+    expect(haptics.hapticError).toHaveBeenCalledTimes(1);
+    expect(haptics.hapticAccept).not.toHaveBeenCalled();
   });
 
   // Tes 5: 409 VERSION_CONFLICT (OCC version mismatch), Alert + pool-refresh
@@ -1883,6 +1910,13 @@ describe('handleAccept - accept order lewat REST', () => {
     expect(syncEventsMod.syncEvents.emit).not.toHaveBeenCalledWith('pool-refresh', expect.anything());
     // Alert gagal umum dipanggil dengan judul 'Gagal' dan pesan 'Terima order gagal. Coba lagi.'
     expect(Alert.alert as jest.Mock).toHaveBeenCalledWith('Gagal', 'Terima order gagal. Coba lagi.');
+    // Galat lain: bergetar dengan pola galat.
+    const haptics = jest.requireMock('../haptics') as {
+      hapticAccept: jest.Mock;
+      hapticError: jest.Mock;
+    };
+    expect(haptics.hapticError).toHaveBeenCalledTimes(1);
+    expect(haptics.hapticAccept).not.toHaveBeenCalled();
   });
 
   // Tes 3: error jaringan/5xx, baris lokal TIDAK diubah sama sekali

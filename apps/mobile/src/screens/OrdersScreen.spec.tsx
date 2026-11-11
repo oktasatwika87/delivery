@@ -120,6 +120,12 @@ jest.mock('../map/networkMonitor', () => ({
   },
 }));
 
+// Mock getar: layar bergetar saat Terima gagal tanpa koneksi.
+jest.mock('../haptics', () => ({
+  hapticAccept: jest.fn(),
+  hapticError: jest.fn(),
+}));
+
 // Mock sync coordinator
 jest.mock('../sync', () => ({
   syncCoordinator: {
@@ -696,6 +702,11 @@ describe('Accept order online gating', () => {
 
     // DB write should NOT be called when guard triggers
     expect(mockDatabase.write).not.toHaveBeenCalled();
+
+    // Tanpa koneksi: bergetar dengan pola galat, bukan pola terima.
+    const { hapticAccept, hapticError } = require('../haptics');
+    expect(hapticError).toHaveBeenCalledTimes(1);
+    expect(hapticAccept).not.toHaveBeenCalled();
   });
 
   test('accepts order normally when online', async () => {
