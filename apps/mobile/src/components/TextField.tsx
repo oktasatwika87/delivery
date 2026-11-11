@@ -5,18 +5,27 @@
  * berubah warna tepi saat difokus dan kalau ada pesan galat.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { TextInputProps, TextStyle, ViewStyle } from 'react-native';
+import Animated from 'react-native-reanimated';
 
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
 import { colors, fontFamily, radius, size, space, type } from '../theme/tokens';
+import { enterFromAbove, fadeOut } from './motion/presets';
+import { useInitialWindow } from './motion/InitialWindow';
+import { useFieldShake } from './motion/useFieldShake';
 
 const JARAK_LABEL = 6;
 const TEBAL_TEPI = 1.5;
 const TINGGI_MULTILINE = 88;
 const UKURAN_IKON_ERROR = 16;
+
+/** Masuk pesan galat dari atas. */
+const MASUK = enterFromAbove();
+/** Keluar pesan galat. */
+const KELUAR = fadeOut();
 
 /** Sisa ukuran ikon supaya area sentuhnya tetap 48. */
 const SENTUH_IKON = {
@@ -45,6 +54,8 @@ export interface TextFieldProps {
   secureTextEntry?: boolean;
   rightIcon?: TextFieldRightIcon;
   editable?: boolean;
+  /** Naik setiap kali pengiriman gagal, dipakai untuk menggetarkan kotak. */
+  submitCount?: number;
   testID?: string;
 }
 
@@ -61,9 +72,25 @@ export function TextField({
   secureTextEntry,
   rightIcon,
   editable = true,
+  submitCount,
   testID,
 }: TextFieldProps): React.JSX.Element {
   const [fokus, setFokus] = useState(false);
+  const dalamJendela = useInitialWindow();
+  const { style: gayaGetar, shake } = useFieldShake();
+  const submitSebelum = useRef(submitCount);
+
+  // Kotak hanya bergetar waktu pengiriman baru gagal, jadi mengetik tidak
+  // membuat kotak bergerak.
+  useEffect(() => {
+    if (submitSebelum.current === submitCount) {
+      return;
+    }
+    submitSebelum.current = submitCount;
+    if (error) {
+      shake();
+    }
+  }, [submitCount, error, shake]);
 
   const gayaKotak: ViewStyle[] = [styles.kotak];
   const gayaInput: TextStyle[] = [styles.input];
@@ -87,7 +114,7 @@ export function TextField({
         {label}
         {optional ? <Text style={styles.opsional}> (opsional)</Text> : null}
       </Text>
-      <View style={gayaKotak}>
+      <Animated.View style={[...gayaKotak, gayaGetar]}>
         {prefix ? <Text style={styles.awalan}>{prefix}</Text> : null}
         <TextInput
           testID={testID}
@@ -114,12 +141,16 @@ export function TextField({
             <Icon name={rightIcon.name} size={size.iconSm} color={colors.textMuted} />
           </Pressable>
         ) : null}
-      </View>
+      </Animated.View>
       {error ? (
-        <View style={styles.barisGalat}>
+        <Animated.View
+          entering={dalamJendela ? undefined : MASUK}
+          exiting={dalamJendela ? undefined : KELUAR}
+          style={styles.barisGalat}
+        >
           <Icon name="error" size={UKURAN_IKON_ERROR} color={colors.danger} />
           <Text style={styles.teksGalat}>{error}</Text>
-        </View>
+        </Animated.View>
       ) : null}
     </View>
   );

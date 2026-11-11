@@ -11,7 +11,17 @@ import { fireEvent, render } from '@testing-library/react-native';
 import { TextField } from './TextField';
 import { colors } from '../theme/tokens';
 
+const mockShake = jest.fn();
+
+jest.mock('./motion/useFieldShake', () => ({
+  useFieldShake: () => ({ style: {}, shake: mockShake }),
+}));
+
 describe('TextField', () => {
+  beforeEach(() => {
+    mockShake.mockClear();
+  });
+
   it('label tampil', () => {
     const { getByText } = render(
       <TextField label="Kota" value="" onChangeText={() => {}} />,
@@ -88,5 +98,62 @@ describe('TextField', () => {
     const gaya = StyleSheet.flatten(getByLabelText('Kota').parent.parent.props.style);
     expect(gaya.backgroundColor).toBe(colors.bg);
     expect(gaya.borderColor).toBe(colors.line);
+  });
+
+  it('submitCount naik bersama galat membuat kotak bergetar', () => {
+    const { rerender } = render(
+      <TextField label="Kota" value="" onChangeText={() => {}} submitCount={0} />,
+    );
+
+    rerender(
+      <TextField
+        label="Kota"
+        value=""
+        onChangeText={() => {}}
+        error="Kota wajib diisi"
+        submitCount={1}
+      />,
+    );
+
+    expect(mockShake).toHaveBeenCalledTimes(1);
+  });
+
+  it('kotak yang dipasang dengan galat tidak bergetar', () => {
+    render(
+      <TextField
+        label="Kota"
+        value=""
+        onChangeText={() => {}}
+        error="Kota wajib diisi"
+        submitCount={1}
+      />,
+    );
+
+    expect(mockShake).not.toHaveBeenCalled();
+  });
+
+  it('mengetik tidak membuat kotak bergetar', () => {
+    const { getByLabelText, rerender } = render(
+      <TextField label="Kota" value="" onChangeText={() => {}} submitCount={0} />,
+    );
+
+    rerender(
+      <TextField label="Kota" value="Bandung" onChangeText={() => {}} submitCount={0} />,
+    );
+    fireEvent.changeText(getByLabelText('Kota'), 'Bandung');
+
+    expect(mockShake).not.toHaveBeenCalled();
+  });
+
+  it('submitCount naik tanpa galat tidak membuat kotak bergetar', () => {
+    const { rerender } = render(
+      <TextField label="Kota" value="" onChangeText={() => {}} submitCount={0} />,
+    );
+
+    rerender(
+      <TextField label="Kota" value="" onChangeText={() => {}} submitCount={1} />,
+    );
+
+    expect(mockShake).not.toHaveBeenCalled();
   });
 });
