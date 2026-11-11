@@ -120,6 +120,43 @@ export const fontFamily = {
 export type FontFamilyName = (typeof fontFamily)[keyof typeof fontFamily];
 
 /**
+ * Token gerak: durasi, jeda, kurva, dan angka kecil lain yang dipakai
+ * komponen gerak. Semua dalam milidetik kecuali yang disebut lain.
+ */
+export const motion = {
+  duration: {
+    press: 120,
+    release: 180,
+    enter: 380,
+    exit: 260,
+    shift: 300,
+    fadeIn: 180,
+    fadeOut: 120,
+    tabIndicator: 420,
+    drawLine: 320,
+    rollNumber: 400,
+    fieldShake: 300,
+    holdDone: 700,
+    highlight: 1400,
+    motorStep: 900,
+  },
+  stagger: {
+    enter: 50,
+    exit: 25,
+    maxDelay: 350,
+  },
+  /** Titik kurva cubic-bezier, empat angka. */
+  curve: {
+    standard: [0.22, 1, 0.36, 1],
+    exit: [0.64, 0, 0.78, 0],
+    motor: [0.45, 0, 0.2, 1],
+  },
+  pressScale: 0.97,
+  shakeDistance: 6,
+  initialWindow: 500,
+} as const;
+
+/**
  * Gaya teks siap pakai.
  *
  * Pakai fontFamily, bukan fontWeight, karena di Android fontWeight tidak

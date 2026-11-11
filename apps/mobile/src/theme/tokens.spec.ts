@@ -9,7 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { colors, fontFamily, type } from './tokens';
+import { colors, fontFamily, motion, type } from './tokens';
 
 const POLA_HEX = /^#([0-9a-f]{6}|[0-9a-f]{8})$/i;
 
@@ -48,5 +48,42 @@ describe('token tema', () => {
     for (const nama of Object.values(fontFamily)) {
       expect(isi).toContain(`${nama}.ttf`);
     }
+  });
+});
+
+describe('token gerak', () => {
+  it('durasi tiap gerakan', () => {
+    expect(motion.duration).toEqual({
+      press: 120,
+      release: 180,
+      enter: 380,
+      exit: 260,
+      shift: 300,
+      fadeIn: 180,
+      fadeOut: 120,
+      tabIndicator: 420,
+      drawLine: 320,
+      rollNumber: 400,
+      fieldShake: 300,
+      holdDone: 700,
+      highlight: 1400,
+      motorStep: 900,
+    });
+  });
+
+  it('jeda antarbaris dan batas jeda', () => {
+    expect(motion.stagger).toEqual({ enter: 50, exit: 25, maxDelay: 350 });
+  });
+
+  it('titik kurva tiap gerakan', () => {
+    expect(motion.curve.standard).toEqual([0.22, 1, 0.36, 1]);
+    expect(motion.curve.exit).toEqual([0.64, 0, 0.78, 0]);
+    expect(motion.curve.motor).toEqual([0.45, 0, 0.2, 1]);
+  });
+
+  it('skala ditekan, jarak goyang, dan panjang jendela awal', () => {
+    expect(motion.pressScale).toBe(0.97);
+    expect(motion.shakeDistance).toBe(6);
+    expect(motion.initialWindow).toBe(500);
   });
 });
