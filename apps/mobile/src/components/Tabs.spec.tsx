@@ -53,8 +53,8 @@ describe('Tabs', () => {
     expect(queryByText(/^\d+$/)).toBeNull();
   });
 
-  it('tab aktif ditandai terpilih dan garis bawahnya warna merah', () => {
-    const { UNSAFE_getAllByType } = render(
+  it('tab aktif ditandai terpilih dan penandanya warna merah', () => {
+    const { UNSAFE_getAllByType, getAllByTestId } = render(
       <Tabs
         tabs={[
           { key: 'tersedia', label: 'Tersedia' },
@@ -68,8 +68,10 @@ describe('Tabs', () => {
       (tab) => tab.props.accessibilityState.selected,
     );
     expect(tabAktif).toBeTruthy();
-    const gaya = StyleSheet.flatten(tabAktif.props.style);
-    expect(gaya.borderBottomColor).toBe(colors.brandRedInverse);
+    const penanda = getAllByTestId('penanda-tab');
+    expect(penanda).toHaveLength(1);
+    const gaya = StyleSheet.flatten(penanda[0].props.style);
+    expect(gaya.backgroundColor).toBe(colors.brandRedInverse);
   });
 
   it('gaya tab punya flexDirection row biar pil angka sejajar sama label', () => {
