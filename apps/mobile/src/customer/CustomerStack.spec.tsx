@@ -72,6 +72,13 @@ jest.mock('../screens/ChatScreen', () => {
   return { ChatScreen: createMarker() };
 });
 
+// Jendela awal ditiru jadi pembungkus kosong, karena tes di bawah memeriksa
+// route 'Chat' memakai ChatScreen itu sendiri.
+jest.mock('../components/motion/InitialWindow', () => ({
+  InitialWindowProvider: ({ children }: { children: ReactNode }): ReactNode => children,
+  withInitialWindow: (Layar: ComponentType<object>): ComponentType<object> => Layar,
+}));
+
 // Impor identitas marker yang sebenarnya, lewat require agar referensi
 // sama dengan yang dipakai factory. Pakai helper untuk komparasi.
 const mockChatScreenMarkerModule = jest.requireMock<{

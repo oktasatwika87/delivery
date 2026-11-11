@@ -44,6 +44,10 @@ import { MapScreen } from './src/screens/MapScreen';
 import { MapSettingsScreen } from './src/screens/MapSettingsScreen';
 import { routeSnapshotService } from './src/map/routeSnapshot';
 import { networkMonitor, type NetworkStatus } from './src/map/networkMonitor';
+import {
+  InitialWindowProvider,
+  withInitialWindow,
+} from './src/components/motion/InitialWindow';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -55,6 +59,13 @@ export type RootStackParamList = {
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+
+// Pembungkus layar dibuat sekali di tingkat modul, jadi jendela awal tiap
+// layar terpasang saat layarnya dipasang, bukan tiap App dirender ulang.
+const OrderDetailDenganJendela = withInitialWindow(OrderDetailScreen);
+const ChatDenganJendela = withInitialWindow(ChatScreen);
+const MapDenganJendela = withInitialWindow(MapScreen);
+const MapSettingsDenganJendela = withInitialWindow(MapSettingsScreen);
 
 function App(): React.JSX.Element {
   const [ready, setReady] = useState(false);
@@ -356,19 +367,27 @@ function App(): React.JSX.Element {
         <NavigationContainer>
           {!authenticated ? (
             showRegister ? (
-              <RegisterScreen onRegisterSuccess={handleLoginSuccess} onBackToLogin={handleBackToLogin} />
+              <InitialWindowProvider key="register">
+                <RegisterScreen onRegisterSuccess={handleLoginSuccess} onBackToLogin={handleBackToLogin} />
+              </InitialWindowProvider>
             ) : (
-              <LoginScreen onLoginSuccess={handleLoginSuccess} logoutReason={logoutReason} onNavigateToRegister={handleNavigateToRegister} />
+              <InitialWindowProvider key="login">
+                <LoginScreen onLoginSuccess={handleLoginSuccess} logoutReason={logoutReason} onNavigateToRegister={handleNavigateToRegister} />
+              </InitialWindowProvider>
             )
           ) : role === UserRole.DRIVER ? (
             <Stack.Navigator screenOptions={{ headerShown: false }}>
               <Stack.Screen name="Orders">
-                {() => <OrdersScreen onLogout={handleLogout} />}
+                {() => (
+                  <InitialWindowProvider>
+                    <OrdersScreen onLogout={handleLogout} />
+                  </InitialWindowProvider>
+                )}
               </Stack.Screen>
-              <Stack.Screen name="OrderDetail" component={OrderDetailScreen} />
-              <Stack.Screen name="Chat" component={ChatScreen} />
-              <Stack.Screen name="Map" component={MapScreen} />
-              <Stack.Screen name="MapSettings" component={MapSettingsScreen} />
+              <Stack.Screen name="OrderDetail" component={OrderDetailDenganJendela} />
+              <Stack.Screen name="Chat" component={ChatDenganJendela} />
+              <Stack.Screen name="Map" component={MapDenganJendela} />
+              <Stack.Screen name="MapSettings" component={MapSettingsDenganJendela} />
             </Stack.Navigator>
           ) : role === UserRole.CUSTOMER ? (
             <CustomerStack onLogout={handleLogout} />

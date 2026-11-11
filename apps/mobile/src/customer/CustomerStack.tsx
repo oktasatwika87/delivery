@@ -16,6 +16,10 @@ import { CustomerHomeScreen } from './CustomerHomeScreen';
 import { OrderCreateScreen } from './OrderCreateScreen';
 import { OrderTrackingScreen } from './OrderTrackingScreen';
 import { ChatScreen } from '../screens/ChatScreen';
+import {
+  InitialWindowProvider,
+  withInitialWindow,
+} from '../components/motion/InitialWindow';
 
 export type CustomerStackParamList = {
   CustomerHome: undefined;
@@ -26,6 +30,9 @@ export type CustomerStackParamList = {
 
 const Stack = createNativeStackNavigator<CustomerStackParamList>();
 
+// Pembungkus layar dibuat sekali di tingkat modul.
+const ChatDenganJendela = withInitialWindow(ChatScreen);
+
 interface CustomerStackProps {
   onLogout: () => void;
 }
@@ -35,29 +42,35 @@ export function CustomerStack({ onLogout }: CustomerStackProps): React.JSX.Eleme
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="CustomerHome">
         {({ navigation }) => (
-          <CustomerHomeScreen onLogout={onLogout} navigation={navigation} />
+          <InitialWindowProvider>
+            <CustomerHomeScreen onLogout={onLogout} navigation={navigation} />
+          </InitialWindowProvider>
         )}
       </Stack.Screen>
       <Stack.Screen name="OrderCreate">
         {({ navigation }) => (
-          <OrderCreateScreen
-            onBack={() => navigation.goBack()}
-            onCreateSuccess={(orderId) =>
-              navigation.replace('OrderTracking', { orderId })
-            }
-          />
+          <InitialWindowProvider>
+            <OrderCreateScreen
+              onBack={() => navigation.goBack()}
+              onCreateSuccess={(orderId) =>
+                navigation.replace('OrderTracking', { orderId })
+              }
+            />
+          </InitialWindowProvider>
         )}
       </Stack.Screen>
       <Stack.Screen name="OrderTracking">
         {({ navigation, route }) => (
-          <OrderTrackingScreen
-            orderId={route.params.orderId}
-            onBack={() => navigation.goBack()}
-            onOpenChat={(roomId) => navigation.navigate('Chat', { roomId })}
-          />
+          <InitialWindowProvider>
+            <OrderTrackingScreen
+              orderId={route.params.orderId}
+              onBack={() => navigation.goBack()}
+              onOpenChat={(roomId) => navigation.navigate('Chat', { roomId })}
+            />
+          </InitialWindowProvider>
         )}
       </Stack.Screen>
-      <Stack.Screen name="Chat" component={ChatScreen} />
+      <Stack.Screen name="Chat" component={ChatDenganJendela} />
     </Stack.Navigator>
   );
 }
