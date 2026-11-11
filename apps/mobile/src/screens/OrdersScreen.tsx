@@ -15,6 +15,7 @@ import { withDatabase, withObservables } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
 import { of } from 'rxjs';
 import { OrderStatus } from '@delivery/shared';
+import Animated from 'react-native-reanimated';
 
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
@@ -43,6 +44,8 @@ import type { TabItem } from '../components/Tabs';
 import { OrderCard } from '../components/OrderCard';
 import { EmptyState } from '../components/EmptyState';
 import { Icon } from '../theme/Icon';
+import { shift } from '../components/motion/presets';
+import { useInitialWindow } from '../components/motion/InitialWindow';
 import { colors, fontFamily, type } from '../theme/tokens';
 import { formatCurrency } from '../formatCurrency';
 import { formatOrderNumber } from '../formatOrderNumber';
@@ -59,6 +62,9 @@ const UKURAN_IKON = 16;
 const JARAK_IKON = 6;
 
 const TEKS_BUTUH_KONEKSI = 'Butuh koneksi internet untuk menerima order';
+
+// Geser posisi isi layar, dipakai satu kali jadi konstanta modul.
+const GESER = shift();
 
 interface Props {
   database: Database;
@@ -154,6 +160,7 @@ export function OrdersScreenBase({
   handleAcceptRef.current = null;
   fetchPoolRef.current = null;
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Orders'>>();
+  const dalamJendela = useInitialWindow();
   const [poolOrders, setPoolOrders] = useState<OrderModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus>(networkMonitor.getStatus());
@@ -759,23 +766,28 @@ export function OrdersScreenBase({
     <View style={styles.layar}>
       <StatusBar barStyle="light-content" backgroundColor={colors.surfaceInverse} />
       <ConnectionBar status={networkStatus} pendingCount={pendingActionCount} />
-      <MainHeader title="Order" subtitle="Driver" onLogout={onLogout}>
-        <Tabs tabs={tabs} activeKey={activeTab} onChange={onTabChange} />
-      </MainHeader>
-      <FlatList
-        data={tampilTersedia ? poolOrders : myOrders}
-        keyExtractor={(row) => row.id}
-        renderItem={tampilTersedia ? renderPoolItem : renderMineItem}
-        ListHeaderComponent={tampilTersedia ? renderPoolHeader() : notice}
-        ListEmptyComponent={tampilTersedia ? kosongTersedia : kosongSaya}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing || (fetchBelumSelesai && networkStatus !== 'offline')}
-            onRefresh={onRefresh}
-          />
-        }
-        contentContainerStyle={styles.daftar}
-      />
+      <Animated.View
+        style={styles.isiLayar}
+        layout={dalamJendela ? undefined : GESER}
+      >
+        <MainHeader title="Order" subtitle="Driver" onLogout={onLogout}>
+          <Tabs tabs={tabs} activeKey={activeTab} onChange={onTabChange} />
+        </MainHeader>
+        <FlatList
+          data={tampilTersedia ? poolOrders : myOrders}
+          keyExtractor={(row) => row.id}
+          renderItem={tampilTersedia ? renderPoolItem : renderMineItem}
+          ListHeaderComponent={tampilTersedia ? renderPoolHeader() : notice}
+          ListEmptyComponent={tampilTersedia ? kosongTersedia : kosongSaya}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing || (fetchBelumSelesai && networkStatus !== 'offline')}
+              onRefresh={onRefresh}
+            />
+          }
+          contentContainerStyle={styles.daftar}
+        />
+      </Animated.View>
     </View>
   );
 }
@@ -842,6 +854,9 @@ const styles = StyleSheet.create({
   layar: {
     flex: 1,
     backgroundColor: colors.bg,
+  },
+  isiLayar: {
+    flex: 1,
   },
   daftar: {
     padding: 16,
