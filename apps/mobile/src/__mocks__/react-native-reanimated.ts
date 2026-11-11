@@ -74,6 +74,21 @@ function withDelay(
   return animasi;
 }
 
+/** Rangkaian animasi: yang dipakai adalah animasi terakhir. */
+function withSequence(...animasi: unknown[]): unknown {
+  return animasi[animasi.length - 1];
+}
+
+/** Panggilan balik JS dari worklet: di luar worklet fungsinya apa adanya. */
+function runOnJS<T>(fungsi: T): T {
+  return fungsi;
+}
+
+/** Membatalkan animasi: di luar worklet tidak ada yang dibatalkan. */
+function cancelAnimation(_animasi: unknown): void {
+  // Tidak ada apa-apa.
+}
+
 /**
  * Pembangun entering/exiting/layout. Semua method mengembalikan pembangun itu
  * sendiri supaya bisa dirangkai, dan pembangun dipakai apa adanya kalau
@@ -109,8 +124,12 @@ function buatRangkai(): Rangkai {
 
 const FadeIn = buatRangkai();
 const FadeInDown = buatRangkai();
+const FadeInUp = buatRangkai();
+const FadeOut = buatRangkai();
+const FadeOutUp = buatRangkai();
 const SlideOutRight = buatRangkai();
 const LinearTransition = buatRangkai();
+const ZoomOut = buatRangkai();
 
 /** Easing: semua varian mengembalikan fungsi (t => t). */
 function fungsiEasing(t: number): number {
@@ -150,15 +169,22 @@ const isi = {
   Easing,
   FadeIn,
   FadeInDown,
+  FadeInUp,
+  FadeOut,
+  FadeOutUp,
   LinearTransition,
   ReduceMotion,
   SlideOutRight,
+  ZoomOut,
+  cancelAnimation,
   createAnimatedComponent: Animated.createAnimatedComponent,
+  runOnJS,
   useAnimatedProps,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
   withDelay,
+  withSequence,
   withSpring,
   withTiming,
 };
