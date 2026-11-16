@@ -6,12 +6,17 @@
  */
 
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 
 import { OrderCard } from './OrderCard';
+import { Icon } from '../theme/Icon';
+import { themes } from '../theme/tokens';
+
+const TITIK_TENGAH = '·';
 
 describe('OrderCard bentuk pool', () => {
-  it('nomor, waktu, kota, total, dan keterangan tampil', () => {
+  it('baris order, kota, dan total tampil', () => {
     const { getByText } = render(
       <OrderCard
         variant="pool"
@@ -19,15 +24,32 @@ describe('OrderCard bentuk pool', () => {
         timeText="10 menit lalu"
         city="Bandung"
         amountText="Rp45.000"
-        amountCaption="Termasuk ongkir"
         onAccept={() => {}}
       />,
     );
-    expect(getByText('ORDER #1D42E3E2')).toBeTruthy();
-    expect(getByText('10 menit lalu')).toBeTruthy();
+    expect(getByText(`Order #1D42E3E2 ${TITIK_TENGAH} 10 menit lalu`)).toBeTruthy();
     expect(getByText('Bandung')).toBeTruthy();
     expect(getByText('Rp45.000')).toBeTruthy();
-    expect(getByText('Termasuk ongkir')).toBeTruthy();
+  });
+
+  it('kartu memakai isi, sudut, dan tepi kartu', () => {
+    const { toJSON } = render(
+      <OrderCard
+        variant="pool"
+        orderNumber="#1D42E3E2"
+        timeText="10 menit lalu"
+        city="Bandung"
+        amountText="Rp45.000"
+        onAccept={() => {}}
+      />,
+    );
+    const gaya = StyleSheet.flatten(toJSON().props.style);
+    expect(gaya.backgroundColor).toBe(themes.gelap.surface);
+    expect(gaya.borderRadius).toBe(18);
+    expect(gaya.borderWidth).toBe(1);
+    expect(gaya.borderColor).toBe(themes.gelap.lineCard);
+    expect(gaya.borderTopColor).toBe(themes.gelap.edgeHighlight);
+    expect(gaya.padding).toBe(16);
   });
 
   it('tanpa kota menampilkan pesan bahwa alamat belum ada', () => {
@@ -61,6 +83,22 @@ describe('OrderCard bentuk pool', () => {
     fireEvent.press(getByLabelText('Terima Order'));
     expect(onAccept).toHaveBeenCalledTimes(1);
     expect(onPress).not.toHaveBeenCalled();
+  });
+
+  it('tombol Terima Order selebar kartu', () => {
+    const { getByLabelText } = render(
+      <OrderCard
+        variant="pool"
+        orderNumber="#1D42E3E2"
+        timeText="10 menit lalu"
+        city="Bandung"
+        amountText="Rp45.000"
+        onAccept={() => {}}
+      />,
+    );
+    const gaya = StyleSheet.flatten(getByLabelText('Terima Order').props.style);
+    expect(gaya.width).toBe('100%');
+    expect(gaya.height).toBe(52);
   });
 
   it('acceptDisabled membuat tekan Terima tidak memanggil onAccept', () => {
@@ -131,7 +169,7 @@ describe('OrderCard bentuk mine', () => {
     expect(queryByText('Menunggu sinkronisasi')).toBeNull();
   });
 
-  it('timeText tampil kalau ada', () => {
+  it('baris order menampilkan nomor dan waktu', () => {
     const { getByText } = render(
       <OrderCard
         variant="mine"
@@ -144,7 +182,40 @@ describe('OrderCard bentuk mine', () => {
         onPress={() => {}}
       />,
     );
-    expect(getByText('10 menit lalu')).toBeTruthy();
+    expect(getByText(`Order #1D42E3E2 ${TITIK_TENGAH} 10 menit lalu`)).toBeTruthy();
+  });
+
+  it('tanpa waktu baris order cuma menampilkan nomor', () => {
+    const { getByText } = render(
+      <OrderCard
+        variant="mine"
+        orderNumber="#1D42E3E2"
+        status="DELIVERED"
+        statusText="Selesai"
+        addressMain="Jl. Merdeka 10"
+        amountText="Rp45.000"
+        onPress={() => {}}
+      />,
+    );
+    expect(getByText('Order #1D42E3E2')).toBeTruthy();
+  });
+
+  it('kartu mine tidak punya panah di kanan', () => {
+    const { UNSAFE_getAllByType } = render(
+      <OrderCard
+        variant="mine"
+        orderNumber="#1D42E3E2"
+        status="DELIVERED"
+        statusText="Selesai"
+        addressMain="Jl. Merdeka 10"
+        amountText="Rp45.000"
+        onPress={() => {}}
+      />,
+    );
+    const panah = UNSAFE_getAllByType(Icon).some(
+      (ikon) => ikon.props.name === 'chevron_right',
+    );
+    expect(panah).toBe(false);
   });
 
   it('tekan kartu memanggil onPress', () => {
@@ -160,13 +231,13 @@ describe('OrderCard bentuk mine', () => {
         onPress={onPress}
       />,
     );
-    fireEvent.press(getByText('ORDER #1D42E3E2'));
+    fireEvent.press(getByText('Order #1D42E3E2'));
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('OrderCard bentuk row', () => {
-  it('nomor, alamat, tanggal, label status, dan total tampil', () => {
+  it('baris order, alamat, label status, dan total tampil', () => {
     const { getByText } = render(
       <OrderCard
         variant="row"
@@ -179,11 +250,30 @@ describe('OrderCard bentuk row', () => {
         onPress={() => {}}
       />,
     );
-    expect(getByText('#1D42E3E2')).toBeTruthy();
+    expect(getByText(`Order #1D42E3E2 ${TITIK_TENGAH} 29 Okt 2026`)).toBeTruthy();
     expect(getByText('Jl. Merdeka 10')).toBeTruthy();
-    expect(getByText('29 Okt 2026')).toBeTruthy();
     expect(getByText('Selesai')).toBeTruthy();
     expect(getByText('Rp45.000')).toBeTruthy();
+  });
+
+  it('baris order di layar customer memakai tema terang', () => {
+    const { getByText, toJSON } = render(
+      <OrderCard
+        variant="row"
+        orderNumber="#1D42E3E2"
+        dateText="29 Okt 2026"
+        status="DELIVERED"
+        statusText="Selesai"
+        amountText="Rp45.000"
+        onPress={() => {}}
+      />,
+    );
+    const gaya = StyleSheet.flatten(toJSON().props.style);
+    expect(gaya.backgroundColor).toBe(themes.terang.surface);
+    expect(gaya.elevation).toBe(1);
+    expect(StyleSheet.flatten(getByText('Rp45.000').props.style).color).toBe(
+      themes.terang.text,
+    );
   });
 
   it('tanpa addressText tidak merender baris alamat', () => {
@@ -214,7 +304,7 @@ describe('OrderCard bentuk row', () => {
         onPress={onPress}
       />,
     );
-    fireEvent.press(getByText('#1D42E3E2'));
+    fireEvent.press(getByText(`Order #1D42E3E2 ${TITIK_TENGAH} 29 Okt 2026`));
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 });

@@ -562,7 +562,7 @@ describe('kartu Tersedia tidak membuka detail order', () => {
 
     // Tekan isi kartu pool, bukan tombol Terima di dalamnya.
     await act(async () => {
-      fireEvent.press(getByText(/^ORDER #POOL-ORD/));
+      fireEvent.press(getByText(/^Order #POOL-ORD/));
     });
 
     expect(mockNavigate).not.toHaveBeenCalled();
@@ -577,11 +577,11 @@ describe('kartu Tersedia tidak membuka detail order', () => {
 
     // Status PREPARING membuat tab awal Order Saya.
     await waitFor(() => {
-      expect(getByText(/^ORDER #ORDER-MI/)).toBeTruthy();
+      expect(getByText(/^Order #ORDER-MI/)).toBeTruthy();
     });
 
     await act(async () => {
-      fireEvent.press(getByText(/^ORDER #ORDER-MI/));
+      fireEvent.press(getByText(/^Order #ORDER-MI/));
     });
 
     expect(mockNavigate).toHaveBeenCalledWith('OrderDetail', { orderId: 'order-mine-nav' });

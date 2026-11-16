@@ -16,16 +16,17 @@ import { StatusLabel } from './StatusLabel';
 import { SyncBadge } from './SyncBadge';
 import type { SyncState } from './SyncBadge';
 import { Icon } from '../theme/Icon';
-import { colors, elevation, radius, size, space, type } from '../theme/tokens';
+import { perTema, ThemeProvider, useTheme } from '../theme/ThemeProvider';
+import { elevation, radius, size, space, stroke, type } from '../theme/tokens';
 
-const TINGGI_GARIS = 1;
+const TITIK_TENGAH = '·';
+const JARAK_IKON = 6;
 
 export interface OrderCardPoolProps {
   orderNumber: string;
   timeText: string;
   city: string | null;
   amountText: string;
-  amountCaption?: string;
   onAccept: () => void;
   acceptDisabled?: boolean;
   acceptLoading?: boolean;
@@ -65,16 +66,85 @@ interface WadahKartuProps {
   children: React.ReactNode;
 }
 
+const gaya = perTema((c) =>
+  StyleSheet.create({
+    kartu: {
+      backgroundColor: c.surface,
+      borderRadius: radius.xl2,
+      borderWidth: stroke.hairline,
+      borderColor: c.lineCard,
+      borderTopColor: c.edgeHighlight,
+      padding: space[4],
+    },
+    atas: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      gap: space[3],
+    },
+    barisKota: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: JARAK_IKON,
+      flexShrink: 1,
+    },
+    kota: {
+      ...type.titleLg,
+      color: c.text,
+      flexShrink: 1,
+    },
+    kotaKosong: {
+      ...type.bodyMd,
+      color: c.textMuted,
+      flexShrink: 1,
+    },
+    jumlahBesar: {
+      ...type.amountLg,
+      color: c.text,
+    },
+    jumlah: {
+      ...type.amount,
+      color: c.text,
+    },
+    barisOrder: {
+      ...type.bodySm,
+      color: c.textSubtle,
+      marginTop: 4,
+    },
+    tombol: {
+      marginTop: space[4],
+    },
+    alamat: {
+      ...type.titleSm,
+      color: c.text,
+      marginTop: 12,
+    },
+    kotaAlamat: {
+      ...type.bodySm,
+      color: c.textMuted,
+      marginTop: 2,
+    },
+    lencana: {
+      marginTop: 12,
+    },
+  }),
+);
+
 /**
  * Wadah kartu pool. Kalau bisa ditekan, kartu jadi satu tombol, tapi tombol
  * Terima di dalamnya tetap bisa dicapai pembaca layar.
  */
 function WadahKartu({ onPress, children }: WadahKartuProps): React.JSX.Element {
+  const { name } = useTheme();
+  const s = gaya[name];
+  // Tema terang pakai elevasi, tema gelap ambil kedalaman dari warnanya.
+  const bayangan = name === 'terang' ? { elevation: elevation.card } : null;
+
   if (!onPress) {
-    return <View style={styles.kartu}>{children}</View>;
+    return <View style={[s.kartu, bayangan]}>{children}</View>;
   }
   return (
-    <Pressable onPress={onPress} accessible={false} style={styles.kartu}>
+    <Pressable onPress={onPress} accessible={false} style={[s.kartu, bayangan]}>
       {children}
     </Pressable>
   );
@@ -82,182 +152,110 @@ function WadahKartu({ onPress, children }: WadahKartuProps): React.JSX.Element {
 
 export function OrderCard(props: OrderCardProps): React.JSX.Element {
   if (props.variant === 'pool') {
-    return (
-      <WadahKartu onPress={props.onPress}>
-        <View style={styles.atas}>
-          <Text style={styles.nomorKartu}>ORDER {props.orderNumber}</Text>
-          <Text style={styles.waktuKartu}>{props.timeText}</Text>
-        </View>
-        <View style={styles.barisAlamat}>
-          <Icon name="location_on" size={size.iconSm} color={colors.text} />
-          {props.city ? (
-            <Text style={styles.kota}>{props.city}</Text>
-          ) : (
-            <Text style={styles.kotaKosong}>Alamat tampil setelah order diterima</Text>
-          )}
-        </View>
-        <View style={styles.garis} />
-        <View style={styles.bawah}>
-          <View style={styles.kolomKiri}>
-            <Text style={styles.jumlah}>{props.amountText}</Text>
-            {props.amountCaption ? (
-              <Text style={styles.keterangan}>{props.amountCaption}</Text>
-            ) : null}
-          </View>
-          <Button
-            title="Terima Order"
-            onPress={props.onAccept}
-            variant="primary"
-            size="md"
-            disabled={props.acceptDisabled}
-            loading={props.acceptLoading}
-          />
-        </View>
-        {props.acceptHelp ? <HelpLine text={props.acceptHelp} /> : null}
-      </WadahKartu>
-    );
+    return <KartuPool {...props} />;
   }
 
   if (props.variant === 'mine') {
-    return (
-      <Pressable onPress={props.onPress} accessibilityRole="button" style={styles.kartu}>
-        <View style={styles.atas}>
-          <View style={styles.kolomKiri}>
-            <Text style={styles.nomorKartu}>ORDER {props.orderNumber}</Text>
-            {props.timeText ? (
-              <Text style={styles.waktuKartu}>{props.timeText}</Text>
-            ) : null}
-          </View>
-          <StatusLabel status={props.status} label={props.statusText} />
-        </View>
-        <View style={styles.barisAlamat}>
-          <Icon name="location_on" size={size.iconSm} color={colors.text} />
-          <View style={styles.kolomKiri}>
-            <Text style={styles.kota}>{props.addressMain}</Text>
-            {props.addressSub ? (
-              <Text style={styles.keteranganAlamat}>{props.addressSub}</Text>
-            ) : null}
-          </View>
-        </View>
-        <SyncBadge state={props.syncState ?? null} />
-        <View style={styles.garis} />
-        <View style={styles.bawah}>
-          <Text style={styles.jumlah}>{props.amountText}</Text>
-          <Icon name="chevron_right" size={size.iconSm} color={colors.textSubtle} />
-        </View>
-      </Pressable>
-    );
+    return <KartuMine {...props} />;
   }
 
+  // Baris order di layar customer selalu memakai tema terang.
   return (
-    <Pressable onPress={props.onPress} accessibilityRole="button" style={styles.barisKartu}>
-      <View style={styles.kolomKiri}>
-        <Text style={styles.nomorBaris}>{props.orderNumber}</Text>
-        {props.addressText ? (
-          <Text style={styles.alamatBaris} numberOfLines={1}>
-            {props.addressText}
-          </Text>
-        ) : null}
-        <Text style={styles.waktuBaris}>{props.dateText}</Text>
+    <ThemeProvider name="terang">
+      <KartuRow {...props} />
+    </ThemeProvider>
+  );
+}
+
+function KartuPool(props: OrderCardPoolProps): React.JSX.Element {
+  const { name, colors } = useTheme();
+  const s = gaya[name];
+
+  return (
+    <WadahKartu onPress={props.onPress}>
+      <View style={s.atas}>
+        <View style={s.barisKota}>
+          <Icon
+            name="location_on"
+            size={size.iconMd}
+            color={props.city ? colors.info : colors.textSubtle}
+          />
+          {props.city ? (
+            <Text style={s.kota}>{props.city}</Text>
+          ) : (
+            <Text style={s.kotaKosong}>Alamat tampil setelah order diterima</Text>
+          )}
+        </View>
+        <Text style={s.jumlahBesar}>{props.amountText}</Text>
       </View>
-      <View style={styles.kananBaris}>
+      <Text style={s.barisOrder}>
+        {`Order ${props.orderNumber} ${TITIK_TENGAH} ${props.timeText}`}
+      </Text>
+      <View style={s.tombol}>
+        <Button
+          title="Terima Order"
+          onPress={props.onAccept}
+          variant="primary"
+          size="card"
+          disabled={props.acceptDisabled}
+          loading={props.acceptLoading}
+        />
+      </View>
+      {props.acceptHelp ? <HelpLine text={props.acceptHelp} /> : null}
+    </WadahKartu>
+  );
+}
+
+function KartuMine(props: OrderCardMineProps): React.JSX.Element {
+  const { name } = useTheme();
+  const s = gaya[name];
+  const bayangan = name === 'terang' ? { elevation: elevation.card } : null;
+
+  return (
+    <Pressable
+      onPress={props.onPress}
+      accessibilityRole="button"
+      style={[s.kartu, bayangan]}
+    >
+      <View style={s.atas}>
         <StatusLabel status={props.status} label={props.statusText} />
-        <Text style={styles.jumlahBaris}>{props.amountText}</Text>
+        <Text style={s.jumlah}>{props.amountText}</Text>
       </View>
-      <Icon name="chevron_right" size={size.iconSm} color={colors.textSubtle} />
+      <Text style={s.alamat}>{props.addressMain}</Text>
+      {props.addressSub ? <Text style={s.kotaAlamat}>{props.addressSub}</Text> : null}
+      <Text style={s.barisOrder}>
+        {props.timeText
+          ? `Order ${props.orderNumber} ${TITIK_TENGAH} ${props.timeText}`
+          : `Order ${props.orderNumber}`}
+      </Text>
+      {props.syncState ? (
+        <View style={s.lencana}>
+          <SyncBadge state={props.syncState} />
+        </View>
+      ) : null}
     </Pressable>
   );
 }
 
-const styles = StyleSheet.create({
-  kartu: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    elevation: elevation.card,
-    padding: space[4],
-    gap: space[3],
-  },
-  atas: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: space[3],
-  },
-  kolomKiri: {
-    flex: 1,
-    gap: space[1],
-  },
-  nomorKartu: {
-    ...type.labelSm,
-    color: colors.textMuted,
-  },
-  waktuKartu: {
-    ...type.caption,
-    color: colors.textMuted,
-  },
-  barisAlamat: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space[2],
-  },
-  kota: {
-    ...type.titleSm,
-    color: colors.text,
-    flexShrink: 1,
-  },
-  kotaKosong: {
-    ...type.bodySm,
-    color: colors.textMuted,
-    flexShrink: 1,
-  },
-  keteranganAlamat: {
-    ...type.bodySm,
-    color: colors.textMuted,
-  },
-  garis: {
-    height: TINGGI_GARIS,
-    backgroundColor: colors.line,
-  },
-  bawah: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: space[3],
-  },
-  jumlah: {
-    ...type.amount,
-    color: colors.text,
-  },
-  keterangan: {
-    ...type.caption,
-    color: colors.textMuted,
-  },
-  barisKartu: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    paddingVertical: space[3],
-    paddingHorizontal: space[4],
-    gap: space[3],
-  },
-  nomorBaris: {
-    ...type.labelSm,
-    color: colors.text,
-  },
-  alamatBaris: {
-    ...type.bodySm,
-    color: colors.text,
-  },
-  waktuBaris: {
-    ...type.caption,
-    color: colors.textMuted,
-  },
-  kananBaris: {
-    alignItems: 'flex-end',
-    gap: space[1],
-  },
-  jumlahBaris: {
-    ...type.titleSm,
-    color: colors.text,
-  },
-});
+function KartuRow(props: OrderCardRowProps): React.JSX.Element {
+  const { name } = useTheme();
+  const s = gaya[name];
+  const bayangan = name === 'terang' ? { elevation: elevation.card } : null;
+
+  return (
+    <Pressable
+      onPress={props.onPress}
+      accessibilityRole="button"
+      style={[s.kartu, bayangan]}
+    >
+      <View style={s.atas}>
+        <StatusLabel status={props.status} label={props.statusText} />
+        <Text style={s.jumlah}>{props.amountText}</Text>
+      </View>
+      {props.addressText ? <Text style={s.alamat}>{props.addressText}</Text> : null}
+      <Text style={s.barisOrder}>
+        {`Order ${props.orderNumber} ${TITIK_TENGAH} ${props.dateText}`}
+      </Text>
+    </Pressable>
+  );
+}
