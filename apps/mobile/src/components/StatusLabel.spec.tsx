@@ -11,20 +11,51 @@ import { OrderStatus } from '@delivery/shared';
 
 import { StatusLabel } from './StatusLabel';
 import { Icon } from '../theme/Icon';
-import { colors } from '../theme/tokens';
+import { themes } from '../theme/tokens';
 
-const KASUS: { status: OrderStatus; ikon: string; isi: string }[] = [
-  { status: OrderStatus.ASSIGNED, ikon: 'search', isi: colors.surface },
-  { status: OrderStatus.PENDING, ikon: 'inventory_2', isi: colors.fillNeutral },
-  { status: OrderStatus.CONFIRMED, ikon: 'inventory_2', isi: colors.fillNeutral },
-  { status: OrderStatus.PREPARING, ikon: 'inventory_2', isi: colors.fillNeutral },
+const KASUS: { status: OrderStatus; ikon: string; isi: string; teks: string }[] = [
+  {
+    status: OrderStatus.ASSIGNED,
+    ikon: 'search',
+    isi: themes.gelap.fillNeutral,
+    teks: themes.gelap.text,
+  },
+  {
+    status: OrderStatus.PENDING,
+    ikon: 'inventory_2',
+    isi: themes.gelap.fillNeutral,
+    teks: themes.gelap.text,
+  },
+  {
+    status: OrderStatus.CONFIRMED,
+    ikon: 'inventory_2',
+    isi: themes.gelap.fillNeutral,
+    teks: themes.gelap.text,
+  },
+  {
+    status: OrderStatus.PREPARING,
+    ikon: 'inventory_2',
+    isi: themes.gelap.fillNeutral,
+    teks: themes.gelap.text,
+  },
   {
     status: OrderStatus.OUT_FOR_DELIVERY,
     ikon: 'two_wheeler',
-    isi: colors.surfaceInverse,
+    isi: themes.gelap.infoSoft,
+    teks: themes.gelap.onInfoSoft,
   },
-  { status: OrderStatus.DELIVERED, ikon: 'check_circle_fill', isi: colors.successSoft },
-  { status: OrderStatus.CANCELLED, ikon: 'close', isi: colors.dangerSoft },
+  {
+    status: OrderStatus.DELIVERED,
+    ikon: 'check_circle',
+    isi: themes.gelap.accentSoft,
+    teks: themes.gelap.onAccentSoft,
+  },
+  {
+    status: OrderStatus.CANCELLED,
+    ikon: 'cancel',
+    isi: themes.gelap.dangerSoft,
+    teks: themes.gelap.danger,
+  },
 ];
 
 describe('StatusLabel', () => {
@@ -44,11 +75,10 @@ describe('StatusLabel', () => {
     expect(gaya.backgroundColor).toBe(kasus.isi);
   });
 
-  it('status yang searching driver punya tepi garis tebal', () => {
+  it('label status tidak punya tepi garis', () => {
     const { toJSON } = render(<StatusLabel status={OrderStatus.ASSIGNED} label="Label" />);
     const gaya = StyleSheet.flatten(toJSON().props.style);
-    expect(gaya.borderWidth).toBeGreaterThan(0);
-    expect(gaya.borderColor).toBe(colors.lineStrong);
+    expect(gaya.borderWidth).toBeUndefined();
   });
 
   it('teks dan ikon warnanya sama', () => {
@@ -56,7 +86,15 @@ describe('StatusLabel', () => {
       <StatusLabel status={OrderStatus.DELIVERED} label="Terkirim" />,
     );
     const gayaTeks = StyleSheet.flatten(getByText('Terkirim').props.style);
-    expect(gayaTeks.color).toBe(colors.successStrong);
-    expect(UNSAFE_getByType(Icon).props.color).toBe(colors.successStrong);
+    expect(gayaTeks.color).toBe(themes.gelap.onAccentSoft);
+    expect(UNSAFE_getByType(Icon).props.color).toBe(themes.gelap.onAccentSoft);
+  });
+
+  it('tinggi label dan sudutnya ikut token', () => {
+    const { toJSON } = render(<StatusLabel status={OrderStatus.PENDING} label="Label" />);
+    const gaya = StyleSheet.flatten(toJSON().props.style);
+    expect(gaya.height).toBe(28);
+    expect(gaya.borderRadius).toBe(8);
+    expect(gaya.paddingHorizontal).toBe(10);
   });
 });

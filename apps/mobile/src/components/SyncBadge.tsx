@@ -2,11 +2,12 @@
  * Lencana status sinkronisasi.
  *
  * Menampilkan bahwa perubahan lokal belum sampai ke server, jadi pengguna
- * tahu kalau masih antre.
+ * tahu kalau masih antre. Keadaan gagal server menetap dan tidak pernah
+ * berubah jadi centang.
  */
 
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -16,68 +17,111 @@ import Animated, {
 
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
-import { colors, motion, radius, space, type } from '../theme/tokens';
+import { StripeFill } from '../theme/StripeFill';
+import { perTema, useTheme } from '../theme/ThemeProvider';
+import { motion, radius, size, stroke, type } from '../theme/tokens';
 import { CheckMark } from './motion/CheckMark';
 import { exitEasing, fadeIn } from './motion/presets';
 import { useHoldDone } from './motion/useHoldDone';
 import { useInitialWindow } from './motion/InitialWindow';
 
-const TINGGI_LABEL = 26;
-const UKURAN_IKON = 16;
 const JARAK_IKON = 6;
-const TEBAL_TEPI = 1.5;
+const PADDING_SAMPING = 10;
+const UKURAN_IKON = size.iconXs;
 
 /** Masuk lencana: fade pelan, dibuat sekali karena parameternya tetap. */
 const MASUK = fadeIn();
 
-export type SyncState = 'pending' | 'stale';
+export type SyncState = 'pending' | 'stale' | 'failed';
 
 interface GayaState {
   text: string;
-  backgroundColor: string;
   color: string;
   icon: IconName;
+  /** Kalau tidak diisi, lencana tanpa warna latar. */
+  backgroundColor?: string;
   borderWidth: number;
   borderStyle: 'solid' | 'dashed';
-  borderColor: string;
+  borderColor?: string;
+  /** Kalau true, latar lencana pakai belang. */
+  stripe: boolean;
 }
 
-const GAYA_STATE: Record<SyncState, GayaState> = {
-  pending: {
-    text: 'Menunggu sinkronisasi',
-    backgroundColor: colors.surface,
-    color: colors.text,
-    icon: 'cloud_upload',
-    borderWidth: TEBAL_TEPI,
-    borderStyle: 'dashed',
-    borderColor: colors.text,
-  },
-  stale: {
-    text: 'Belum tersinkron dari sejam lalu',
-    backgroundColor: colors.warningSoft,
-    color: colors.warning,
-    icon: 'history',
-    borderWidth: 0,
-    borderStyle: 'solid',
-    borderColor: colors.warning,
-  },
-};
+const GAYA_STATE = perTema(
+  (c): Record<SyncState, GayaState> => ({
+    pending: {
+      text: 'Menunggu sinkronisasi',
+      color: c.text,
+      icon: 'cloud_upload',
+      borderWidth: stroke.pending,
+      borderStyle: 'dashed',
+      borderColor: c.pendingLine,
+      stripe: false,
+    },
+    stale: {
+      text: 'Belum tersinkron dari sejam lalu',
+      color: c.warning,
+      icon: 'history',
+      borderWidth: 0,
+      borderStyle: 'solid',
+      stripe: true,
+    },
+    failed: {
+      text: 'Ditolak server',
+      color: c.danger,
+      icon: 'sync_problem',
+      backgroundColor: c.dangerSoft,
+      borderWidth: 0,
+      borderStyle: 'solid',
+      stripe: false,
+    },
+  }),
+);
+
+const gaya = perTema((c) =>
+  StyleSheet.create({
+    akar: {
+      alignSelf: 'flex-start',
+    },
+    wadah: {
+      alignItems: 'center',
+      height: size.status,
+      paddingHorizontal: PADDING_SAMPING,
+      borderRadius: radius.sm,
+      overflow: 'hidden',
+    },
+    isi: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: JARAK_IKON,
+    },
+    selesai: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: size.status,
+      height: size.status,
+      borderRadius: radius.sm,
+      backgroundColor: c.infoSoft,
+    },
+    teks: {
+      ...type.labelSm,
+    },
+  }),
+);
 
 export interface SyncBadgeProps {
   state: SyncState | null;
 }
 
 export function SyncBadge({ state }: SyncBadgeProps): React.JSX.Element | null {
+  const { name, colors } = useTheme();
+  const s = gaya[name];
   const dalamJendela = useInitialWindow();
-  const fase = useHoldDone(state !== null);
-  const [stateTerakhir, setStateTerakhir] = useState<SyncState | null>(state);
+  const gagal = state === 'failed';
+  // Keadaan gagal tidak menahan selesai, jadi tidak pernah berubah jadi
+  // centang dan tidak ikut memudar.
+  const fase = useHoldDone(state !== null && !gagal);
   const [telahTersembunyi, setTelahTersembunyi] = useState(false);
-
-  // State terakhir yang bukan null dipakai untuk bentuk selesai, supaya
-  // lencana masih tahu warna dan ikon sebelum terakhir.
-  if (state !== null && state !== stateTerakhir) {
-    setStateTerakhir(state);
-  }
 
   // Lencana yang muncul lagi setelah sempat hilang boleh bergerak masuk.
   // Lencana yang sudah ada saat SyncBadge dipasang tampil diam, karena
@@ -86,83 +130,68 @@ export function SyncBadge({ state }: SyncBadgeProps): React.JSX.Element | null {
     setTelahTersembunyi(true);
   }
 
-  const opasitasTeks = useSharedValue(1);
   const opasitasLencana = useSharedValue(1);
 
   useEffect(() => {
-    if (fase === 'done') {
-      opasitasTeks.value = withTiming(0, {
-        duration: motion.duration.fadeOut,
-        easing: exitEasing,
-      });
+    if (fase === 'done' && !gagal) {
       opasitasLencana.value = withDelay(
         motion.duration.holdDone - motion.duration.fadeOut,
         withTiming(0, { duration: motion.duration.fadeOut, easing: exitEasing }),
       );
     } else {
-      opasitasTeks.value = 1;
       opasitasLencana.value = 1;
     }
-  }, [fase, opasitasTeks, opasitasLencana]);
+  }, [fase, gagal, opasitasLencana]);
 
-  const gayaTeks = useAnimatedStyle(() => ({ opacity: opasitasTeks.value }));
   const gayaLencana = useAnimatedStyle(() => ({ opacity: opasitasLencana.value }));
 
-  if (fase === 'hidden' || stateTerakhir === null) {
+  if (!gagal && fase === 'hidden') {
     return null;
   }
 
-  const selesai = fase === 'done';
-  const gaya = GAYA_STATE[state ?? stateTerakhir];
+  const selesai = !gagal && fase === 'done';
+
+  if (selesai) {
+    return (
+      <Animated.View
+        entering={dalamJendela ? undefined : telahTersembunyi ? MASUK : undefined}
+        style={s.akar}
+      >
+        <Animated.View testID="lencana-sinkron" style={[s.selesai, gayaLencana]}>
+          <CheckMark size={UKURAN_IKON} color={colors.info} />
+        </Animated.View>
+      </Animated.View>
+    );
+  }
+
+  const gayaState = GAYA_STATE[name][state ?? 'pending'];
 
   return (
     <Animated.View
       entering={dalamJendela ? undefined : telahTersembunyi ? MASUK : undefined}
-      style={styles.akar}
+      style={s.akar}
     >
       <Animated.View
         testID="lencana-sinkron"
         style={[
-          styles.wadah,
+          s.wadah,
           {
-            backgroundColor: gaya.backgroundColor,
-            borderWidth: gaya.borderWidth,
-            borderStyle: gaya.borderStyle,
-            borderColor: gaya.borderColor,
+            backgroundColor: gayaState.backgroundColor,
+            borderWidth: gayaState.borderWidth,
+            borderStyle: gayaState.borderStyle,
+            borderColor: gayaState.borderColor,
           },
           gayaLencana,
         ]}
       >
-        {selesai ? (
-          <CheckMark size={UKURAN_IKON} color={gaya.color} />
-        ) : (
-          <Icon name={gaya.icon} size={UKURAN_IKON} color={gaya.color} />
-        )}
-        <Animated.View
-          style={gayaTeks}
-          accessibilityElementsHidden={selesai}
-          importantForAccessibility={selesai ? 'no-hide-descendants' : 'auto'}
-        >
-          <Text style={[styles.teks, { color: gaya.color }]}>{gaya.text}</Text>
-        </Animated.View>
+        {gayaState.stripe ? (
+          <StripeFill color={colors.warningStripe} colorAlt={colors.warningStripeAlt} />
+        ) : null}
+        <View style={s.isi}>
+          <Icon name={gayaState.icon} size={UKURAN_IKON} color={gayaState.color} />
+          <Text style={[s.teks, { color: gayaState.color }]}>{gayaState.text}</Text>
+        </View>
       </Animated.View>
     </Animated.View>
   );
 }
-
-const styles = StyleSheet.create({
-  akar: {
-    alignSelf: 'flex-start',
-  },
-  wadah: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: JARAK_IKON,
-    height: TINGGI_LABEL,
-    paddingHorizontal: space[2],
-    borderRadius: radius.sm,
-  },
-  teks: {
-    ...type.labelSm,
-  },
-});

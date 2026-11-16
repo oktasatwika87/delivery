@@ -11,64 +11,58 @@ import type { OrderStatus } from '@delivery/shared';
 
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
-import { colors, radius, space, type } from '../theme/tokens';
+import { perTema, useTheme } from '../theme/ThemeProvider';
+import { radius, size, type } from '../theme/tokens';
 
-const TINGGI_LABEL = 26;
-const UKURAN_IKON = 16;
+const UKURAN_IKON = size.iconSm;
 const JARAK_IKON = 6;
-const TEBAL_TEPI = 1.5;
+const PADDING_SAMPING = 10;
 
-interface GayaStatus {
+interface NadaStatus {
   backgroundColor: string;
   color: string;
   icon: IconName;
-  borderWidth: number;
 }
 
-const GAYA_STATUS: Record<OrderStatus, GayaStatus> = {
-  ASSIGNED: {
-    backgroundColor: colors.surface,
-    color: colors.text,
-    icon: 'search',
-    borderWidth: TEBAL_TEPI,
-  },
-  PENDING: {
-    backgroundColor: colors.fillNeutral,
-    color: colors.text,
-    icon: 'inventory_2',
-    borderWidth: 0,
-  },
-  CONFIRMED: {
-    backgroundColor: colors.fillNeutral,
-    color: colors.text,
-    icon: 'inventory_2',
-    borderWidth: 0,
-  },
-  PREPARING: {
-    backgroundColor: colors.fillNeutral,
-    color: colors.text,
-    icon: 'inventory_2',
-    borderWidth: 0,
-  },
-  OUT_FOR_DELIVERY: {
-    backgroundColor: colors.surfaceInverse,
-    color: colors.textInverse,
-    icon: 'two_wheeler',
-    borderWidth: 0,
-  },
-  DELIVERED: {
-    backgroundColor: colors.successSoft,
-    color: colors.successStrong,
-    icon: 'check_circle_fill',
-    borderWidth: 0,
-  },
-  CANCELLED: {
-    backgroundColor: colors.dangerSoft,
-    color: colors.dangerStrong,
-    icon: 'close',
-    borderWidth: 0,
-  },
-};
+const NADA_STATUS = perTema(
+  (c): Record<OrderStatus, NadaStatus> => ({
+    ASSIGNED: {
+      backgroundColor: c.fillNeutral,
+      color: c.text,
+      icon: 'search',
+    },
+    PENDING: {
+      backgroundColor: c.fillNeutral,
+      color: c.text,
+      icon: 'inventory_2',
+    },
+    CONFIRMED: {
+      backgroundColor: c.fillNeutral,
+      color: c.text,
+      icon: 'inventory_2',
+    },
+    PREPARING: {
+      backgroundColor: c.fillNeutral,
+      color: c.text,
+      icon: 'inventory_2',
+    },
+    OUT_FOR_DELIVERY: {
+      backgroundColor: c.infoSoft,
+      color: c.onInfoSoft,
+      icon: 'two_wheeler',
+    },
+    DELIVERED: {
+      backgroundColor: c.accentSoft,
+      color: c.onAccentSoft,
+      icon: 'check_circle',
+    },
+    CANCELLED: {
+      backgroundColor: c.dangerSoft,
+      color: c.danger,
+      icon: 'cancel',
+    },
+  }),
+);
 
 export interface StatusLabelProps {
   status: OrderStatus;
@@ -76,21 +70,20 @@ export interface StatusLabelProps {
 }
 
 export function StatusLabel({ status, label }: StatusLabelProps): React.JSX.Element {
-  const gaya = GAYA_STATUS[status];
+  const { name } = useTheme();
+  const nada = NADA_STATUS[name][status];
 
   return (
     <View
       style={[
         styles.wadah,
         {
-          backgroundColor: gaya.backgroundColor,
-          borderWidth: gaya.borderWidth,
-          borderColor: colors.lineStrong,
+          backgroundColor: nada.backgroundColor,
         },
       ]}
     >
-      <Icon name={gaya.icon} size={UKURAN_IKON} color={gaya.color} />
-      <Text style={[styles.teks, { color: gaya.color }]}>{label}</Text>
+      <Icon name={nada.icon} size={UKURAN_IKON} color={nada.color} />
+      <Text style={[styles.teks, { color: nada.color }]}>{label}</Text>
     </View>
   );
 }
@@ -101,8 +94,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'flex-start',
     gap: JARAK_IKON,
-    height: TINGGI_LABEL,
-    paddingHorizontal: space[2],
+    height: size.status,
+    paddingHorizontal: PADDING_SAMPING,
     borderRadius: radius.sm,
   },
   teks: {
