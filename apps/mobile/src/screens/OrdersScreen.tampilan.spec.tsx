@@ -229,6 +229,32 @@ import { size, space, themes, type } from '../theme/tokens';
 
 const WAKTU_KUNCI = 1_750_000_000_000;
 
+/** Elemen pohon uji. Cuma bagian yang dipakai di berkas ini. */
+interface Instansi {
+  parent: Instansi | null;
+  children: Array<Instansi | string>;
+  props: Record<string, unknown>;
+  type: unknown;
+}
+
+/** Ancestor sebuah elemen, dari yang paling dekat sampai akar pohon. */
+function leluhur(term: Instansi): Instansi[] {
+  const hasil: Instansi[] = [];
+  let sekarang: Instansi | null = term.parent;
+  while (sekarang) {
+    hasil.push(sekarang);
+    sekarang = sekarang.parent;
+  }
+  return hasil;
+}
+
+/** Anak elemen, tanpa teks. */
+function anak(term: Instansi): Instansi[] {
+  return term.children.filter(
+    (child): child is Instansi => typeof child !== 'string',
+  );
+}
+
 // Status jaringan dibalas ke nilai awal tiap tes, soalnya nilai mock
 // tidak direset oleh clearAllMocks.
 beforeEach(() => {
@@ -670,8 +696,8 @@ describe('tema dan tata letak layar Order', () => {
     expect(statusBar.props.backgroundColor).toBe(themes.gelap.header);
   });
 
-  test('ConnectionBar ada di dalam kepala layar sebelum tab', () => {
-    const { UNSAFE_getAllByType } = render(
+  test('bilah koneksi di luar isi layar, tab dan daftar di dalam', () => {
+    const { UNSAFE_getByType } = render(
       <OrdersScreenBase
         database={mockDatabase as never}
         myOrders={[] as never}
@@ -679,11 +705,39 @@ describe('tema dan tata letak layar Order', () => {
       />,
     );
 
-    const kepala = UNSAFE_getAllByType(MainHeader)[0];
-    const anak = React.Children.toArray(kepala.props.children);
-    const tipeAnak = anak.map((item) => (React.isValidElement(item) ? item.type : null));
-    expect(tipeAnak[0]).toBe(ConnectionBar);
-    expect(tipeAnak[1]).toBe(Tabs);
+    // Kepala layar tidak lagi memuat anak apa pun.
+    const kepala = UNSAFE_getByType(MainHeader);
+    expect(kepala.props.children).toBeUndefined();
+
+    // Isi layar adalah pembungkus yang punya prop layout.
+    const isiLayar = leluhur(UNSAFE_getByType(FlatList)).find(
+      (node) => node.props.layout !== undefined,
+    );
+    expect(isiLayar).toBeDefined();
+
+    // Bilah bukan turunan kepala dan bukan turunan isi layar.
+    const leluhurBilah = leluhur(UNSAFE_getByType(ConnectionBar));
+    expect(leluhurBilah.includes(kepala)).toBe(false);
+    expect(leluhurBilah.includes(isiLayar!)).toBe(false);
+  });
+
+  test('isi layar urutannya kepala, wadah tab, lalu daftar', () => {
+    const { UNSAFE_getByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    const isiLayar = leluhur(UNSAFE_getByType(FlatList)).find(
+      (node) => node.props.layout !== undefined,
+    );
+    const urutan = anak(isiLayar!);
+
+    expect(urutan[0].type).toBe(MainHeader);
+    expect(urutan[1].props.style).toBe(UNSAFE_getByType(Tabs).parent?.props.style);
+    expect(urutan[2].type).toBe(FlatList);
   });
 
   test('kepala daftar memakai tinggi 28, ikon kecil, dan warna teks halus', async () => {
@@ -728,9 +782,26 @@ describe('tema dan tata letak layar Order', () => {
     const gayaDaftar = StyleSheet.flatten(
       UNSAFE_getByType(FlatList).props.contentContainerStyle,
     );
-    expect(gayaDaftar.padding).toBe(space[4]);
+    expect(gayaDaftar.paddingTop).toBe(space[2]);
+    expect(gayaDaftar.paddingHorizontal).toBe(space[4]);
     expect(gayaDaftar.gap).toBe(space[3]);
     expect(gayaDaftar.paddingBottom).toBe(space[10]);
+  });
+
+  test('wadah tab punya margin atas dan sisi', () => {
+    const { UNSAFE_getByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    const gayaWadahTab = StyleSheet.flatten(
+      UNSAFE_getByType(Tabs).parent?.props.style,
+    );
+    expect(gayaWadahTab.marginTop).toBe(space[3]);
+    expect(gayaWadahTab.marginHorizontal).toBe(space[4]);
   });
 
   test('layar tunggu kosong tanpa tulisan Loading', () => {

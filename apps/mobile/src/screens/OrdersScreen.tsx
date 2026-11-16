@@ -47,8 +47,8 @@ import { EmptyState } from '../components/EmptyState';
 import { Icon } from '../theme/Icon';
 import { shift } from '../components/motion/presets';
 import { useInitialWindow } from '../components/motion/InitialWindow';
-import { perTema, useTheme } from '../theme/ThemeProvider';
-import { size, space, themes, type } from '../theme/tokens';
+import { perTema, ThemeProvider, useTheme } from '../theme/ThemeProvider';
+import { size, space, type } from '../theme/tokens';
 import { formatCurrency } from '../formatCurrency';
 import { formatOrderNumber } from '../formatOrderNumber';
 import { formatOrderTime } from '../formatOrderTime';
@@ -774,15 +774,22 @@ export function OrdersScreenBase({
 
   return (
     <View style={gayaLayar.layar}>
-      <StatusBar barStyle="light-content" backgroundColor={themes.gelap.header} />
+      <StatusBar barStyle="light-content" backgroundColor={warnaTema.header} />
+      {/* Bilah di luar isi layar, supaya layout di isiLayar menggeser
+          isi layar saat bilah muncul atau hilang. */}
+      <View style={gayaLayar.wadahBilah}>
+        <ThemeProvider name="gelap">
+          <ConnectionBar status={networkStatus} pendingCount={pendingActionCount} />
+        </ThemeProvider>
+      </View>
       <Animated.View
         style={gayaLayar.isiLayar}
         layout={dalamJendela ? undefined : GESER}
       >
-        <MainHeader title="Order" subtitle="Driver" onLogout={onLogout}>
-          <ConnectionBar status={networkStatus} pendingCount={pendingActionCount} />
+        <MainHeader title="Order" subtitle="Driver" onLogout={onLogout} />
+        <View style={gayaLayar.wadahTab}>
           <Tabs tabs={tabs} activeKey={activeTab} onChange={onTabChange} />
-        </MainHeader>
+        </View>
         <FlatList
           data={tampilTersedia ? poolOrders : myOrders}
           keyExtractor={(row) => row.id}
@@ -867,8 +874,16 @@ const gaya = perTema((c) =>
     isiLayar: {
       flex: 1,
     },
+    wadahBilah: {
+      backgroundColor: c.header,
+    },
+    wadahTab: {
+      marginTop: space[3],
+      marginHorizontal: space[4],
+    },
     daftar: {
-      padding: space[4],
+      paddingTop: space[2],
+      paddingHorizontal: space[4],
       gap: space[3],
       paddingBottom: space[10],
     },
