@@ -7,13 +7,19 @@
  */
 
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Database } from '@nozbe/watermelondb';
 import { Q } from '@nozbe/watermelondb';
 
 import { OrderModel } from '../db/models/OrderModel';
+import { Button } from '../components/Button';
+import { Icon } from '../theme/Icon';
+import { perTema, useTheme } from '../theme/ThemeProvider';
+import { radius, size, space, stroke, type } from '../theme/tokens';
 
 const NOTICE_TTL_MS = 24 * 60 * 60 * 1000; // 24 jam
+const PADDING_ATAS = 14;
+const JARAK_IKON = 10;
 
 export interface ReleasedOrderItem {
   id: string;
@@ -26,12 +32,63 @@ export interface ReleasedOrdersNoticeProps {
   onDismiss: (orderIds: string[]) => void;
 }
 
+const gaya = perTema((c) =>
+  StyleSheet.create({
+    wadah: {
+      backgroundColor: c.surface,
+      borderColor: c.infoLine,
+      borderWidth: stroke.hairline,
+      borderRadius: radius.xl2,
+      paddingTop: PADDING_ATAS,
+      paddingHorizontal: space[4],
+      paddingBottom: space[2],
+      marginHorizontal: space[4],
+      marginTop: space[3],
+    },
+    barisJudul: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: JARAK_IKON,
+    },
+    judul: {
+      ...type.labelMd,
+      color: c.text,
+    },
+    barisOrder: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      height: size.controlSm,
+      paddingLeft: 12,
+      paddingRight: space[2],
+      borderRadius: radius.md,
+      backgroundColor: c.actionSecondary,
+      marginTop: JARAK_IKON,
+    },
+    teksOrder: {
+      ...type.bodyMdMedium,
+      color: c.onActionSecondary,
+    },
+    keterangan: {
+      ...type.bodySm,
+      color: c.textMuted,
+      marginTop: JARAK_IKON,
+    },
+    barisTombol: {
+      alignItems: 'flex-end',
+    },
+  }),
+);
+
 /**
  * Hanya menampilkan data: `items` disiapkan OrdersScreen dari
  * releasedOrdersQuery, dan penutupan diserahkan ke `onDismiss`. Dengan begitu
  * komponen ini bisa dites dengan data biasa.
  */
 export function ReleasedOrdersNotice({ items, onOpen, onDismiss }: ReleasedOrdersNoticeProps): React.JSX.Element | null {
+  const { name, colors } = useTheme();
+  const s = gaya[name];
+
   // Hanya order yang lastConflictAt-nya dalam 24 jam terakhir.
   const now = Date.now();
   const visible: ReleasedOrderItem[] = items.filter((it) => {
@@ -41,26 +98,33 @@ export function ReleasedOrdersNotice({ items, onOpen, onDismiss }: ReleasedOrder
   if (visible.length === 0) return null;
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Order sudah tidak ditugaskan ke Anda</Text>
+    <View style={s.wadah}>
+      <View style={s.barisJudul}>
+        <Icon name="info" size={size.iconMd} color={colors.info} />
+        <Text style={s.judul}>Order sudah tidak ditugaskan ke Anda</Text>
+      </View>
       {visible.map((item) => (
-        <TouchableOpacity
+        <Pressable
           key={item.id}
           onPress={() => onOpen(item.id)}
-          style={styles.row}
+          accessibilityRole="button"
+          style={s.barisOrder}
         >
-          <Text style={styles.rowText}>Order #{item.id.slice(0, 8)}</Text>
-        </TouchableOpacity>
+          <Text style={s.teksOrder}>Order #{item.id.slice(0, 8)}</Text>
+          <Icon name="chevron_right" size={size.iconSm} color={colors.textSubtle} />
+        </Pressable>
       ))}
-      <Text style={styles.hint}>
+      <Text style={s.keterangan}>
         Biasanya karena HP Anda lama tidak tersambung. Ketuk order untuk melihat rinciannya.
       </Text>
-      <TouchableOpacity
-        onPress={() => onDismiss(visible.map((it) => it.id))}
-        style={styles.dismissButton}
-      >
-        <Text style={styles.dismissButtonText}>Tutup</Text>
-      </TouchableOpacity>
+      <View style={s.barisTombol}>
+        <Button
+          title="Tutup"
+          onPress={() => onDismiss(visible.map((it) => it.id))}
+          variant="secondary"
+          size="sm"
+        />
+      </View>
     </View>
   );
 }
@@ -113,47 +177,3 @@ export function releasedOrdersQuery(database: Database) {
     )
     .observeWithColumns(['last_conflict_reason', 'last_conflict_at']);
 }
-
-const styles = StyleSheet.create({
-  container: {
-    backgroundColor: '#fef3c7',
-    borderColor: '#fcd34d',
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
-    marginHorizontal: 16,
-    marginTop: 12,
-  },
-  title: {
-    fontWeight: '700',
-    color: '#92400e',
-    marginBottom: 8,
-  },
-  row: {
-    paddingVertical: 6,
-  },
-  rowText: {
-    fontSize: 15,
-    color: '#374151',
-    fontWeight: '500',
-  },
-  hint: {
-    fontSize: 13,
-    color: '#78350f',
-    marginTop: 8,
-  },
-  dismissButton: {
-    marginTop: 8,
-    alignSelf: 'flex-start',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#f59e0b',
-    borderRadius: 6,
-  },
-  dismissButtonText: {
-    color: '#92400e',
-    fontWeight: '600',
-  },
-});

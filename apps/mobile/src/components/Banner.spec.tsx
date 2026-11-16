@@ -12,7 +12,7 @@ import { fireEvent, render } from '@testing-library/react-native';
 import { Banner } from './Banner';
 import { InitialWindowProvider } from './motion/InitialWindow';
 import { Icon } from '../theme/Icon';
-import { colors } from '../theme/tokens';
+import { themes } from '../theme/tokens';
 
 const KASUS_IKON: { tone: 'pending' | 'warning' | 'info' | 'danger' | 'success'; ikon: string }[] = [
   { tone: 'pending', ikon: 'cloud_upload' },
@@ -70,18 +70,60 @@ describe('Banner', () => {
     const { toJSON } = render(<Banner tone="pending" title="Judul" />);
     const gaya = StyleSheet.flatten(toJSON().props.style);
     expect(gaya.borderStyle).toBe('dashed');
-    expect(gaya.borderColor).toBe(colors.text);
+    expect(gaya.borderColor).toBe(themes.gelap.pendingLine);
+  });
+
+  it('tone pending tanpa isi dan isinya rata tengah', () => {
+    const { toJSON } = render(<Banner tone="pending" title="Judul" />);
+    const gaya = StyleSheet.flatten(toJSON().props.style);
+    expect(gaya.backgroundColor).toBeUndefined();
+    expect(gaya.minHeight).toBe(52);
+    expect(gaya.justifyContent).toBe('center');
   });
 
   it('warna isi sesuai tone', () => {
     const bahaya = StyleSheet.flatten(
       render(<Banner tone="danger" title="Judul" />).toJSON().props.style,
     );
-    expect(bahaya.backgroundColor).toBe(colors.dangerSoft);
+    expect(bahaya.backgroundColor).toBe(themes.gelap.dangerSoft);
     const sukses = StyleSheet.flatten(
       render(<Banner tone="success" title="Judul" />).toJSON().props.style,
     );
-    expect(sukses.backgroundColor).toBe(colors.successSoft);
+    expect(sukses.backgroundColor).toBe(themes.gelap.infoSoft);
+    const informasi = StyleSheet.flatten(
+      render(<Banner tone="info" title="Judul" />).toJSON().props.style,
+    );
+    expect(informasi.backgroundColor).toBe(themes.gelap.infoSoft);
+  });
+
+  it('warna ikon mengikuti tone', () => {
+    const bahaya = render(<Banner tone="danger" title="Judul" />);
+    expect(bahaya.UNSAFE_getAllByType(Icon)[0].props.color).toBe(themes.gelap.danger);
+    const informasi = render(<Banner tone="info" title="Judul" />);
+    expect(informasi.UNSAFE_getAllByType(Icon)[0].props.color).toBe(themes.gelap.info);
+    const sukses = render(<Banner tone="success" title="Judul" />);
+    expect(sukses.UNSAFE_getAllByType(Icon)[0].props.color).toBe(themes.gelap.info);
+  });
+
+  it('wadah memakai sudut, padding, dan jarak versi 2', () => {
+    const { toJSON } = render(<Banner tone="info" title="Judul" />);
+    const gaya = StyleSheet.flatten(toJSON().props.style);
+    expect(gaya.borderRadius).toBe(14);
+    expect(gaya.paddingVertical).toBe(12);
+    expect(gaya.paddingHorizontal).toBe(14);
+    expect(gaya.gap).toBe(10);
+  });
+
+  it('tombol tutup berukuran 44 dengan ikon close', () => {
+    const { getByLabelText, UNSAFE_getAllByType } = render(
+      <Banner tone="info" title="Judul" onClose={() => {}} />,
+    );
+    const gaya = StyleSheet.flatten(getByLabelText('Tutup').props.style);
+    expect(gaya.width).toBe(44);
+    expect(gaya.height).toBe(44);
+    const ikonTutup = UNSAFE_getAllByType(Icon).find((ikon) => ikon.props.name === 'close');
+    expect(ikonTutup?.props.size).toBe(24);
+    expect(ikonTutup?.props.color).toBe(themes.gelap.text);
   });
 
   it('di dalam jendela awal akar tidak punya entering', () => {

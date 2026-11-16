@@ -7,6 +7,7 @@
  */
 
 import React from 'react';
+import { Pressable, StyleSheet } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 import { Database } from '@nozbe/watermelondb';
 import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
@@ -14,6 +15,7 @@ import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
 import { schema } from '../db/schema';
 import { OrderModel } from '../db/models/OrderModel';
 import { PendingActionModel } from '../db/models/PendingActionModel';
+import { themes } from '../theme/tokens';
 import {
   ReleasedOrdersNotice,
   dismissReleasedOrders,
@@ -48,6 +50,25 @@ describe('ReleasedOrdersNotice (komponen presentasi)', () => {
     ).toBeTruthy();
     // Tombol Tutup
     expect(getByText('Tutup')).toBeTruthy();
+  });
+
+  it('kotak memakai warna tema dan baris order memakai aksi sekunder', () => {
+    const { toJSON, UNSAFE_getAllByType } = render(
+      <ReleasedOrdersNotice
+        items={[{ id: 'order-uuid-1', lastConflictAt: Date.now() }]}
+        onOpen={jest.fn()}
+        onDismiss={jest.fn()}
+      />,
+    );
+    const gayaWadah = StyleSheet.flatten(toJSON().props.style);
+    expect(gayaWadah.backgroundColor).toBe(themes.gelap.surface);
+    expect(gayaWadah.borderColor).toBe(themes.gelap.infoLine);
+    expect(gayaWadah.borderRadius).toBe(18);
+    const gayaBaris = StyleSheet.flatten(
+      UNSAFE_getAllByType(Pressable)[0].props.style,
+    );
+    expect(gayaBaris.backgroundColor).toBe(themes.gelap.actionSecondary);
+    expect(gayaBaris.height).toBe(44);
   });
 
   it('tidak menampilkan order yang lastConflictAt-nya lebih dari 24 jam', () => {

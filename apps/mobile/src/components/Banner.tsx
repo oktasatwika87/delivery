@@ -12,24 +12,21 @@ import Animated from 'react-native-reanimated';
 
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
-import { colors, fontFamily, radius, size, space, type } from '../theme/tokens';
+import { StripeFill } from '../theme/StripeFill';
+import { perTema, useTheme } from '../theme/ThemeProvider';
+import { radius, size, space, stroke, type } from '../theme/tokens';
 import { enterFromAbove, exitUp } from './motion/presets';
 import { useInitialWindow } from './motion/InitialWindow';
 
-const TEBAL_TEPI = 1.5;
+const PADDING_ATAS = 12;
+const PADDING_SAMPING = 14;
+const JARAK_ISI = 10;
+const UKURAN_TUTUP = 44;
 
 /** Masuk banner dari atas. */
 const MASUK = enterFromAbove();
 /** Keluar banner ke atas. */
 const KELUAR = exitUp();
-
-/** Sisa ukuran ikon supaya area sentuhnya tetap 48. */
-const SENTUH_IKON = {
-  top: (size.touch - size.iconSm) / 2,
-  bottom: (size.touch - size.iconSm) / 2,
-  left: (size.touch - size.iconSm) / 2,
-  right: (size.touch - size.iconSm) / 2,
-};
 
 export type BannerTone = 'pending' | 'warning' | 'info' | 'danger' | 'success';
 
@@ -48,56 +45,118 @@ export interface BannerProps {
 }
 
 interface GayaTone {
-  backgroundColor: string;
+  /** Isi kotak banner. Kalau tidak diisi, banner tanpa warna latar. */
+  backgroundColor?: string;
+  /** Warna ikon utama. */
   color: string;
+  /** Warna judul. */
+  titleColor: string;
   icon: IconName;
   borderWidth: number;
   borderStyle: 'solid' | 'dashed';
-  borderColor: string;
+  borderColor?: string;
+  /** Kalau true, latar banner pakai belang. */
+  stripe: boolean;
+  /** Kalau true, isi banner diratakan di tengah. */
+  tengah: boolean;
 }
 
-const GAYA_TONE: Record<BannerTone, GayaTone> = {
-  pending: {
-    backgroundColor: colors.surface,
-    color: colors.text,
-    icon: 'cloud_upload',
-    borderWidth: TEBAL_TEPI,
-    borderStyle: 'dashed',
-    borderColor: colors.text,
+const GAYA_TONE = perTema(
+  (c): Record<BannerTone, GayaTone> => ({
+    pending: {
+      color: c.text,
+      titleColor: c.text,
+      icon: 'cloud_upload',
+      borderWidth: stroke.pending,
+      borderStyle: 'dashed',
+      borderColor: c.pendingLine,
+      stripe: false,
+      tengah: true,
+    },
+    warning: {
+      color: c.warning,
+      titleColor: c.warning,
+      icon: 'history',
+      borderWidth: 0,
+      borderStyle: 'solid',
+      stripe: true,
+      tengah: false,
+    },
+    danger: {
+      backgroundColor: c.dangerSoft,
+      color: c.danger,
+      titleColor: c.text,
+      icon: 'sync_problem',
+      borderWidth: 0,
+      borderStyle: 'solid',
+      stripe: false,
+      tengah: false,
+    },
+    info: {
+      backgroundColor: c.infoSoft,
+      color: c.info,
+      titleColor: c.text,
+      icon: 'sync',
+      borderWidth: 0,
+      borderStyle: 'solid',
+      stripe: false,
+      tengah: false,
+    },
+    success: {
+      backgroundColor: c.infoSoft,
+      color: c.info,
+      titleColor: c.text,
+      icon: 'payments',
+      borderWidth: 0,
+      borderStyle: 'solid',
+      stripe: false,
+      tengah: false,
+    },
+  }),
+);
+
+const gaya = StyleSheet.create({
+  wadah: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: JARAK_ISI,
+    paddingVertical: PADDING_ATAS,
+    paddingHorizontal: PADDING_SAMPING,
+    borderRadius: radius.xl,
   },
-  warning: {
-    backgroundColor: colors.warningSoft,
-    color: colors.warning,
-    icon: 'history',
-    borderWidth: 0,
-    borderStyle: 'solid',
-    borderColor: colors.warning,
+  tengah: {
+    minHeight: 52,
+    justifyContent: 'center',
   },
-  info: {
-    backgroundColor: colors.fillNeutral,
-    color: colors.text,
-    icon: 'sync',
-    borderWidth: 0,
-    borderStyle: 'solid',
-    borderColor: colors.text,
+  ikon: {
+    marginTop: 1,
   },
-  danger: {
-    backgroundColor: colors.dangerSoft,
-    color: colors.dangerStrong,
-    icon: 'sync_problem',
-    borderWidth: 0,
-    borderStyle: 'solid',
-    borderColor: colors.dangerStrong,
+  kolom: {
+    flex: 1,
+    gap: 2,
   },
-  success: {
-    backgroundColor: colors.successSoft,
-    color: colors.successStrong,
-    icon: 'payments',
-    borderWidth: 0,
-    borderStyle: 'solid',
-    borderColor: colors.successStrong,
+  judul: {
+    ...type.labelMd,
   },
-};
+  isi: {
+    ...type.bodyMdMedium,
+  },
+  barisAksi: {
+    flexDirection: 'row',
+    gap: space[2],
+    marginTop: JARAK_ISI,
+  },
+  aksi: {
+    ...type.bodyMdMedium,
+    textDecorationLine: 'underline',
+  },
+  tombolTutup: {
+    width: UKURAN_TUTUP,
+    height: UKURAN_TUTUP,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
 
 export function Banner({
   tone,
@@ -107,36 +166,45 @@ export function Banner({
   onClose,
   action,
 }: BannerProps): React.JSX.Element {
+  const { name, colors } = useTheme();
+  const gayaTone = GAYA_TONE[name][tone];
   const dalamJendela = useInitialWindow();
-  const gaya = GAYA_TONE[tone];
-  const namaIkon = icon ?? gaya.icon;
+  const namaIkon = icon ?? gayaTone.icon;
 
   return (
     <Animated.View
       entering={dalamJendela ? undefined : MASUK}
       exiting={dalamJendela ? undefined : KELUAR}
       style={[
-        styles.wadah,
+        gaya.wadah,
+        gayaTone.tengah ? gaya.tengah : null,
         {
-          backgroundColor: gaya.backgroundColor,
-          borderWidth: gaya.borderWidth,
-          borderStyle: gaya.borderStyle,
-          borderColor: gaya.borderColor,
+          backgroundColor: gayaTone.backgroundColor,
+          borderWidth: gayaTone.borderWidth,
+          borderStyle: gayaTone.borderStyle,
+          borderColor: gayaTone.borderColor,
         },
       ]}
     >
-      <Icon name={namaIkon} size={size.iconSm} color={gaya.color} />
-      <View style={styles.kolom}>
-        <Text style={[styles.judul, { color: gaya.color }]}>{title}</Text>
-        {body ? <Text style={[styles.isi, { color: gaya.color }]}>{body}</Text> : null}
+      {gayaTone.stripe ? (
+        <StripeFill color={colors.warningStripe} colorAlt={colors.warningStripeAlt} />
+      ) : null}
+      <View style={gaya.ikon}>
+        <Icon name={namaIkon} size={size.iconMd} color={gayaTone.color} />
+      </View>
+      <View style={gaya.kolom}>
+        <Text style={[gaya.judul, { color: gayaTone.titleColor }]}>{title}</Text>
+        {body ? <Text style={[gaya.isi, { color: colors.textMuted }]}>{body}</Text> : null}
         {action ? (
-          <Pressable
-            onPress={action.onPress}
-            accessibilityRole="button"
-            hitSlop={SENTUH_IKON}
-          >
-            <Text style={[styles.aksi, { color: gaya.color }]}>{action.label}</Text>
-          </Pressable>
+          <View style={gaya.barisAksi}>
+            <Pressable
+              onPress={action.onPress}
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+            >
+              <Text style={[gaya.aksi, { color: gayaTone.color }]}>{action.label}</Text>
+            </Pressable>
+          </View>
         ) : null}
       </View>
       {onClose ? (
@@ -144,37 +212,11 @@ export function Banner({
           onPress={onClose}
           accessibilityRole="button"
           accessibilityLabel="Tutup"
-          hitSlop={SENTUH_IKON}
+          style={gaya.tombolTutup}
         >
-          <Icon name="close" size={size.iconSm} color={gaya.color} />
+          <Icon name="close" size={size.icon} color={colors.text} />
         </Pressable>
       ) : null}
     </Animated.View>
   );
 }
-
-const styles = StyleSheet.create({
-  wadah: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: space[3],
-    paddingVertical: space[3],
-    paddingHorizontal: space[4],
-    borderRadius: radius.md,
-  },
-  kolom: {
-    flex: 1,
-    gap: space[1],
-  },
-  judul: {
-    ...type.titleSm,
-  },
-  isi: {
-    ...type.bodySm,
-  },
-  aksi: {
-    ...type.bodySm,
-    fontFamily: fontFamily.bold,
-    textDecorationLine: 'underline',
-  },
-});
