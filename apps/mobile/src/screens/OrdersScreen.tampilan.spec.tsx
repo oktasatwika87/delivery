@@ -255,6 +255,19 @@ function anak(term: Instansi): Instansi[] {
   );
 }
 
+/** Id order dari data yang dikirim ke FlatList. */
+function idDariDaftar(data: unknown): string[] {
+  if (!Array.isArray(data)) return [];
+  const hasil: string[] = [];
+  for (const item of data) {
+    if (typeof item === 'object' && item !== null && 'id' in item) {
+      const id = item.id;
+      if (typeof id === 'string') hasil.push(id);
+    }
+  }
+  return hasil;
+}
+
 // Status jaringan dibalas ke nilai awal tiap tes, soalnya nilai mock
 // tidak direset oleh clearAllMocks.
 beforeEach(() => {
@@ -634,6 +647,70 @@ describe('lencana kartu Order Saya', () => {
 
     await waitFor(() => {
       expect(getByText('Ditolak server')).toBeTruthy();
+    });
+  });
+});
+
+describe('urutan daftar di layar', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    (acceptOrder as jest.Mock).mockResolvedValue({});
+    mockPendingActions = [];
+    setBarisPool([]);
+  });
+
+  test('kartu Order Saya urut order aktif dulu lalu yang dibuat paling baru', async () => {
+    const myOrders = [
+      makeBaris({
+        id: 'order-selesai-1',
+        status: 'DELIVERED',
+        driverId: 'driver-123',
+        createdAt: 2_000,
+      }),
+      makeBaris({
+        id: 'order-aktif-1',
+        status: 'PREPARING',
+        driverId: 'driver-123',
+        createdAt: 1_000,
+      }),
+    ];
+
+    const { UNSAFE_getByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={myOrders as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(idDariDaftar(UNSAFE_getByType(FlatList).props.data)).toEqual([
+        'order-aktif-1',
+        'order-selesai-1',
+      ]);
+    });
+  });
+
+  test('kartu Tersedia urut order yang dibuat paling baru dulu', async () => {
+    setBarisPool([
+      makeBaris({ id: 'pool-lama-1', createdAt: 1_000 }),
+      makeBaris({ id: 'pool-baru-1', createdAt: 2_000 }),
+    ]);
+
+    const { UNSAFE_getByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(idDariDaftar(UNSAFE_getByType(FlatList).props.data)).toEqual([
+        'pool-baru-1',
+        'pool-lama-1',
+      ]);
     });
   });
 });

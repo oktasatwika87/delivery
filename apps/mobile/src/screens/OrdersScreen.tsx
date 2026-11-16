@@ -28,6 +28,13 @@ import { syncEvents } from '../sync/syncEvents';
 import { deriveOrderSyncView } from '../sync/orderSyncView';
 import { buildPoolRow, poolAddressJson } from './buildPoolRow';
 import {
+  readCurrency,
+  readOrderStatus,
+  readTotalCents,
+  readWaktu,
+} from './orderRowRead';
+import { sortMyOrders, sortPoolOrders } from './orderListSort';
+import {
   ReleasedOrdersNotice,
   dismissReleasedOrders,
   releasedOrdersQuery,
@@ -73,33 +80,6 @@ interface Props {
   myOrders?: OrderModel[];
   releasedOrders?: OrderModel[];
   onLogout: () => void;
-}
-
-const ORDER_STATUS_VALUES: readonly string[] = Object.values(OrderStatus);
-
-function isOrderStatus(value: string): value is OrderStatus {
-  return ORDER_STATUS_VALUES.includes(value);
-}
-
-function readOrderStatus(row: OrderModel): OrderStatus {
-  const raw = row._getRaw('status');
-  if (typeof raw === 'string' && isOrderStatus(raw)) return raw;
-  return OrderStatus.PENDING;
-}
-
-function readTotalCents(row: OrderModel): number {
-  const raw = row._getRaw('total_cents');
-  return typeof raw === 'number' ? raw : 0;
-}
-
-function readCurrency(row: OrderModel): string {
-  const raw = row._getRaw('currency');
-  return typeof raw === 'string' ? raw : '';
-}
-
-function readWaktu(row: OrderModel, column: 'created_at' | 'updated_at'): number {
-  const raw = row._getRaw(column);
-  return typeof raw === 'number' ? raw : 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -480,6 +460,15 @@ export function OrdersScreenBase({
     return grouped;
   }, [pendingActions]);
 
+  // Daftar diurutkan sendiri, bukan ikut urutan database. Order aktif
+  // dulu, lalu sisanya, dan di dalam tiap kelompok order yang dibuat
+  // paling baru dulu.
+  const myOrdersUrut = useMemo(
+    () => sortMyOrders(myOrders, actionsByOrderId),
+    [myOrders, actionsByOrderId],
+  );
+  const poolUrut = useMemo(() => sortPoolOrders(poolOrders), [poolOrders]);
+
   // Socket subscription
   useEffect(() => {
     // Clear previous unsubscribes
@@ -803,7 +792,7 @@ export function OrdersScreenBase({
           <Tabs tabs={tabs} activeKey={activeTab} onChange={onTabChange} />
         </View>
         <FlatList
-          data={tampilTersedia ? poolOrders : myOrders}
+          data={tampilTersedia ? poolUrut : myOrdersUrut}
           keyExtractor={(row) => row.id}
           renderItem={tampilTersedia ? renderPoolItem : renderMineItem}
           ListHeaderComponent={tampilTersedia ? renderPoolHeader() : notice}
@@ -834,7 +823,6 @@ const OrdersScreenWithObservables = withDatabase(
             .query(
               Q.where('driver_id', currentUserId),
               Q.where('deleted_at', null),
-              Q.sortBy('updated_at', Q.desc),
             )
             .observeWithColumns(['status', 'updated_at'])
         : of<OrderModel[]>([]),
