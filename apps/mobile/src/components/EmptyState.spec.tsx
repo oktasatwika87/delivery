@@ -10,7 +10,7 @@ import { fireEvent, render } from '@testing-library/react-native';
 
 import { EmptyState } from './EmptyState';
 import { Icon } from '../theme/Icon';
-import { colors } from '../theme/tokens';
+import { themes } from '../theme/tokens';
 
 const LEBAR_ISI = 280;
 
@@ -46,6 +46,18 @@ describe('EmptyState', () => {
     const { UNSAFE_getByType } = render(<EmptyState icon="search" title="Belum ada order" />);
     expect(UNSAFE_getByType(Icon).props.name).toBe('search');
     const gaya = StyleSheet.flatten(UNSAFE_getByType(Icon).parent.props.style);
-    expect(gaya.backgroundColor).toBe(colors.fillNeutral);
+    expect(gaya.backgroundColor).toBe(themes.gelap.fillNeutral);
+  });
+
+  it('warna teks mengikuti tema gelap', () => {
+    const { getByText } = render(
+      <EmptyState icon="search" title="Belum ada order" body="Order yang masuk akan tampil di sini" />,
+    );
+    expect(StyleSheet.flatten(getByText('Belum ada order').props.style).color).toBe(
+      themes.gelap.text,
+    );
+    expect(
+      StyleSheet.flatten(getByText('Order yang masuk akan tampil di sini').props.style).color,
+    ).toBe(themes.gelap.textMuted);
   });
 });
