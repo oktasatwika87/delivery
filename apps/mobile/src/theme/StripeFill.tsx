@@ -14,9 +14,9 @@ import Svg, { Defs, Pattern, Rect } from 'react-native-svg';
 let hitungan = 0;
 
 export interface StripeFillProps {
-  /** Warna第一条 belang. */
+  /** Warna belang pertama. */
   color: string;
-  /** Warna第二条 belang. */
+  /** Warna belang kedua. */
   colorAlt: string;
 }
 

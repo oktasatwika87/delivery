@@ -24,7 +24,7 @@ import { enterFromAbove, exitEasing, exitUp } from './motion/presets';
 import { useHoldDone } from './motion/useHoldDone';
 import { useInitialWindow } from './motion/InitialWindow';
 
-const TITIK_TENGAH = '·';
+const TITIK_TENGAH = '\u00b7';
 const TEKS_OFFLINE = `Offline ${TITIK_TENGAH} perubahan disimpan di HP`;
 const JARAK_KATA = 4;
 

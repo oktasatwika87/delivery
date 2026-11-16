@@ -19,7 +19,7 @@ import { Icon } from '../theme/Icon';
 import { perTema, ThemeProvider, useTheme } from '../theme/ThemeProvider';
 import { elevation, radius, size, space, stroke, type } from '../theme/tokens';
 
-const TITIK_TENGAH = '·';
+const TITIK_TENGAH = '\u00b7';
 const JARAK_IKON = 6;
 
 export interface OrderCardPoolProps {

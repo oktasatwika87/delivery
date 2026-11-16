@@ -79,7 +79,7 @@ describe('SyncBadge yang menahan selesai', () => {
     jest.useRealTimers();
   });
 
-  it('dari pending ke null tampil centang lalu lenホンダ hilang', () => {
+  it('dari pending ke null tampil centang lalu lencana hilang', () => {
     const { rerender, UNSAFE_queryByType, UNSAFE_queryAllByType, toJSON } = render(
       <SyncBadge state="pending" />,
     );

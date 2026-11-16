@@ -13,7 +13,7 @@ import { OrderCard } from './OrderCard';
 import { Icon } from '../theme/Icon';
 import { themes } from '../theme/tokens';
 
-const TITIK_TENGAH = '·';
+const TITIK_TENGAH = '\u00b7';
 
 describe('OrderCard bentuk pool', () => {
   it('baris order, kota, dan total tampil', () => {
