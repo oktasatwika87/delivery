@@ -586,6 +586,27 @@ describe('ConnectionBar', () => {
       expect(getByText('perubahan')).toBeTruthy();
     });
   });
+
+  test('bilah menerima jumlah aksi gagal dan COD yatim saja', async () => {
+    mockPendingActions = [
+      makeAksi('order-aksi-1', 'pending'),
+      makeAksi('order-aksi-2', 'syncing'),
+      makeAksi('order-aksi-3', 'failed'),
+      makeAksi('order-aksi-4', 'orphaned_needs_review'),
+    ];
+
+    const { UNSAFE_getByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(UNSAFE_getByType(ConnectionBar).props.failedCount).toBe(2);
+    });
+  });
 });
 
 describe('lencana kartu Order Saya', () => {

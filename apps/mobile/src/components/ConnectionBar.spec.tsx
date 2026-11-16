@@ -145,4 +145,22 @@ describe('ConnectionBar yang menahan selesai', () => {
 
     expect(toJSON()).toBeNull();
   });
+
+  it('antrean habis tapi ada aksi gagal: bilah hilang tanpa centang', () => {
+    const { rerender, UNSAFE_queryByType, toJSON } = render(
+      <ConnectionBar status="online" pendingCount={1} failedCount={1} />,
+    );
+
+    rerender(<ConnectionBar status="online" pendingCount={0} failedCount={1} />);
+
+    expect(UNSAFE_queryByType(CheckMark)).toBeNull();
+    expect(toJSON()).toBeNull();
+  });
+
+  it('offline dengan ada aksi gagal tetap menampilkan teks offline', () => {
+    const { getByText } = render(
+      <ConnectionBar status="offline" pendingCount={0} failedCount={2} />,
+    );
+    expect(getByText(`Offline ${TITIK_TENGAH} perubahan disimpan di HP`)).toBeTruthy();
+  });
 });

@@ -36,11 +36,14 @@ const KELUAR = exitUp();
 export interface ConnectionBarProps {
   status: NetworkStatus;
   pendingCount: number;
+  /** Jumlah aksi yang ditolak server atau COD yatim. */
+  failedCount?: number;
 }
 
 export function ConnectionBar({
   status,
   pendingCount,
+  failedCount = 0,
 }: ConnectionBarProps): React.JSX.Element | null {
   const { colors } = useTheme();
   const dalamJendela = useInitialWindow();
@@ -67,7 +70,9 @@ export function ConnectionBar({
   }));
 
   const offline = status === 'offline';
-  const selesai = !offline && fase === 'done';
+  // Bilah tidak memberi centang kalau masih ada aksi yang ditolak server,
+  // karena antrean belum benar-benar bersih.
+  const selesai = !offline && fase === 'done' && failedCount === 0;
   const sinkron = status === 'online' && (pendingCount > 0 || selesai);
 
   if (!offline && !sinkron) {

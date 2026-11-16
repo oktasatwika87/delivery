@@ -172,6 +172,8 @@ export function OrdersScreenBase({
   const [pendingActions, setPendingActions] = useState<PendingActionModel[]>([]);
   // Jumlah aksi yang masih antre, dipakai ConnectionBar.
   const [pendingActionCount, setPendingActionCount] = useState(0);
+  // Jumlah aksi yang ditolak server atau COD yatim, dipakai ConnectionBar.
+  const [failedActionCount, setFailedActionCount] = useState(0);
   // Fetch pertama sudah selesai, berhasil atau gagal.
   const [firstFetchDone, setFirstFetchDone] = useState(false);
   // Order yang sedang diterima, buat menandai satu kartu saja.
@@ -447,6 +449,12 @@ export function OrdersScreenBase({
           actions.filter((action) => {
             const status = action._getRaw('status');
             return status === 'pending' || status === 'syncing';
+          }).length,
+        );
+        setFailedActionCount(
+          actions.filter((action) => {
+            const status = action._getRaw('status');
+            return status === 'failed' || status === 'orphaned_needs_review';
           }).length,
         );
       });
@@ -779,7 +787,11 @@ export function OrdersScreenBase({
           isi layar saat bilah muncul atau hilang. */}
       <View style={gayaLayar.wadahBilah}>
         <ThemeProvider name="gelap">
-          <ConnectionBar status={networkStatus} pendingCount={pendingActionCount} />
+          <ConnectionBar
+            status={networkStatus}
+            pendingCount={pendingActionCount}
+            failedCount={failedActionCount}
+          />
         </ThemeProvider>
       </View>
       <Animated.View
