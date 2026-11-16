@@ -8,6 +8,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import type { StyleProp, ViewStyle } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -111,9 +112,11 @@ const gaya = perTema((c) =>
 
 export interface SyncBadgeProps {
   state: SyncState | null;
+  /** Gaya tambahan untuk pembungkus luar lencana. */
+  style?: StyleProp<ViewStyle>;
 }
 
-export function SyncBadge({ state }: SyncBadgeProps): React.JSX.Element | null {
+export function SyncBadge({ state, style }: SyncBadgeProps): React.JSX.Element | null {
   const { name, colors } = useTheme();
   const s = gaya[name];
   const dalamJendela = useInitialWindow();
@@ -155,7 +158,7 @@ export function SyncBadge({ state }: SyncBadgeProps): React.JSX.Element | null {
     return (
       <Animated.View
         entering={dalamJendela ? undefined : telahTersembunyi ? MASUK : undefined}
-        style={s.akar}
+        style={[s.akar, style]}
       >
         <Animated.View testID="lencana-sinkron" style={[s.selesai, gayaLencana]}>
           <CheckMark size={UKURAN_IKON} color={colors.info} />
@@ -169,7 +172,7 @@ export function SyncBadge({ state }: SyncBadgeProps): React.JSX.Element | null {
   return (
     <Animated.View
       entering={dalamJendela ? undefined : telahTersembunyi ? MASUK : undefined}
-      style={s.akar}
+      style={[s.akar, style]}
     >
       <Animated.View
         testID="lencana-sinkron"

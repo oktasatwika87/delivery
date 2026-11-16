@@ -228,11 +228,13 @@ function KartuMine(props: OrderCardMineProps): React.JSX.Element {
           ? `Order ${props.orderNumber} ${TITIK_TENGAH} ${props.timeText}`
           : `Order ${props.orderNumber}`}
       </Text>
-      {props.syncState ? (
-        <View style={s.lencana}>
-          <SyncBadge state={props.syncState} />
-        </View>
-      ) : null}
+      {/*
+        Lencana selalu dipasang, walau aksinya sudah terkirim. Kalau
+        lencana dilepas begitu syncState kosong, useHoldDone di dalamnya
+        tidak pernah sampai ke fase selesai dan centangnya tidak pernah
+        keliatan.
+      */}
+      <SyncBadge state={props.syncState ?? null} style={s.lencana} />
     </Pressable>
   );
 }

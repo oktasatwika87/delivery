@@ -7,11 +7,11 @@
 
 import React from 'react';
 import { StyleSheet } from 'react-native';
-import { fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 
 import { OrderCard } from './OrderCard';
 import { Icon } from '../theme/Icon';
-import { themes } from '../theme/tokens';
+import { motion, themes } from '../theme/tokens';
 
 const TITIK_TENGAH = '\u00b7';
 
@@ -233,6 +233,79 @@ describe('OrderCard bentuk mine', () => {
     );
     fireEvent.press(getByText('Order #1D42E3E2'));
     expect(onPress).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OrderCard lencana sinkron yang bertahan', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('lencana tetap ada dan jadi centang setelah syncState hilang', () => {
+    const { rerender, getByTestId, queryByText } = render(
+      <OrderCard
+        variant="mine"
+        orderNumber="#1D42E3E2"
+        status="OUT_FOR_DELIVERY"
+        statusText="Dalam perjalanan"
+        addressMain="Jl. Merdeka 10"
+        syncState="pending"
+        amountText="Rp45.000"
+        onPress={() => {}}
+      />,
+    );
+
+    rerender(
+      <OrderCard
+        variant="mine"
+        orderNumber="#1D42E3E2"
+        status="OUT_FOR_DELIVERY"
+        statusText="Dalam perjalanan"
+        addressMain="Jl. Merdeka 10"
+        amountText="Rp45.000"
+        onPress={() => {}}
+      />,
+    );
+
+    expect(getByTestId('lencana-sinkron')).toBeTruthy();
+    expect(queryByText('Menunggu sinkronisasi')).toBeNull();
+  });
+
+  it('lencana hilang setelah centang ditahan selesai', () => {
+    const { rerender, queryByTestId } = render(
+      <OrderCard
+        variant="mine"
+        orderNumber="#1D42E3E2"
+        status="OUT_FOR_DELIVERY"
+        statusText="Dalam perjalanan"
+        addressMain="Jl. Merdeka 10"
+        syncState="pending"
+        amountText="Rp45.000"
+        onPress={() => {}}
+      />,
+    );
+
+    rerender(
+      <OrderCard
+        variant="mine"
+        orderNumber="#1D42E3E2"
+        status="OUT_FOR_DELIVERY"
+        statusText="Dalam perjalanan"
+        addressMain="Jl. Merdeka 10"
+        amountText="Rp45.000"
+        onPress={() => {}}
+      />,
+    );
+
+    act(() => {
+      jest.advanceTimersByTime(motion.duration.holdDone);
+    });
+
+    expect(queryByTestId('lencana-sinkron')).toBeNull();
   });
 });
 
