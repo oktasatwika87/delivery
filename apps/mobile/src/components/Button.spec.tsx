@@ -5,13 +5,13 @@
  */
 
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { ActivityIndicator, StyleSheet } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 
 import { Button } from './Button';
 import { CheckMark } from './motion/CheckMark';
 import { Icon } from '../theme/Icon';
-import { colors, size } from '../theme/tokens';
+import { size, themes } from '../theme/tokens';
 
 describe('Button', () => {
   it('judul tombol tampil sebagai teks', () => {
@@ -55,16 +55,16 @@ describe('Button', () => {
       <Button title="Simpan" onPress={() => {}} testID="tombol" />,
     );
     const gaya = StyleSheet.flatten(getByTestId('tombol').props.style);
-    expect(gaya.backgroundColor).toBe(colors.action);
+    expect(gaya.backgroundColor).toBe(themes.gelap.action);
   });
 
-  it('isi tombol kedua memakai warna permukaan dan tepinya garis tebal', () => {
+  it('isi tombol kedua memakai warna aksi kedua dan tepinya garis tipis', () => {
     const { getByTestId } = render(
       <Button title="Simpan" onPress={() => {}} variant="secondary" testID="tombol" />,
     );
     const gaya = StyleSheet.flatten(getByTestId('tombol').props.style);
-    expect(gaya.backgroundColor).toBe(colors.surface);
-    expect(gaya.borderColor).toBe(colors.lineStrong);
+    expect(gaya.backgroundColor).toBe(themes.gelap.actionSecondary);
+    expect(gaya.borderColor).toBe(themes.gelap.lineControl);
   });
 
   it('tombol nonaktif memakai isi dan teks nonaktif', () => {
@@ -72,7 +72,7 @@ describe('Button', () => {
       <Button title="Simpan" onPress={() => {}} disabled testID="tombol" />,
     );
     const gaya = StyleSheet.flatten(getByTestId('tombol').props.style);
-    expect(gaya.backgroundColor).toBe(colors.actionDisabled);
+    expect(gaya.backgroundColor).toBe(themes.gelap.actionDisabled);
   });
 
   it('tombol tanpa isi tidak punya warna latar', () => {
@@ -97,12 +97,28 @@ describe('Button', () => {
     expect(UNSAFE_getByType(Icon).props.name).toBe('cloud_upload');
   });
 
+  it('ikon tombol kedua memakai warna info', () => {
+    const { UNSAFE_getByType } = render(
+      <Button title="Simpan" onPress={() => {}} variant="secondary" icon="cloud_upload" />,
+    );
+    expect(UNSAFE_getByType(Icon).props.color).toBe(themes.gelap.info);
+  });
+
   it('tinggi tombol sesuai ukuran yang dipilih', () => {
     const { getByTestId } = render(
       <Button title="Simpan" onPress={() => {}} size="lg" testID="tombol" />,
     );
     const gaya = StyleSheet.flatten(getByTestId('tombol').props.style);
     expect(gaya.height).toBe(size.controlLg);
+  });
+
+  it('tombol ukuran kartu punya tinggi dan sudut sendiri', () => {
+    const { getByTestId } = render(
+      <Button title="Simpan" onPress={() => {}} size="card" testID="tombol" />,
+    );
+    const gaya = StyleSheet.flatten(getByTestId('tombol').props.style);
+    expect(gaya.height).toBe(size.controlCard);
+    expect(gaya.borderRadius).toBe(12);
   });
 
   it('tombol aktif punya penangan tekan dan menekan tidak mengganggu aksi', () => {
@@ -145,6 +161,24 @@ describe('Button', () => {
     expect(getByText('Simpan')).toBeTruthy();
   });
 
+  it('lapisan judul tetap ada dan disembunyikan saat loading dan saat success', () => {
+    const memuat = render(<Button title="Simpan" onPress={() => {}} loading />);
+    expect(memuat.getByText('Simpan')).toBeTruthy();
+    const gayaMemuat = StyleSheet.flatten(memuat.getByTestId('judul-tombol').props.style);
+    expect(gayaMemuat.opacity).toBe(0);
+
+    const berhasil = render(<Button title="Simpan" onPress={() => {}} success />);
+    expect(berhasil.getByText('Simpan')).toBeTruthy();
+    const gayaBerhasil = StyleSheet.flatten(berhasil.getByTestId('judul-tombol').props.style);
+    expect(gayaBerhasil.opacity).toBe(0);
+  });
+
+  it('lapisan judul terlihat kalau tombol normal', () => {
+    const { getByTestId } = render(<Button title="Simpan" onPress={() => {}} />);
+    const gaya = StyleSheet.flatten(getByTestId('judul-tombol').props.style);
+    expect(gaya.opacity).toBe(1);
+  });
+
   it('tombol berhasil tidak memanggil aksi dan tandai nonaktif bukan sibuk', () => {
     const onPress = jest.fn();
     const { getByTestId } = render(
@@ -160,11 +194,11 @@ describe('Button', () => {
     });
   });
 
-  it('tombol berhasil tidak menampilkan ikon atau pemutar memuat', () => {
+  it('tombol berhasil tidak menampilkan pemutar memuat', () => {
     const { UNSAFE_queryByType } = render(
       <Button title="Simpan" onPress={() => {}} icon="cloud_upload" success />,
     );
 
-    expect(UNSAFE_queryByType(Icon)).toBeNull();
+    expect(UNSAFE_queryByType(ActivityIndicator)).toBeNull();
   });
 });

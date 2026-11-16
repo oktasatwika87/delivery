@@ -22,16 +22,14 @@ import { CheckMark } from './motion/CheckMark';
 import { usePressScale } from './motion/usePressScale';
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
+import { perTema, useTheme } from '../theme/ThemeProvider';
 import {
-  colors,
-  fontFamily,
   radius,
   size as ukuranKontrol,
   space,
+  stroke,
   type,
 } from '../theme/tokens';
-
-const TEBAL_TEPI = 1.5;
 
 /** Sisa tinggi tombol kecil supaya area sentuhnya tetap 48. */
 const SENTUH_SM = {
@@ -41,10 +39,8 @@ const SENTUH_SM = {
   right: (ukuranKontrol.touch - ukuranKontrol.controlSm) / 2,
 };
 
-const TANPA_ISI: ViewStyle = {};
-
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
-export type ButtonSize = 'lg' | 'md' | 'sm';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'dangerFill';
+export type ButtonSize = 'lg' | 'card' | 'md' | 'sm';
 
 export interface ButtonProps {
   title: string;
@@ -60,13 +56,65 @@ export interface ButtonProps {
   testID?: string;
 }
 
-/** Warna teks tombol sesuai varian, tombol nonaktif pakai teks nonaktif. */
-function warnaTeksButton(variant: ButtonVariant, nonaktif: boolean): string {
-  if (nonaktif) return colors.onActionDisabled;
-  if (variant === 'primary') return colors.onAction;
-  if (variant === 'danger') return colors.danger;
-  return colors.text;
-}
+const gaya = perTema((c) =>
+  StyleSheet.create({
+    tombol: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    ukuranLg: {
+      height: ukuranKontrol.controlLg,
+      borderRadius: radius.xl,
+      paddingHorizontal: space[4],
+      width: '100%',
+    },
+    ukuranCard: {
+      height: ukuranKontrol.controlCard,
+      borderRadius: radius.lg,
+      paddingHorizontal: space[4],
+      width: '100%',
+    },
+    ukuranMd: {
+      height: ukuranKontrol.controlMd,
+      borderRadius: radius.lg,
+      paddingHorizontal: space[4],
+    },
+    ukuranSm: {
+      height: ukuranKontrol.controlSm,
+      borderRadius: radius.md,
+      paddingHorizontal: space[4],
+    },
+    isiPrimer: {
+      backgroundColor: c.action,
+    },
+    isiPrimerDitekan: {
+      backgroundColor: c.actionPressed,
+    },
+    isiKedua: {
+      backgroundColor: c.actionSecondary,
+      borderWidth: stroke.hairline,
+      borderColor: c.lineControl,
+    },
+    isiDanger: {
+      backgroundColor: c.danger,
+    },
+    isiNonaktif: {
+      backgroundColor: c.actionDisabled,
+      borderWidth: 0,
+    },
+    lapisanJudul: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: space[2],
+    },
+    lapisanStatus: {
+      ...StyleSheet.absoluteFillObject,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+  }),
+);
 
 export function Button({
   title,
@@ -80,29 +128,64 @@ export function Button({
   helpText,
   testID,
 }: ButtonProps): React.JSX.Element {
+  const { name, colors } = useTheme();
+  const s = gaya[name];
+  const skala = usePressScale(!disabled && !loading);
   const mati = disabled || loading || success;
-  const skala = usePressScale(!mati);
-  const warnaTeks = warnaTeksButton(variant, disabled && !success);
 
   const gayaUkuran =
-    size === 'lg' ? styles.ukuranLg : size === 'sm' ? styles.ukuranSm : styles.ukuranMd;
+    size === 'lg'
+      ? s.ukuranLg
+      : size === 'card'
+        ? s.ukuranCard
+        : size === 'sm'
+          ? s.ukuranSm
+          : s.ukuranMd;
 
-  const gayaIsi: ViewStyle[] = [
-    variant === 'primary'
-      ? styles.isiPrimer
+  const warnaTeks = disabled
+    ? colors.onActionDisabled
+    : variant === 'primary'
+      ? colors.onAction
       : variant === 'secondary'
-        ? styles.isiKedua
-        : TANPA_ISI,
-    ...(disabled && !success && variant !== 'ghost' && variant !== 'danger'
-      ? [styles.isiNonaktif]
-      : []),
-  ];
+        ? colors.onActionSecondary
+        : variant === 'dangerFill'
+          ? colors.onDanger
+          : variant === 'danger'
+            ? colors.danger
+            : colors.text;
 
-  const gayaTeks: TextStyle[] = [
-    styles.teks,
-    ...(size === 'sm' ? [styles.teksKecil] : []),
-    { color: warnaTeks },
-  ];
+  const warnaIkon = disabled
+    ? colors.onActionDisabled
+    : variant === 'primary'
+      ? colors.onAction
+      : variant === 'secondary'
+        ? colors.info
+        : variant === 'dangerFill'
+          ? colors.onDanger
+          : variant === 'danger'
+            ? colors.danger
+            : colors.text;
+
+  const gayaIsi: ViewStyle[] = disabled
+    ? [s.isiNonaktif]
+    : variant === 'primary'
+      ? [s.isiPrimer]
+      : variant === 'secondary'
+        ? [s.isiKedua]
+        : variant === 'dangerFill'
+          ? [s.isiDanger]
+          : [];
+
+  const gayaTeks: TextStyle = {
+    ...(variant === 'secondary'
+      ? type.bodyMdMedium
+      : size === 'lg'
+        ? type.labelLg
+        : size === 'sm'
+          ? type.labelMd
+          : type.label),
+    color: warnaTeks,
+  };
 
   return (
     <View>
@@ -119,22 +202,28 @@ export function Button({
           android_ripple={variant === 'primary' ? { color: colors.actionPressed } : undefined}
           hitSlop={size === 'sm' ? SENTUH_SM : undefined}
           style={({ pressed }) => [
-            styles.tombol,
+            s.tombol,
             gayaUkuran,
             ...gayaIsi,
-            pressed && variant === 'primary' ? styles.isiPrimerDitekan : null,
+            pressed && !disabled && variant === 'primary' ? s.isiPrimerDitekan : null,
           ]}
         >
-          {!success ? (
-            loading ? (
+          <View
+            testID="judul-tombol"
+            style={[s.lapisanJudul, { opacity: loading || success ? 0 : 1 }]}
+          >
+            {icon ? (
+              <Icon name={icon} size={ukuranKontrol.iconSm} color={warnaIkon} />
+            ) : null}
+            <Text style={gayaTeks}>{title}</Text>
+          </View>
+          {loading ? (
+            <View style={s.lapisanStatus} pointerEvents="none">
               <ActivityIndicator size="small" color={warnaTeks} />
-            ) : icon ? (
-              <Icon name={icon} size={ukuranKontrol.iconSm} color={warnaTeks} />
-            ) : null
+            </View>
           ) : null}
-          <Text style={[gayaTeks, success ? styles.teksTakTerlihat : null]}>{title}</Text>
           {success ? (
-            <View style={styles.lapisanCentang} pointerEvents="none">
+            <View style={s.lapisanStatus} pointerEvents="none">
               <CheckMark size={ukuranKontrol.iconSm} color={warnaTeks} />
             </View>
           ) : null}
@@ -144,60 +233,3 @@ export function Button({
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  tombol: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.md,
-    gap: space[2],
-  },
-  ukuranLg: {
-    height: ukuranKontrol.controlLg,
-    paddingHorizontal: space[6],
-    width: '100%',
-  },
-  ukuranMd: {
-    height: ukuranKontrol.controlMd,
-    paddingHorizontal: space[5],
-  },
-  ukuranSm: {
-    height: ukuranKontrol.controlSm,
-    paddingHorizontal: space[3],
-  },
-  isiPrimer: {
-    backgroundColor: colors.action,
-  },
-  isiKedua: {
-    backgroundColor: colors.surface,
-    borderWidth: TEBAL_TEPI,
-    borderColor: colors.lineStrong,
-  },
-  isiNonaktif: {
-    backgroundColor: colors.actionDisabled,
-    borderWidth: 0,
-  },
-  isiPrimerDitekan: {
-    backgroundColor: colors.actionPressed,
-  },
-  teks: {
-    ...type.label,
-  },
-  teksKecil: {
-    ...type.bodySm,
-    fontFamily: fontFamily.bold,
-  },
-  teksTakTerlihat: {
-    opacity: 0,
-  },
-  lapisanCentang: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});

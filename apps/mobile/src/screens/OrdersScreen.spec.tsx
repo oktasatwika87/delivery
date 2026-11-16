@@ -168,6 +168,42 @@ function makeAction(fields: {
 
 let mockPendingActions: FakeAction[] = [];
 
+/** Elemen pohon render yang cukup untuk mencari penangan tekan ke atas. */
+interface ElemenPohon {
+  parent: ElemenPohon | null;
+  props: { onPress?: () => unknown; disabled?: boolean };
+}
+
+/**
+ * Cari penangan tekan terdekat di atas teks yang diberikan.
+ *
+ * Tombol sekarang menaruh ikon dan teks di dalam lapisan judul, jadi tidak
+ * bisa lagi mengambil penangan tekan dengan naik dua tingkat saja.
+ */
+function cariPenanganTekan(mulut: ElemenPohon): (() => unknown) | undefined {
+  let node: ElemenPohon | null = mulut.parent;
+  while (node) {
+    const onPress = node.props.onPress;
+    if (typeof onPress === 'function') {
+      return () => onPress();
+    }
+    node = node.parent;
+  }
+  return undefined;
+}
+
+/** Cari leluhur terdekat yang punya properti disabled, yaitu tombolnya. */
+function cariTombol(mulut: ElemenPohon): { disabled?: boolean } | undefined {
+  let node: ElemenPohon | null = mulut.parent;
+  while (node) {
+    if (node.props.disabled !== undefined) {
+      return node.props;
+    }
+    node = node.parent;
+  }
+  return undefined;
+}
+
 const mockPendingActionsCollection = {
   query: jest.fn().mockReturnValue({
     fetch: jest.fn().mockResolvedValue([]),
@@ -682,8 +718,8 @@ describe('Accept order online gating', () => {
     expect(networkMonitor.getStatus()).toBe('offline');
 
     // Verify the button is disabled when offline
-    const acceptButton = (getByText('Terima Order').parent as any)?.parent;
-    expect(acceptButton?.props.disabled).toBe(true);
+    const tombol = cariTombol(getByText('Terima Order'));
+    expect(tombol?.disabled).toBe(true);
 
     // Reset mock write call count before testing guard behavior
     mockDatabase.write.mockClear();
@@ -755,8 +791,8 @@ describe('Accept order online gating', () => {
     expect(networkMonitor.getStatus()).toBe('online');
 
     // Tap Accept button
-    const acceptButton = (getByText('Terima Order').parent as any)?.parent;
-    acceptButton?.props.onPress();
+    const tekan = cariPenanganTekan(getByText('Terima Order'));
+    tekan?.();
 
     const Alert = require('react-native').Alert;
     await waitFor(() => {
@@ -945,9 +981,9 @@ describe('Terima order menulis data lengkap dari respons', () => {
       expect(getByText('Terima Order')).toBeTruthy();
     });
 
-    const acceptButton = getByText('Terima Order').parent?.parent;
+    const acceptButton = cariPenanganTekan(getByText('Terima Order'));
     await act(async () => {
-      await acceptButton?.props.onPress();
+      await acceptButton?.();
     });
 
     // acceptOrder dipanggil dengan id dan version
@@ -1017,9 +1053,9 @@ describe('Terima order menulis data lengkap dari respons', () => {
       expect(getByText('Terima Order')).toBeTruthy();
     });
 
-    const acceptButton = getByText('Terima Order').parent?.parent;
+    const acceptButton = cariPenanganTekan(getByText('Terima Order'));
     await act(async () => {
-      await acceptButton?.props.onPress();
+      await acceptButton?.();
     });
 
     // Kolom tetap lengkap meski tanpa GPS
@@ -1056,9 +1092,9 @@ describe('Terima order menulis data lengkap dari respons', () => {
       expect(getByText('Terima Order')).toBeTruthy();
     });
 
-    const acceptButton = getByText('Terima Order').parent?.parent;
+    const acceptButton = cariPenanganTekan(getByText('Terima Order'));
     await act(async () => {
-      await acceptButton?.props.onPress();
+      await acceptButton?.();
     });
 
     expect(acceptOrder).not.toHaveBeenCalled();

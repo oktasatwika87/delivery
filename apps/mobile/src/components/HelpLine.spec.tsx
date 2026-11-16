@@ -10,7 +10,7 @@ import { render } from '@testing-library/react-native';
 
 import { HelpLine } from './HelpLine';
 import { Icon } from '../theme/Icon';
-import { colors } from '../theme/tokens';
+import { size, themes } from '../theme/tokens';
 
 describe('HelpLine', () => {
   it('teks bantuan tampil apa adanya', () => {
@@ -21,7 +21,8 @@ describe('HelpLine', () => {
   it('ikon cloud off ditampilkan dengan warna teks muted', () => {
     const { UNSAFE_getByType } = render(<HelpLine text="Perubahan disimpan di HP" />);
     expect(UNSAFE_getByType(Icon).props.name).toBe('cloud_off');
-    expect(UNSAFE_getByType(Icon).props.color).toBe(colors.textMuted);
+    expect(UNSAFE_getByType(Icon).props.color).toBe(themes.gelap.textMuted);
+    expect(UNSAFE_getByType(Icon).props.size).toBe(size.iconXs);
   });
 
   it('baris bantuan punya warna latar kosong dan teks muted', () => {
