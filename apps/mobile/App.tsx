@@ -48,6 +48,7 @@ import {
   InitialWindowProvider,
   withInitialWindow,
 } from './src/components/motion/InitialWindow';
+import { TEMA_DRIVER, ThemeProvider } from './src/theme/ThemeProvider';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -379,9 +380,11 @@ function App(): React.JSX.Element {
             <Stack.Navigator screenOptions={{ headerShown: false }}>
               <Stack.Screen name="Orders">
                 {() => (
-                  <InitialWindowProvider>
-                    <OrdersScreen onLogout={handleLogout} />
-                  </InitialWindowProvider>
+                  <ThemeProvider name={TEMA_DRIVER}>
+                    <InitialWindowProvider>
+                      <OrdersScreen onLogout={handleLogout} />
+                    </InitialWindowProvider>
+                  </ThemeProvider>
                 )}
               </Stack.Screen>
               <Stack.Screen name="OrderDetail" component={OrderDetailDenganJendela} />

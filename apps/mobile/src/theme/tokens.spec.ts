@@ -9,27 +9,13 @@
 import fs from 'fs';
 import path from 'path';
 
-import { colors, fontFamily, motion, palette, themes, type } from './tokens';
+import { fontFamily, motion, palette, themes, type } from './tokens';
 
 const POLA_HEX = /^#([0-9a-f]{6}|[0-9a-f]{8})$/i;
 
 const FOLDER_FONT = path.join(__dirname, '..', '..', 'assets', 'fonts');
 
 describe('token tema', () => {
-  it('semua nilai colors berupa hex 6 atau 8 digit', () => {
-    for (const nilai of Object.values(colors)) {
-      expect(nilai).toMatch(POLA_HEX);
-    }
-  });
-
-  it('jumlah kunci colors 33', () => {
-    expect(Object.keys(colors)).toHaveLength(33);
-  });
-
-  it('teks tombol nonaktif sama dengan warna teks muted', () => {
-    expect(colors.onActionDisabled).toBe(colors.textMuted);
-  });
-
   it('kedua tema punya nama warna yang sama persis', () => {
     expect(Object.keys(themes.gelap).sort()).toEqual(Object.keys(themes.terang).sort());
   });

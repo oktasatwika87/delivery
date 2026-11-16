@@ -9,6 +9,7 @@
  */
 
 import React from 'react';
+import { FlatList, StatusBar, StyleSheet } from 'react-native';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
 jest.mock('@nozbe/watermelondb/react', () => ({
@@ -39,7 +40,7 @@ jest.mock('react-native-config', () => ({
 }));
 
 jest.mock('../sync/session', () => ({
-  getCurrentUserId: () => Promise.resolve('driver-123'),
+  getCurrentUserId: jest.fn(() => Promise.resolve('driver-123')),
 }));
 
 jest.mock('../sync/client', () => {
@@ -215,10 +216,16 @@ function setBarisPool(rows: BarisPalsu[]): void {
   });
 }
 
-import { OrdersScreenBase } from './OrdersScreen';
+import { OrdersScreen, OrdersScreenBase } from './OrdersScreen';
 import { acceptOrder, fetchAvailableOrders } from '../sync/client';
 import { ApiError } from '../sync/client';
 import { formatOrderTime } from '../formatOrderTime';
+import { getCurrentUserId } from '../sync/session';
+import { ConnectionBar } from '../components/ConnectionBar';
+import { MainHeader } from '../components/AppBar';
+import { Tabs } from '../components/Tabs';
+import { Icon } from '../theme/Icon';
+import { size, space, themes, type } from '../theme/tokens';
 
 const WAKTU_KUNCI = 1_750_000_000_000;
 
@@ -624,5 +631,118 @@ describe('kotak order lepas', () => {
     await waitFor(() => {
       expect(getByText('Order sudah tidak ditugaskan ke Anda')).toBeTruthy();
     });
+  });
+});
+
+describe('tema dan tata letak layar Order', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    (acceptOrder as jest.Mock).mockResolvedValue({});
+    mockPendingActions = [];
+    setBarisPool([]);
+  });
+
+  test('latar layar memakai warna tema', () => {
+    const { toJSON } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    const gayaLayar = StyleSheet.flatten(toJSON().props.style);
+    expect(gayaLayar.backgroundColor).toBe(themes.gelap.bg);
+  });
+
+  test('status bar memakai warna kepala tema gelap', () => {
+    const { UNSAFE_getAllByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    const statusBar = UNSAFE_getAllByType(StatusBar)[0];
+    expect(statusBar.props.barStyle).toBe('light-content');
+    expect(statusBar.props.backgroundColor).toBe(themes.gelap.header);
+  });
+
+  test('ConnectionBar ada di dalam kepala layar sebelum tab', () => {
+    const { UNSAFE_getAllByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    const kepala = UNSAFE_getAllByType(MainHeader)[0];
+    const anak = React.Children.toArray(kepala.props.children);
+    const tipeAnak = anak.map((item) => (React.isValidElement(item) ? item.type : null));
+    expect(tipeAnak[0]).toBe(ConnectionBar);
+    expect(tipeAnak[1]).toBe(Tabs);
+  });
+
+  test('kepala daftar memakai tinggi 28, ikon kecil, dan warna teks halus', async () => {
+    setBarisPool([makeBaris({ id: 'pool-kepala-1' })]);
+
+    const { UNSAFE_getAllByType, getByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Tarik ke bawah untuk menyegarkan')).toBeTruthy();
+    });
+
+    const ikon = UNSAFE_getAllByType(Icon).find((item) => item.props.name === 'refresh');
+    expect(ikon?.props.size).toBe(size.iconXs);
+    expect(ikon?.props.color).toBe(themes.gelap.textSubtle);
+
+    const gayaKepala = StyleSheet.flatten(ikon?.parent?.props.style);
+    expect(gayaKepala.height).toBe(28);
+    expect(gayaKepala.justifyContent).toBe('center');
+
+    const gayaTeks = StyleSheet.flatten(
+      getByText('Tarik ke bawah untuk menyegarkan').props.style,
+    );
+    expect(gayaTeks.color).toBe(themes.gelap.textSubtle);
+    expect(gayaTeks.fontSize).toBe(type.bodyXs.fontSize);
+  });
+
+  test('daftar memakai padding dan ruang bawah versi 2', () => {
+    const { UNSAFE_getByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    const gayaDaftar = StyleSheet.flatten(
+      UNSAFE_getByType(FlatList).props.contentContainerStyle,
+    );
+    expect(gayaDaftar.padding).toBe(space[4]);
+    expect(gayaDaftar.gap).toBe(space[3]);
+    expect(gayaDaftar.paddingBottom).toBe(space[10]);
+  });
+
+  test('layar tunggu kosong tanpa tulisan Loading', () => {
+    // Sesi belum selesai, jadi layar menunggu identitas pengguna.
+    (getCurrentUserId as jest.Mock).mockReturnValueOnce(new Promise(() => {}));
+
+    const { queryByText, toJSON } = render(
+      <OrdersScreen database={mockDatabase as never} onLogout={jest.fn()} />,
+    );
+
+    expect(queryByText('Loading...')).toBeNull();
+    const gayaTunggu = StyleSheet.flatten(toJSON().props.style);
+    expect(gayaTunggu.backgroundColor).toBe(themes.gelap.bg);
   });
 });

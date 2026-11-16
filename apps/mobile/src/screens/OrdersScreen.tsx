@@ -47,7 +47,8 @@ import { EmptyState } from '../components/EmptyState';
 import { Icon } from '../theme/Icon';
 import { shift } from '../components/motion/presets';
 import { useInitialWindow } from '../components/motion/InitialWindow';
-import { colors, fontFamily, type } from '../theme/tokens';
+import { perTema, useTheme } from '../theme/ThemeProvider';
+import { size, space, themes, type } from '../theme/tokens';
 import { formatCurrency } from '../formatCurrency';
 import { formatOrderNumber } from '../formatOrderNumber';
 import { formatOrderTime } from '../formatOrderTime';
@@ -58,8 +59,7 @@ const TAB_SAYA = 'mine';
 
 type TabKey = typeof TAB_TERSEDIA | typeof TAB_SAYA;
 
-// Nilai dari desain: ikon kecil 16 dp dan jarak 6 dp.
-const UKURAN_IKON = 16;
+// Jarak ikon dan teks di kepala daftar.
 const JARAK_IKON = 6;
 
 const TEKS_BUTUH_KONEKSI = 'Butuh koneksi internet untuk menerima order';
@@ -162,6 +162,8 @@ export function OrdersScreenBase({
   fetchPoolRef.current = null;
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Orders'>>();
   const dalamJendela = useInitialWindow();
+  const { name: namaTema, colors: warnaTema } = useTheme();
+  const gayaLayar = gaya[namaTema];
   const [poolOrders, setPoolOrders] = useState<OrderModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus>(networkMonitor.getStatus());
@@ -711,13 +713,13 @@ export function OrdersScreenBase({
       0,
     );
     return (
-      <View style={styles.kepalaDaftar}>
+      <View style={gayaLayar.kepalaDaftar}>
         <Icon
           name={online ? 'refresh' : 'schedule'}
-          size={UKURAN_IKON}
-          color={colors.textMuted}
+          size={size.iconXs}
+          color={warnaTema.textSubtle}
         />
-        <Text style={styles.teksKepalaDaftar}>
+        <Text style={gayaLayar.teksKepalaDaftar}>
           {online
             ? 'Tarik ke bawah untuk menyegarkan'
             : `Daftar terakhir diperbarui ${formatOrderTime(terbaru, Date.now())}`}
@@ -771,14 +773,14 @@ export function OrdersScreenBase({
   const tampilTersedia = activeTab === TAB_TERSEDIA;
 
   return (
-    <View style={styles.layar}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.surfaceInverse} />
-      <ConnectionBar status={networkStatus} pendingCount={pendingActionCount} />
+    <View style={gayaLayar.layar}>
+      <StatusBar barStyle="light-content" backgroundColor={themes.gelap.header} />
       <Animated.View
-        style={styles.isiLayar}
+        style={gayaLayar.isiLayar}
         layout={dalamJendela ? undefined : GESER}
       >
         <MainHeader title="Order" subtitle="Driver" onLogout={onLogout}>
+          <ConnectionBar status={networkStatus} pendingCount={pendingActionCount} />
           <Tabs tabs={tabs} activeKey={activeTab} onChange={onTabChange} />
         </MainHeader>
         <FlatList
@@ -793,7 +795,7 @@ export function OrdersScreenBase({
               onRefresh={onRefresh}
             />
           }
-          contentContainerStyle={styles.daftar}
+          contentContainerStyle={gayaLayar.daftar}
         />
       </Animated.View>
     </View>
@@ -834,17 +836,15 @@ interface WrapperProps {
 }
 function OrdersScreenWrapper({ database, onLogout }: WrapperProps): React.JSX.Element {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const { name: namaTema } = useTheme();
+  const gayaLayar = gaya[namaTema];
 
   useEffect(() => {
     getCurrentUserId().then(setCurrentUserId);
   }, []);
 
   if (currentUserId === null) {
-    return (
-      <View style={styles.loading}>
-        <Text>Loading...</Text>
-      </View>
-    );
+    return <View style={gayaLayar.menunggu} />;
   }
 
   return (
@@ -858,30 +858,37 @@ function OrdersScreenWrapper({ database, onLogout }: WrapperProps): React.JSX.El
 
 export const OrdersScreen = withDatabase(OrdersScreenWrapper);
 
-const styles = StyleSheet.create({
-  layar: {
-    flex: 1,
-    backgroundColor: colors.bg,
-  },
-  isiLayar: {
-    flex: 1,
-  },
-  daftar: {
-    padding: 16,
-    gap: 12,
-  },
-  kepalaDaftar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: JARAK_IKON,
-  },
-  teksKepalaDaftar: {
-    ...type.caption,
-    fontFamily: fontFamily.semibold,
-    color: colors.textMuted,
-  },
-  loading: { padding: 32, alignItems: 'center' },
-});
+const gaya = perTema((c) =>
+  StyleSheet.create({
+    layar: {
+      flex: 1,
+      backgroundColor: c.bg,
+    },
+    isiLayar: {
+      flex: 1,
+    },
+    daftar: {
+      padding: space[4],
+      gap: space[3],
+      paddingBottom: space[10],
+    },
+    kepalaDaftar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      height: 28,
+      gap: JARAK_IKON,
+    },
+    teksKepalaDaftar: {
+      ...type.bodyXs,
+      color: c.textSubtle,
+    },
+    menunggu: {
+      flex: 1,
+      backgroundColor: c.bg,
+    },
+  }),
+);
 
 // Export handleAccept dan fetchPool untuk tes regresi.
 // handleAcceptRef dijaga agar selalu merujuk ke callback handleAccept terbaru,

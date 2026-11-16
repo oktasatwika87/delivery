@@ -281,10 +281,10 @@ const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
 };
 
 function StatusBadge({ status }: { status: string }): React.JSX.Element {
-  const colors = STATUS_COLORS[status] ?? { bg: '#f3f4f6', text: '#374151' };
+  const warnaStatus = STATUS_COLORS[status] ?? { bg: '#f4f4f5', text: '#0b0b0c' };
   return (
-    <View style={[styles.badge, { backgroundColor: colors.bg }]}>
-      <Text style={[styles.badgeText, { color: colors.text }]}>
+    <View style={[styles.badge, { backgroundColor: warnaStatus.bg }]}>
+      <Text style={[styles.badgeText, { color: warnaStatus.text }]}>
         {status.replace('_', ' ')}
       </Text>
     </View>
