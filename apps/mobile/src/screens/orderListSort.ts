@@ -27,6 +27,12 @@ function bandingkanBaris(a: OrderModel, b: OrderModel): number {
   return a.id < b.id ? -1 : 1;
 }
 
+/** Status yang tampil di kartu untuk sebuah order. */
+function statusTampil(row: OrderModel, actions: PendingActionModel[]): OrderStatus {
+  const { displayStatus } = deriveOrderSyncView(readOrderStatus(row), actions);
+  return displayStatus;
+}
+
 /**
  * Urutan Order Saya: order aktif di atas, sisanya di bawah.
  *
@@ -42,14 +48,31 @@ export function sortMyOrders(
   const lain: OrderModel[] = [];
   for (const row of orders) {
     const actions = actionsByOrderId.get(row.id) ?? [];
-    const { displayStatus } = deriveOrderSyncView(readOrderStatus(row), actions);
-    if (isActiveStatus(displayStatus)) {
+    if (isActiveStatus(statusTampil(row, actions))) {
       aktif.push(row);
     } else {
       lain.push(row);
     }
   }
   return [...aktif.sort(bandingkanBaris), ...lain.sort(bandingkanBaris)];
+}
+
+/**
+ * Jumlah order yang masih dikerjakan.
+ *
+ * Dihitung dari status yang sama dengan urutan daftar, jadi pil tidak
+ * menghitung order yang aksinya sudah selesai tapi belum terkirim.
+ */
+export function countActiveOrders(
+  orders: OrderModel[],
+  actionsByOrderId: ReadonlyMap<string, PendingActionModel[]>,
+): number {
+  let jumlah = 0;
+  for (const row of orders) {
+    const actions = actionsByOrderId.get(row.id) ?? [];
+    if (isActiveStatus(statusTampil(row, actions))) jumlah += 1;
+  }
+  return jumlah;
 }
 
 /** Urutan Tersedia: order yang dibuat paling baru dulu. */

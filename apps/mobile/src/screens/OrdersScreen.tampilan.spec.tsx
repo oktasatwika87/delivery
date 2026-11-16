@@ -268,6 +268,19 @@ function idDariDaftar(data: unknown): string[] {
   return hasil;
 }
 
+/** Jumlah pada pil satu tab. */
+function jumlahPil(tabs: unknown, label: string): number | undefined {
+  if (!Array.isArray(tabs)) return undefined;
+  for (const tab of tabs) {
+    if (typeof tab !== 'object' || tab === null) continue;
+    if (!('label' in tab) || tab.label !== label) continue;
+    if (!('count' in tab)) continue;
+    const count = tab.count;
+    if (typeof count === 'number') return count;
+  }
+  return undefined;
+}
+
 // Status jaringan dibalas ke nilai awal tiap tes, soalnya nilai mock
 // tidak direset oleh clearAllMocks.
 beforeEach(() => {
@@ -711,6 +724,65 @@ describe('urutan daftar di layar', () => {
         'pool-baru-1',
         'pool-lama-1',
       ]);
+    });
+  });
+});
+
+describe('pil tab Order Saya', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    (acceptOrder as jest.Mock).mockResolvedValue({});
+    mockPendingActions = [];
+    setBarisPool([]);
+  });
+
+  test('jumlahnya cuma order yang masih dikerjakan', async () => {
+    const myOrders = [
+      makeBaris({
+        id: 'order-aktif-1',
+        status: 'PREPARING',
+        driverId: 'driver-123',
+      }),
+      makeBaris({
+        id: 'order-selesai-1',
+        status: 'DELIVERED',
+        driverId: 'driver-123',
+      }),
+    ];
+
+    const { UNSAFE_getByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={myOrders as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(jumlahPil(UNSAFE_getByType(Tabs).props.tabs, 'Order Saya')).toBe(1);
+    });
+  });
+
+  test('nol saat semua order sudah selesai', async () => {
+    const myOrders = [
+      makeBaris({
+        id: 'order-selesai-1',
+        status: 'DELIVERED',
+        driverId: 'driver-123',
+      }),
+    ];
+
+    const { UNSAFE_getByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={myOrders as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(jumlahPil(UNSAFE_getByType(Tabs).props.tabs, 'Order Saya')).toBe(0);
     });
   });
 });

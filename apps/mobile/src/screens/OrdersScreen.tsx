@@ -33,7 +33,7 @@ import {
   readTotalCents,
   readWaktu,
 } from './orderRowRead';
-import { sortMyOrders, sortPoolOrders } from './orderListSort';
+import { countActiveOrders, sortMyOrders, sortPoolOrders } from './orderListSort';
 import {
   ReleasedOrdersNotice,
   dismissReleasedOrders,
@@ -469,6 +469,12 @@ export function OrdersScreenBase({
   );
   const poolUrut = useMemo(() => sortPoolOrders(poolOrders), [poolOrders]);
 
+  // Pil Order Saya cuma menghitung order yang masih dikerjakan.
+  const orderAktif = useMemo(
+    () => countActiveOrders(myOrders, actionsByOrderId),
+    [myOrders, actionsByOrderId],
+  );
+
   // Socket subscription
   useEffect(() => {
     // Clear previous unsubscribes
@@ -650,7 +656,7 @@ export function OrdersScreenBase({
 
   const tabs: TabItem[] = [
     { key: TAB_TERSEDIA, label: 'Tersedia', count: poolOrders.length },
-    { key: TAB_SAYA, label: 'Order Saya', count: myOrders.length },
+    { key: TAB_SAYA, label: 'Order Saya', count: orderAktif },
   ];
 
   const onTabChange = useCallback((key: string) => {

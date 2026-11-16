@@ -11,7 +11,7 @@ import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
 import { schema } from '../db/schema';
 import { OrderModel } from '../db/models/OrderModel';
 import { PendingActionModel } from '../db/models/PendingActionModel';
-import { sortMyOrders, sortPoolOrders } from './orderListSort';
+import { countActiveOrders, sortMyOrders, sortPoolOrders } from './orderListSort';
 
 // outbox mengimpor '../db' (adapter SQLite) yang gagal dimuat di Jest.
 jest.mock('../db', () => ({ database: {} }));
@@ -215,6 +215,68 @@ describe('sortMyOrders', () => {
 
     expect(masukan).toEqual(salinan);
     expect(urut).not.toBe(masukan);
+  });
+});
+
+describe('countActiveOrders', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = buatDatabase();
+  });
+
+  it('order yang sedang dikerjakan dihitung', async () => {
+    await seedOrder(db, { id: 'order-preparing', status: 'PREPARING', createdAt: HARI });
+    await seedOrder(db, {
+      id: 'order-diantar',
+      status: 'OUT_FOR_DELIVERY',
+      createdAt: HARI,
+    });
+    const semua = await ambilOrder(db);
+
+    expect(countActiveOrders(semua, new Map())).toBe(2);
+  });
+
+  it('order selesai dan dibatalkan tidak dihitung', async () => {
+    await seedOrder(db, { id: 'order-selesai', status: 'DELIVERED', createdAt: HARI });
+    await seedOrder(db, { id: 'order-batal', status: 'CANCELLED', createdAt: HARI });
+    const semua = await ambilOrder(db);
+
+    expect(countActiveOrders(semua, new Map())).toBe(0);
+  });
+
+  it('order dengan aksi selesai yang antre tidak dihitung', async () => {
+    await seedOrder(db, { id: 'order-aktif', status: 'PREPARING', createdAt: HARI });
+    await seedAksi(db, {
+      id: 'pa-antre',
+      actionType: 'update_status',
+      targetOrderId: 'order-aktif',
+      status: 'pending',
+      payloadJson: '{"status":"DELIVERED"}',
+      createdAt: HARI,
+    });
+    const semua = await ambilOrder(db);
+    const aksi = await ambilAksi(db);
+    const petaAksi = new Map<string, PendingActionModel[]>([['order-aktif', aksi]]);
+
+    expect(countActiveOrders(semua, petaAksi)).toBe(0);
+  });
+
+  it('aksi yang ditolak server mengembalikan order ke hitungan aktif', async () => {
+    await seedOrder(db, { id: 'order-aktif', status: 'PREPARING', createdAt: HARI });
+    await seedAksi(db, {
+      id: 'pa-gagal',
+      actionType: 'update_status',
+      targetOrderId: 'order-aktif',
+      status: 'failed',
+      payloadJson: '{"status":"DELIVERED"}',
+      createdAt: HARI,
+    });
+    const semua = await ambilOrder(db);
+    const aksi = await ambilAksi(db);
+    const petaAksi = new Map<string, PendingActionModel[]>([['order-aktif', aksi]]);
+
+    expect(countActiveOrders(semua, petaAksi)).toBe(1);
   });
 });
 
