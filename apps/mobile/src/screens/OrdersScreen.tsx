@@ -19,6 +19,7 @@ import Animated from 'react-native-reanimated';
 
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
+import { PaymentModel } from '../db/models/PaymentModel';
 import { PendingActionModel } from '../db/models/PendingActionModel';
 import { getCurrentUserId } from '../sync/session';
 import { fetchAvailableOrders, UnauthorizedError, acceptOrder, ApiError } from '../sync/client';
@@ -34,6 +35,7 @@ import {
   readWaktu,
 } from './orderRowRead';
 import { countActiveOrders, sortMyOrders, sortPoolOrders } from './orderListSort';
+import { deriveDaySummary } from './daySummary';
 import {
   ReleasedOrdersNotice,
   dismissReleasedOrders,
@@ -46,6 +48,7 @@ import type { NetworkStatus } from '../map/networkMonitor';
 import { RouteService } from '../map/routeService';
 import { GraphHopperRoutingProvider } from '../map/routing';
 import { ConnectionBar } from '../components/ConnectionBar';
+import { DaySummary } from '../components/DaySummary';
 import { MainHeader } from '../components/AppBar';
 import { Tabs } from '../components/Tabs';
 import type { TabItem } from '../components/Tabs';
@@ -71,6 +74,10 @@ const JARAK_IKON = 6;
 
 const TEKS_BUTUH_KONEKSI = 'Butuh koneksi internet untuk menerima order';
 
+// Jumlah tunai menggabungkan banyak baris payment, dan server selalu mengisi
+// mata uang IDR.
+const MATA_UANG_TUNAI = 'IDR';
+
 // Geser posisi isi layar, dipakai satu kali jadi konstanta modul.
 const GESER = shift();
 
@@ -79,6 +86,8 @@ interface Props {
   // Kosong kalau layar belum tahu order milik sendiri.
   myOrders?: OrderModel[];
   releasedOrders?: OrderModel[];
+  // Payment tunai milik driver ini, buat ringkasan hari ini.
+  payments?: PaymentModel[];
   onLogout: () => void;
 }
 
@@ -135,6 +144,7 @@ export function OrdersScreenBase({
   database,
   myOrders = [],
   releasedOrders = [],
+  payments = [],
   onLogout,
 }: Props): React.JSX.Element {
   // Reset ref setiap render agar tidak ada referensi stale dari render sebelumnya.
@@ -659,6 +669,10 @@ export function OrdersScreenBase({
     { key: TAB_SAYA, label: 'Order Saya', count: orderAktif },
   ];
 
+  // Ringkasan hari ini dihitung tiap render, jadi batas hari ikut bergeser
+  // tanpa perlu timer.
+  const ringkasan = deriveDaySummary(myOrders, payments, pendingActions, Date.now());
+
   const onTabChange = useCallback((key: string) => {
     if (key === TAB_TERSEDIA || key === TAB_SAYA) {
       setActiveTab(key);
@@ -794,6 +808,13 @@ export function OrdersScreenBase({
         layout={dalamJendela ? undefined : GESER}
       >
         <MainHeader title="Order" subtitle="Driver" onLogout={onLogout} />
+        <View style={gayaLayar.wadahRingkasan}>
+          <DaySummary
+            doneCount={ringkasan.doneCount}
+            cashAmount={ringkasan.cashAmount}
+            currency={MATA_UANG_TUNAI}
+          />
+        </View>
         <View style={gayaLayar.wadahTab}>
           <Tabs tabs={tabs} activeKey={activeTab} onChange={onTabChange} />
         </View>
@@ -837,6 +858,13 @@ const OrdersScreenWithObservables = withDatabase(
       releasedOrders: currentUserId
         ? releasedOrdersQuery(database)
         : of<OrderModel[]>([]),
+      // Payment tunai milik driver ini, buat ringkasan hari ini.
+      payments: currentUserId
+        ? database
+            .get<PaymentModel>('payments')
+            .query(Q.where('method', 'CASH'), Q.where('deleted_at', null))
+            .observeWithColumns(['status'])
+        : of<PaymentModel[]>([]),
     }),
   )(OrdersScreenBase),
 );
@@ -882,6 +910,10 @@ const gaya = perTema((c) =>
     },
     wadahBilah: {
       backgroundColor: c.header,
+    },
+    wadahRingkasan: {
+      marginTop: 4,
+      marginHorizontal: space[4],
     },
     wadahTab: {
       marginTop: space[3],

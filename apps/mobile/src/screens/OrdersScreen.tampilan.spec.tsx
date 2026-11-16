@@ -153,6 +153,30 @@ interface AksiPalsu {
   _getRaw: (column: string) => unknown;
 }
 
+interface FieldsPayment {
+  orderId: string;
+  amountCents?: number;
+  createdAt: number;
+  method?: string;
+  status?: string;
+  deletedAt?: number | null;
+}
+
+function makePayment(fields: FieldsPayment): AksiPalsu {
+  const raw: Record<string, unknown> = {
+    order_id: fields.orderId,
+    method: fields.method ?? 'CASH',
+    status: fields.status ?? 'CAPTURED',
+    amount_cents: fields.amountCents ?? 120000,
+    currency: 'IDR',
+    kind: 'PAYMENT',
+    deleted_at: fields.deletedAt ?? null,
+    created_at: fields.createdAt,
+    updated_at: fields.createdAt,
+  };
+  return { _getRaw: (column: string) => raw[column] };
+}
+
 let mockPendingActions: AksiPalsu[] = [];
 
 function makeAksi(targetOrderId: string, status: string): AksiPalsu {
@@ -220,8 +244,10 @@ import { OrdersScreen, OrdersScreenBase } from './OrdersScreen';
 import { acceptOrder, fetchAvailableOrders } from '../sync/client';
 import { ApiError } from '../sync/client';
 import { formatOrderTime } from '../formatOrderTime';
+import { formatCurrency } from '../formatCurrency';
 import { getCurrentUserId } from '../sync/session';
 import { ConnectionBar } from '../components/ConnectionBar';
+import { DaySummary } from '../components/DaySummary';
 import { MainHeader } from '../components/AppBar';
 import { Tabs } from '../components/Tabs';
 import { Icon } from '../theme/Icon';
@@ -787,6 +813,73 @@ describe('pil tab Order Saya', () => {
   });
 });
 
+describe('ringkasan hari ini di layar', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    (acceptOrder as jest.Mock).mockResolvedValue({});
+    mockPendingActions = [];
+    setBarisPool([]);
+  });
+
+  test('angka ikut dari data hari ini dan tetap ada di tab Tersedia', async () => {
+    const sekarang = Date.now();
+    const myOrders = [
+      makeBaris({
+        id: 'order-aktif-1',
+        status: 'PREPARING',
+        driverId: 'driver-123',
+      }),
+      makeBaris({
+        id: 'order-selesai-1',
+        status: 'DELIVERED',
+        driverId: 'driver-123',
+        updatedAt: sekarang,
+      }),
+    ];
+    const payments = [
+      makePayment({ orderId: 'order-selesai-1', amountCents: 120000, createdAt: sekarang }),
+    ];
+
+    const { getByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={myOrders as never}
+        payments={payments as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('1 selesai')).toBeTruthy();
+      expect(getByText(formatCurrency(120000, 'IDR'))).toBeTruthy();
+    });
+
+    // Ringkasan ada di luar daftar, jadi tetap tampil di tab lain.
+    fireEvent.press(getByText('Tersedia'));
+
+    await waitFor(() => {
+      expect(getByText('1 selesai')).toBeTruthy();
+      expect(getByText(formatCurrency(120000, 'IDR'))).toBeTruthy();
+    });
+  });
+
+  test('tanpa data angkanya nol', async () => {
+    const { getByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('0 selesai')).toBeTruthy();
+      expect(getByText(formatCurrency(0, 'IDR'))).toBeTruthy();
+    });
+  });
+});
+
 describe('tombol keluar di kepala layar', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -920,7 +1013,7 @@ describe('tema dan tata letak layar Order', () => {
     expect(leluhurBilah.includes(isiLayar!)).toBe(false);
   });
 
-  test('isi layar urutannya kepala, wadah tab, lalu daftar', () => {
+  test('isi layar urutannya kepala, ringkasan, wadah tab, lalu daftar', () => {
     const { UNSAFE_getByType } = render(
       <OrdersScreenBase
         database={mockDatabase as never}
@@ -935,8 +1028,9 @@ describe('tema dan tata letak layar Order', () => {
     const urutan = anak(isiLayar!);
 
     expect(urutan[0].type).toBe(MainHeader);
-    expect(urutan[1].props.style).toBe(UNSAFE_getByType(Tabs).parent?.props.style);
-    expect(urutan[2].type).toBe(FlatList);
+    expect(urutan[1].props.style).toBe(UNSAFE_getByType(DaySummary).parent?.props.style);
+    expect(urutan[2].props.style).toBe(UNSAFE_getByType(Tabs).parent?.props.style);
+    expect(urutan[3].type).toBe(FlatList);
   });
 
   test('kepala daftar memakai tinggi 28, ikon kecil, dan warna teks halus', async () => {

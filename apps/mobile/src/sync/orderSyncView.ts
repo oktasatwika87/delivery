@@ -102,3 +102,24 @@ export function deriveOrderSyncView(
 
   return { displayStatus, syncState };
 }
+
+/**
+ * Waktu paling baru dari aksi Selesai diantar yang masih antre.
+ *
+ * Nilainya null kalau tidak ada aksi seperti itu. Dipakai ringkasan hari ini:
+ * order yang statusnya sudah selesai di HP tapi aksinya belum terkirim tetap
+ * dihitung selesai, dan waktunya adalah waktu aksinya dibuat.
+ */
+export function queuedDeliveredAt(actions: PendingActionModel[]): number | null {
+  const antre = actions.filter((action) => {
+    if (readText(action, 'action_type') !== 'update_status') return false;
+    const status = readText(action, 'status');
+    if (status !== 'pending' && status !== 'syncing') return false;
+    return readUpdateStatusTarget(readPayload(action)) === 'DELIVERED';
+  });
+  if (antre.length === 0) return null;
+  return antre.reduce(
+    (terbesar, action) => Math.max(terbesar, readCreatedAt(action)),
+    0,
+  );
+}

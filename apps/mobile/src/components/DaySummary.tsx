@@ -1,16 +1,19 @@
 /**
  * Panel ringkasan hari ini.
  *
- * Komponen ini cuma tampilan: angkanya masuk sebagai teks yang sudah
- * diformat. Panelnya belum dipasang di layar mana pun.
+ * Komponen ini cuma tampilan: angkanya masuk sebagai angka, lalu diformat
+ * di dalam supaya angkanya bisa bergulir saat berubah.
  */
 
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import type { TextStyle } from 'react-native';
 import Svg, { LinearGradient, Rect, Stop } from 'react-native-svg';
 
+import { formatCurrency } from '../formatCurrency';
 import { perTema, useTheme } from '../theme/ThemeProvider';
 import { radius, space, stroke, type } from '../theme/tokens';
+import { RollingNumber } from './motion/RollingNumber';
 
 const PADDING_ATAS = 14;
 
@@ -18,10 +21,22 @@ const PADDING_ATAS = 14;
 let hitungan = 0;
 
 export interface DaySummaryProps {
-  /** Teks kiri, misalnya "3 selesai". */
-  doneText: string;
-  /** Teks kanan, misalnya "Rp 120.000". */
-  cashText: string;
+  /** Jumlah order yang selesai hari ini. */
+  doneCount: number;
+  /** Jumlah tunai yang tercatat hari ini. */
+  cashAmount: number;
+  /** Mata uang tunai, misalnya "IDR". */
+  currency: string;
+}
+
+/** Teks jumlah order selesai. */
+export function formatSelesai(count: number): string {
+  return `${count} selesai`;
+}
+
+/** Teks jumlah tunai tercatat. */
+export function formatTunai(amount: number, currency: string): string {
+  return formatCurrency(amount, currency);
 }
 
 const gaya = perTema((c) =>
@@ -58,10 +73,19 @@ const gaya = perTema((c) =>
   }),
 );
 
-export function DaySummary({ doneText, cashText }: DaySummaryProps): React.JSX.Element {
+export function DaySummary({
+  doneCount,
+  cashAmount,
+  currency,
+}: DaySummaryProps): React.JSX.Element {
   const { name, colors } = useTheme();
   const s = gaya[name];
   const [idGradasi] = useState(() => `gradasi-ringkasan-${hitungan++}`);
+
+  const gayaAngka: TextStyle & { lineHeight: number } = {
+    ...s.angka,
+    color: colors.text,
+  };
 
   return (
     <View style={s.panel}>
@@ -74,11 +98,15 @@ export function DaySummary({ doneText, cashText }: DaySummaryProps): React.JSX.E
       </Svg>
       <View style={s.kolomKiri}>
         <Text style={s.label}>Hari ini</Text>
-        <Text style={s.angka}>{doneText}</Text>
+        <RollingNumber value={doneCount} format={formatSelesai} style={gayaAngka} />
       </View>
       <View style={s.kolomKanan}>
         <Text style={s.label}>Tunai tercatat</Text>
-        <Text style={s.angka}>{cashText}</Text>
+        <RollingNumber
+          value={cashAmount}
+          format={(nilai) => formatTunai(nilai, currency)}
+          style={gayaAngka}
+        />
       </View>
     </View>
   );
