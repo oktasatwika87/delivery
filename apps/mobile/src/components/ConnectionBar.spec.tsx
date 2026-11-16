@@ -12,7 +12,7 @@ import { ConnectionBar } from './ConnectionBar';
 import { CheckMark } from './motion/CheckMark';
 import { InitialWindowProvider } from './motion/InitialWindow';
 import { Icon } from '../theme/Icon';
-import { colors } from '../theme/tokens';
+import { themes } from '../theme/tokens';
 
 const TITIK_TENGAH = '\u00b7';
 
@@ -29,7 +29,9 @@ describe('ConnectionBar', () => {
 
   it('online dengan antrean menampilkan jumlah perubahan yang dikirim', () => {
     const { getByText } = render(<ConnectionBar status="online" pendingCount={3} />);
-    expect(getByText('Menyinkronkan 3 perubahan')).toBeTruthy();
+    expect(getByText('Menyinkronkan')).toBeTruthy();
+    expect(getByText('3')).toBeTruthy();
+    expect(getByText('perubahan')).toBeTruthy();
   });
 
   it('online tanpa antrean tidak merender apa pun', () => {
@@ -46,11 +48,30 @@ describe('ConnectionBar', () => {
     const offline = StyleSheet.flatten(
       render(<ConnectionBar status="offline" pendingCount={0} />).toJSON().props.style,
     );
-    expect(offline.backgroundColor).toBe(colors.surfaceInverse);
+    expect(offline.backgroundColor).toBe(themes.gelap.surfaceRaised);
     const sinkron = StyleSheet.flatten(
       render(<ConnectionBar status="online" pendingCount={2} />).toJSON().props.style,
     );
-    expect(sinkron.backgroundColor).toBe(colors.success);
+    expect(sinkron.backgroundColor).toBe(themes.gelap.syncSoft);
+  });
+
+  it('warna teks offline dan teks sinkron mengikuti tema', () => {
+    const offline = render(<ConnectionBar status="offline" pendingCount={0} />);
+    expect(
+      StyleSheet.flatten(offline.getByText(`Offline ${TITIK_TENGAH} perubahan disimpan di HP`).props.style)
+        .color,
+    ).toBe(themes.gelap.text);
+
+    const sinkron = render(<ConnectionBar status="online" pendingCount={2} />);
+    expect(StyleSheet.flatten(sinkron.getByText('Menyinkronkan').props.style).color).toBe(
+      themes.gelap.text,
+    );
+    expect(StyleSheet.flatten(sinkron.getByText('2').props.style).color).toBe(
+      themes.gelap.text,
+    );
+    expect(StyleSheet.flatten(sinkron.getByText('perubahan').props.style).color).toBe(
+      themes.gelap.textMuted,
+    );
   });
 
   it('ikon menyesuaikan keadaan', () => {
@@ -79,7 +100,7 @@ describe('ConnectionBar yang menahan selesai', () => {
 
     expect(UNSAFE_queryByType(CheckMark)).toBeTruthy();
     expect(UNSAFE_queryByType(Icon)).toBeNull();
-    expect(queryByText(/Menyinkronkan 0/)).toBeNull();
+    expect(queryByText('0')).toBeNull();
 
     act(() => {
       jest.advanceTimersByTime(700);

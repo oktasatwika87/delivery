@@ -2,8 +2,11 @@
  * Kepala layar.
  *
  * MainHeader dipakai di layar utama tiap peran: kepala gelap berisi logo,
- * nama peran, dan tombol keluar. AppBar dipakai di layar turunan: bar putih
+ * nama peran, dan tombol keluar. AppBar dipakai di layar turunan: bar
  * berisi judul, tombol kembali, dan isi kanan kalau ada.
+ *
+ * Isi kedua kepala selalu memakai tema gelap, jadi warnanya diambil di dalam
+ * bungkus tema gelap. Wadahnya sendiri memakai warna kepala dari tema peran.
  */
 
 import React from 'react';
@@ -11,10 +14,10 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Icon } from '../theme/Icon';
 import { Logo } from '../theme/Logo';
-import { colors, size, space, type } from '../theme/tokens';
+import { ThemeProvider, useTheme } from '../theme/ThemeProvider';
+import { radius, size, space, stroke, type } from '../theme/tokens';
 
 const TINGGI_LOGO = 43;
-const TEBAL_GARIS = 1;
 
 export interface MainHeaderProps {
   title: string;
@@ -36,32 +39,67 @@ export function MainHeader({
   onLogout,
   children,
 }: MainHeaderProps): React.JSX.Element {
+  const { colors } = useTheme();
+
   return (
-    <View style={styles.kepalaGelap}>
-      <View style={styles.baris}>
-        <Logo height={TINGGI_LOGO} />
-        <View style={styles.judulArea}>
-          <Text style={styles.judulGelap}>{title}</Text>
-          <Text style={styles.subjudulGelap}>{subtitle}</Text>
-        </View>
-        <Pressable
-          onPress={onLogout}
-          accessibilityRole="button"
-          accessibilityLabel="Keluar"
-          style={styles.tombolKeluar}
-        >
-          <Icon name="logout" size={size.iconSm} color={colors.textInverse} />
-          <Text style={styles.teksKeluar}>Keluar</Text>
-        </Pressable>
+    <View style={[styles.kepala, { backgroundColor: colors.header }]}>
+      <ThemeProvider name="gelap">
+        <IsiKepala title={title} subtitle={subtitle} onLogout={onLogout} />
+        {children}
+      </ThemeProvider>
+    </View>
+  );
+}
+
+/** Isi kepala utama, selalu di dalam bungkus tema gelap. */
+function IsiKepala({
+  title,
+  subtitle,
+  onLogout,
+}: MainHeaderProps): React.JSX.Element {
+  const { colors } = useTheme();
+
+  return (
+    <View style={styles.baris}>
+      <Logo height={TINGGI_LOGO} />
+      <View style={styles.judulArea}>
+        <Text style={[styles.judul, { color: colors.text }]}>{title}</Text>
+        <Text style={[styles.subjudul, { color: colors.textSubtle }]}>{subtitle}</Text>
       </View>
-      {children}
+      <Pressable
+        onPress={onLogout}
+        accessibilityRole="button"
+        accessibilityLabel="Keluar"
+        style={[
+          styles.tombolKeluar,
+          { backgroundColor: colors.surface, borderColor: colors.lineControl },
+        ]}
+      >
+        <Icon name="logout" size={size.iconSm} color={colors.textMuted} />
+        <Text style={[styles.teksKeluar, { color: colors.text }]}>Keluar</Text>
+      </Pressable>
     </View>
   );
 }
 
 export function AppBar({ title, subtitle, onBack, right }: AppBarProps): React.JSX.Element {
+  const { colors } = useTheme();
+
   return (
-    <View style={styles.barPutih}>
+    <View style={[styles.kepala, { backgroundColor: colors.header }]}>
+      <ThemeProvider name="gelap">
+        <IsiAppBar title={title} subtitle={subtitle} onBack={onBack} right={right} />
+      </ThemeProvider>
+    </View>
+  );
+}
+
+/** Isi bar turunan, selalu di dalam bungkus tema gelap. */
+function IsiAppBar({ title, subtitle, onBack, right }: AppBarProps): React.JSX.Element {
+  const { colors } = useTheme();
+
+  return (
+    <View style={styles.barisAppBar}>
       {onBack ? (
         <Pressable
           onPress={onBack}
@@ -72,11 +110,13 @@ export function AppBar({ title, subtitle, onBack, right }: AppBarProps): React.J
           <Icon name="arrow_back" size={size.icon} color={colors.text} />
         </Pressable>
       ) : null}
-      <View style={styles.judulArea}>
-        <Text style={styles.judulPutih} numberOfLines={1}>
+      <View style={styles.judulAreaAppBar}>
+        <Text style={[styles.judulAppBar, { color: colors.text }]} numberOfLines={1}>
           {title}
         </Text>
-        {subtitle ? <Text style={styles.subjudulPutih}>{subtitle}</Text> : null}
+        {subtitle ? (
+          <Text style={[styles.nomorOrder, { color: colors.textSubtle }]}>{subtitle}</Text>
+        ) : null}
       </View>
       {right}
     </View>
@@ -84,48 +124,45 @@ export function AppBar({ title, subtitle, onBack, right }: AppBarProps): React.J
 }
 
 const styles = StyleSheet.create({
-  kepalaGelap: {
-    backgroundColor: colors.surfaceInverse,
+  kepala: {
+    width: '100%',
   },
   baris: {
     flexDirection: 'row',
     alignItems: 'center',
-    height: size.appbar,
+    height: size.header,
     paddingLeft: space[4],
-    paddingRight: space[2],
+    paddingRight: space[3],
     gap: space[3],
   },
   judulArea: {
     flex: 1,
   },
-  judulGelap: {
-    ...type.titleLg,
-    color: colors.textInverse,
+  judul: {
+    ...type.titleMd,
   },
-  subjudulGelap: {
-    ...type.caption,
-    color: colors.textInverseMuted,
+  subjudul: {
+    ...type.bodyXs,
   },
   tombolKeluar: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: size.touch,
-    paddingHorizontal: space[3],
+    height: size.controlMd,
+    paddingHorizontal: 14,
+    borderRadius: radius.lg,
+    borderWidth: stroke.hairline,
     gap: space[2],
   },
   teksKeluar: {
-    ...type.label,
-    color: colors.textInverse,
+    ...type.bodyMdMedium,
   },
-  barPutih: {
+  barisAppBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
     height: size.appbar,
-    paddingHorizontal: space[2],
+    paddingLeft: space[1],
+    paddingRight: space[3],
     gap: space[2],
-    borderBottomWidth: TEBAL_GARIS,
-    borderBottomColor: colors.line,
   },
   tombolKembali: {
     width: size.touch,
@@ -133,12 +170,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  judulPutih: {
-    ...type.titleMd,
-    color: colors.text,
+  judulAreaAppBar: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  subjudulPutih: {
-    ...type.labelSm,
-    color: colors.textMuted,
+  judulAppBar: {
+    ...type.titleXs,
+  },
+  nomorOrder: {
+    ...type.bodyXs,
+    marginLeft: space[2],
   },
 });

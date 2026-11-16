@@ -7,6 +7,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text } from 'react-native';
+import type { TextStyle } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -15,14 +16,17 @@ import Animated, {
 
 import type { NetworkStatus } from '../map/networkMonitor';
 import { Icon } from '../theme/Icon';
-import { colors, fontFamily, motion, size, space, type } from '../theme/tokens';
+import { useTheme } from '../theme/ThemeProvider';
+import { motion, size, space, type } from '../theme/tokens';
 import { CheckMark } from './motion/CheckMark';
 import { RollingNumber } from './motion/RollingNumber';
 import { enterFromAbove, exitEasing, exitUp } from './motion/presets';
 import { useHoldDone } from './motion/useHoldDone';
 import { useInitialWindow } from './motion/InitialWindow';
 
-const TITIK_TENGAH = '\u00b7';
+const TITIK_TENGAH = '·';
+const TEKS_OFFLINE = `Offline ${TITIK_TENGAH} perubahan disimpan di HP`;
+const JARAK_KATA = 4;
 
 /** Masuk bilah dari atas. */
 const MASUK = enterFromAbove();
@@ -34,14 +38,11 @@ export interface ConnectionBarProps {
   pendingCount: number;
 }
 
-function formatSinkron(jumlah: number): string {
-  return `Menyinkronkan ${jumlah} perubahan`;
-}
-
 export function ConnectionBar({
   status,
   pendingCount,
 }: ConnectionBarProps): React.JSX.Element | null {
+  const { colors } = useTheme();
   const dalamJendela = useInitialWindow();
   const fase = useHoldDone(status === 'online' && pendingCount > 0);
   const [jumlahTerakhir, setJumlahTerakhir] = useState(pendingCount);
@@ -73,38 +74,42 @@ export function ConnectionBar({
     return null;
   }
 
+  // Angkanya ditebalkan, sisa kalimatnya dibiarkan redup.
+  const gayaAngka: TextStyle & { lineHeight: number } = {
+    ...type.bodySmMedium,
+    color: colors.text,
+  };
+
   return (
     <Animated.View
       entering={dalamJendela ? undefined : MASUK}
       exiting={dalamJendela ? undefined : KELUAR}
-      style={[styles.wadah, offline ? styles.isiOffline : styles.isiSinkron]}
+      style={[
+        styles.wadah,
+        { backgroundColor: offline ? colors.surfaceRaised : colors.syncSoft },
+      ]}
       accessibilityLiveRegion="polite"
     >
       {offline ? (
         <>
-          <Icon name="cloud_off" size={size.iconSm} color={colors.textInverse} />
-          <Text style={styles.teksOffline}>
-            Offline
-            <Text style={styles.teksLembut}>{` ${TITIK_TENGAH} perubahan disimpan di HP`}</Text>
-          </Text>
+          <Icon name="cloud_off" size={size.iconSm} color={colors.textMuted} />
+          <Text style={[styles.teksOffline, { color: colors.text }]}>{TEKS_OFFLINE}</Text>
         </>
       ) : (
         <>
           {selesai ? (
-            <CheckMark size={size.iconSm} color={colors.textInverse} />
+            <CheckMark size={size.iconSm} color={colors.info} />
           ) : (
-            <Icon name="sync" size={size.iconSm} color={colors.textInverse} />
+            <Icon name="sync" size={size.iconSm} color={colors.info} />
           )}
           <Animated.View
-            style={gayaTeksSelesai}
+            style={[styles.barisTeks, gayaTeksSelesai]}
             accessibilityElementsHidden={selesai}
             importantForAccessibility={selesai ? 'no-hide-descendants' : 'auto'}
           >
-            <RollingNumber
-              value={jumlahTerakhir}
-              format={formatSinkron}
-              style={styles.teksSinkron}
-            />
+            <Text style={[styles.teksAwal, { color: colors.text }]}>Menyinkronkan</Text>
+            <RollingNumber value={jumlahTerakhir} style={gayaAngka} />
+            <Text style={[styles.teksSisa, { color: colors.textMuted }]}>perubahan</Text>
           </Animated.View>
         </>
       )}
@@ -118,28 +123,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space[2],
     width: '100%',
-    minHeight: size.connectionBar,
-    paddingVertical: space[2],
+    height: size.connectionBar,
     paddingHorizontal: space[4],
-  },
-  isiOffline: {
-    backgroundColor: colors.surfaceInverse,
-  },
-  isiSinkron: {
-    backgroundColor: colors.success,
   },
   teksOffline: {
     ...type.bodySm,
-    fontFamily: fontFamily.bold,
-    color: colors.textInverse,
   },
-  teksLembut: {
-    fontFamily: fontFamily.medium,
-    color: colors.textInverseMuted,
+  barisTeks: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: JARAK_KATA,
   },
-  teksSinkron: {
+  teksAwal: {
     ...type.bodySm,
-    fontFamily: fontFamily.semibold,
-    color: colors.textInverse,
+  },
+  teksSisa: {
+    ...type.bodySm,
   },
 });

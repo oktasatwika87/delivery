@@ -6,10 +6,12 @@
  */
 
 import React from 'react';
-import { Text } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 
 import { AppBar, MainHeader } from './AppBar';
+import { ThemeProvider } from '../theme/ThemeProvider';
+import { themes } from '../theme/tokens';
 
 describe('MainHeader', () => {
   it('judul, subjudul, dan logo tampil', () => {
@@ -37,6 +39,32 @@ describe('MainHeader', () => {
       </MainHeader>,
     );
     expect(getByText('Tab Tambahan')).toBeTruthy();
+  });
+
+  it('wadah kepala ikut tema peran tapi isinya selalu tema gelap', () => {
+    const { getByText, toJSON } = render(
+      <ThemeProvider name="terang">
+        <MainHeader title="Kurir" subtitle="Area Bandung" onLogout={() => {}} />
+      </ThemeProvider>,
+    );
+    const gayaWadah = StyleSheet.flatten(toJSON().props.style);
+    expect(gayaWadah.backgroundColor).toBe(themes.terang.header);
+    expect(StyleSheet.flatten(getByText('Kurir').props.style).color).toBe(
+      themes.gelap.text,
+    );
+    expect(StyleSheet.flatten(getByText('Area Bandung').props.style).color).toBe(
+      themes.gelap.textSubtle,
+    );
+  });
+
+  it('tombol Keluar memakai isi surface dan tepi lineControl', () => {
+    const { getByLabelText } = render(
+      <MainHeader title="Kurir" subtitle="Area Bandung" onLogout={() => {}} />,
+    );
+    const gayaTombol = StyleSheet.flatten(getByLabelText('Keluar').props.style);
+    expect(gayaTombol.backgroundColor).toBe(themes.gelap.surface);
+    expect(gayaTombol.borderColor).toBe(themes.gelap.lineControl);
+    expect(gayaTombol.height).toBe(48);
   });
 });
 

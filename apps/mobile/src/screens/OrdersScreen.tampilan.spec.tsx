@@ -548,7 +548,9 @@ describe('ConnectionBar', () => {
     );
 
     await waitFor(() => {
-      expect(getByText('Menyinkronkan 2 perubahan')).toBeTruthy();
+      expect(getByText('Menyinkronkan')).toBeTruthy();
+      expect(getByText('2')).toBeTruthy();
+      expect(getByText('perubahan')).toBeTruthy();
     });
   });
 });
