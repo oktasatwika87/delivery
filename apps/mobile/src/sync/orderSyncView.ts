@@ -55,8 +55,9 @@ function readPayload(action: PendingActionModel): unknown {
  * - displayStatus: target aksi status aktif yang paling baru, yaitu status
  *   order setelah antrean selesai terkirim. Kalau tidak ada aksi status, atau
  *   ada aksi 'failed' atau COD yatim, pakai status baris order dari server.
- * - syncState: 'stale' kalau ada aksi aktif yang sudah menunggu lebih dari
- *   sejam, 'pending' kalau ada aksi aktif, null kalau tidak ada aksi aktif.
+ * - syncState: 'failed' kalau ada aksi berstatus 'failed' atau COD yatim,
+ *   'stale' kalau ada aksi aktif yang sudah menunggu lebih dari sejam,
+ *   'pending' kalau ada aksi aktif, null kalau tidak ada aksi aktif.
  *   Aksi aktif tanpa waktu pembuatan tidak dianggap basi, jadi lencana
  *   'pending'.
  */
@@ -87,7 +88,11 @@ export function deriveOrderSyncView(
     latestTarget && !hasFailed && !hasOrphanedCod ? latestTarget : rowStatus;
 
   let syncState: SyncState | null = null;
-  if (active.length > 0) {
+  if (hasFailed || hasOrphanedCod) {
+    // Aksi yang ditolak server menetap sampai driver mencoba lagi atau
+    // membuangnya, jadi lencana tidak berubah jadi centang.
+    syncState = 'failed';
+  } else if (active.length > 0) {
     const now = Date.now();
     const isStale = active.some(
       (action) => readActionAgeMs(action, now) > STALE_THRESHOLD_MS,

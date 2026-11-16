@@ -588,6 +588,35 @@ describe('ConnectionBar', () => {
   });
 });
 
+describe('lencana kartu Order Saya', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    (acceptOrder as jest.Mock).mockResolvedValue({});
+    mockPendingActions = [];
+    setBarisPool([]);
+  });
+
+  test('satu aksi gagal menampilkan lencana ditolak server', async () => {
+    mockPendingActions = [makeAksi('order-gagal-1', 'failed')];
+    const myOrders = [
+      makeBaris({ id: 'order-gagal-1', status: 'PREPARING', driverId: 'driver-123' }),
+    ];
+
+    const { getByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={myOrders as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Ditolak server')).toBeTruthy();
+    });
+  });
+});
+
 describe('tombol keluar di kepala layar', () => {
   beforeEach(() => {
     jest.clearAllMocks();

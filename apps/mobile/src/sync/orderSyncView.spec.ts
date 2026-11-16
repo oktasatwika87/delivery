@@ -128,7 +128,7 @@ describe('deriveOrderSyncView', () => {
     expect(view.syncState).toBe('pending');
   });
 
-  it('ada aksi gagal: status baris dipakai, lencana dari aksi aktif lain', async () => {
+  it('ada aksi gagal: status baris dipakai dan lencana ditolak server', async () => {
     await seedAksi(db, {
       id: 'pa-gagal',
       actionType: 'reject',
@@ -148,10 +148,10 @@ describe('deriveOrderSyncView', () => {
     const view = deriveOrderSyncView('PREPARING', await ambilAksi(db));
 
     expect(view.displayStatus).toBe('PREPARING');
-    expect(view.syncState).toBe('pending');
+    expect(view.syncState).toBe('failed');
   });
 
-  it('COD yatim: status baris dipakai walau ada aksi status antre', async () => {
+  it('COD yatim: status baris dipakai dan lencana ditolak server', async () => {
     await seedAksi(db, {
       id: 'pa-cod-yatim',
       actionType: 'collect_cod',
@@ -171,7 +171,7 @@ describe('deriveOrderSyncView', () => {
     const view = deriveOrderSyncView('PREPARING', await ambilAksi(db));
 
     expect(view.displayStatus).toBe('PREPARING');
-    expect(view.syncState).toBe('pending');
+    expect(view.syncState).toBe('failed');
   });
 
   it('aksi aktif basi: lencana basi', async () => {
@@ -204,7 +204,7 @@ describe('deriveOrderSyncView', () => {
     expect(view.syncState).toBe('pending');
   });
 
-  it('hanya aksi gagal: lencana kosong', async () => {
+  it('hanya aksi gagal: lencana ditolak server', async () => {
     await seedAksi(db, {
       id: 'pa-gagal',
       actionType: 'reject',
@@ -216,6 +216,57 @@ describe('deriveOrderSyncView', () => {
     const view = deriveOrderSyncView('PREPARING', await ambilAksi(db));
 
     expect(view.displayStatus).toBe('PREPARING');
-    expect(view.syncState).toBeNull();
+    expect(view.syncState).toBe('failed');
+  });
+
+  it('aksi gagal bersama aksi aktif basi tetap ditolak server', async () => {
+    await seedAksi(db, {
+      id: 'pa-gagal',
+      actionType: 'reject',
+      targetOrderId: 'order-1',
+      status: 'failed',
+      createdAt: SEKARANG,
+    });
+    await seedAksi(db, {
+      id: 'pa-basi',
+      actionType: 'update_status',
+      targetOrderId: 'order-1',
+      status: 'pending',
+      payloadJson: '{"status":"DELIVERED"}',
+      createdAt: SEKARANG - SEJAM - 1000,
+    });
+
+    const view = deriveOrderSyncView('PREPARING', await ambilAksi(db));
+
+    expect(view.syncState).toBe('failed');
+  });
+
+  it('COD yatim tanpa aksi lain tetap ditolak server', async () => {
+    await seedAksi(db, {
+      id: 'pa-cod-yatim',
+      actionType: 'collect_cod',
+      targetOrderId: 'order-1',
+      status: 'orphaned_needs_review',
+      createdAt: SEKARANG,
+    });
+
+    const view = deriveOrderSyncView('PREPARING', await ambilAksi(db));
+
+    expect(view.syncState).toBe('failed');
+  });
+
+  it('aksi cancel gagal juga ditolak server', async () => {
+    await seedAksi(db, {
+      id: 'pa-batal',
+      actionType: 'cancel',
+      targetOrderId: 'order-1',
+      status: 'failed',
+      createdAt: SEKARANG,
+    });
+
+    const view = deriveOrderSyncView('OUT_FOR_DELIVERY', await ambilAksi(db));
+
+    expect(view.displayStatus).toBe('OUT_FOR_DELIVERY');
+    expect(view.syncState).toBe('failed');
   });
 });
