@@ -138,7 +138,7 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   subjudulPutih: {
-    ...type.overline,
+    ...type.labelSm,
     color: colors.textMuted,
   },
 });

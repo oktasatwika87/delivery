@@ -174,7 +174,7 @@ const styles = StyleSheet.create({
   },
   aksi: {
     ...type.bodySm,
-    fontFamily: fontFamily.extrabold,
+    fontFamily: fontFamily.bold,
     textDecorationLine: 'underline',
   },
 });

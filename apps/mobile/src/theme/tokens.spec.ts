@@ -9,7 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { colors, fontFamily, motion, type } from './tokens';
+import { colors, fontFamily, motion, palette, themes, type } from './tokens';
 
 const POLA_HEX = /^#([0-9a-f]{6}|[0-9a-f]{8})$/i;
 
@@ -28,6 +28,42 @@ describe('token tema', () => {
 
   it('teks tombol nonaktif sama dengan warna teks muted', () => {
     expect(colors.onActionDisabled).toBe(colors.textMuted);
+  });
+
+  it('kedua tema punya nama warna yang sama persis', () => {
+    expect(Object.keys(themes.gelap).sort()).toEqual(Object.keys(themes.terang).sort());
+  });
+
+  it('jumlah nama warna di tiap tema 60', () => {
+    expect(Object.keys(themes.gelap)).toHaveLength(60);
+    expect(Object.keys(themes.terang)).toHaveLength(60);
+  });
+
+  it('semua nilai warna tema berupa hex 6 atau 8 digit', () => {
+    for (const nilai of Object.values(themes.gelap)) {
+      expect(nilai).toMatch(POLA_HEX);
+    }
+    for (const nilai of Object.values(themes.terang)) {
+      expect(nilai).toMatch(POLA_HEX);
+    }
+  });
+
+  it('semua nilai palet berupa hex 6 atau 8 digit', () => {
+    for (const nilai of Object.values(palette)) {
+      expect(nilai).toMatch(POLA_HEX);
+    }
+  });
+
+  it('jumlah warna palet 20', () => {
+    expect(Object.keys(palette)).toHaveLength(20);
+  });
+
+  it('teks tombol nonaktif tema gelap sama dengan warna teks halus', () => {
+    expect(themes.gelap.onActionDisabled).toBe(themes.gelap.textSubtle);
+  });
+
+  it('teks tombol nonaktif tema terang sama dengan warna teks muted', () => {
+    expect(themes.terang.onActionDisabled).toBe(themes.terang.textMuted);
   });
 
   it('setiap gaya teks memakai fontFamily yang ada di daftar', () => {

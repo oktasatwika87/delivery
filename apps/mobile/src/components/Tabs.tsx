@@ -105,7 +105,7 @@ export function Tabs({ tabs, activeKey, onChange }: TabsProps): React.JSX.Elemen
         const aktif = tab.key === activeKey;
         const gayaTeksPil: TextStyle & { lineHeight: number } = {
           ...type.caption,
-          fontFamily: fontFamily.extrabold,
+          fontFamily: fontFamily.bold,
           color: aktif ? colors.text : colors.textInverse,
         };
         return (

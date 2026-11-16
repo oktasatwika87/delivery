@@ -188,7 +188,7 @@ const styles = StyleSheet.create({
     gap: space[1],
   },
   nomorKartu: {
-    ...type.overline,
+    ...type.labelSm,
     color: colors.textMuted,
   },
   waktuKartu: {
@@ -241,7 +241,7 @@ const styles = StyleSheet.create({
     gap: space[3],
   },
   nomorBaris: {
-    ...type.overline,
+    ...type.labelSm,
     color: colors.text,
   },
   alamatBaris: {

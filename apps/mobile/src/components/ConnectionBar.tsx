@@ -130,7 +130,7 @@ const styles = StyleSheet.create({
   },
   teksOffline: {
     ...type.bodySm,
-    fontFamily: fontFamily.extrabold,
+    fontFamily: fontFamily.bold,
     color: colors.textInverse,
   },
   teksLembut: {
