@@ -12,12 +12,14 @@ import Svg, { Path } from 'react-native-svg';
 
 import { Icon } from './Icon';
 import { iconPaths } from './icons';
-import { colors, size } from './tokens';
+import { ThemeProvider } from './ThemeProvider';
+import { size, themes } from './tokens';
 
 const NAMA_IKON = [
   'add',
   'arrow_back',
   'call',
+  'cancel',
   'chat',
   'check',
   'check_circle',
@@ -34,6 +36,7 @@ const NAMA_IKON = [
   'edit_note',
   'error',
   'history',
+  'hourglass_top',
   'info',
   'inventory_2',
   'location_on',
@@ -64,7 +67,7 @@ describe('Icon', () => {
     const path = UNSAFE_getByType(Path);
     expect(svg.props.viewBox).toBe(iconPaths.check.viewBox);
     expect(path.props.d).toBe(iconPaths.check.d);
-    expect(path.props.fill).toBe(colors.text);
+    expect(path.props.fill).toBe(themes.gelap.text);
   });
 
   it('ukuran bawaan 24 dan warna bawaan warna teks', () => {
@@ -72,17 +75,26 @@ describe('Icon', () => {
     const svg = UNSAFE_getByType(Svg);
     expect(svg.props.width).toBe(size.icon);
     expect(svg.props.height).toBe(size.icon);
-    expect(UNSAFE_getByType(Path).props.fill).toBe(colors.text);
+    expect(UNSAFE_getByType(Path).props.fill).toBe(themes.gelap.text);
+  });
+
+  it('warna bawaan ikut tema yang dipakai', () => {
+    const { UNSAFE_getByType } = render(
+      <ThemeProvider name="terang">
+        <Icon name="check" />
+      </ThemeProvider>,
+    );
+    expect(UNSAFE_getByType(Path).props.fill).toBe(themes.terang.text);
   });
 
   it('ukuran dan warna yang diberikan dipakai apa adanya', () => {
     const { UNSAFE_getByType } = render(
-      <Icon name="check" size={40} color={colors.danger} />,
+      <Icon name="check" size={40} color={themes.gelap.danger} />,
     );
     const svg = UNSAFE_getByType(Svg);
     expect(svg.props.width).toBe(40);
     expect(svg.props.height).toBe(40);
-    expect(UNSAFE_getByType(Path).props.fill).toBe(colors.danger);
+    expect(UNSAFE_getByType(Path).props.fill).toBe(themes.gelap.danger);
   });
 
   it('tanpa label ikon disembunyikan dari pembaca layar', () => {
@@ -104,7 +116,7 @@ describe('Icon', () => {
 });
 
 describe('data path ikon', () => {
-  it('memuat 40 ikon dengan nama yang lengkap', () => {
+  it('memuat 42 ikon dengan nama yang lengkap', () => {
     expect(Object.keys(iconPaths).sort()).toEqual([...NAMA_IKON].sort());
   });
 

@@ -13,7 +13,7 @@ import { Icon } from '../theme/Icon';
 import { Logo } from '../theme/Logo';
 import { colors, size, space, type } from '../theme/tokens';
 
-const TINGGI_LOGO = 32;
+const TINGGI_LOGO = 43;
 const TEBAL_GARIS = 1;
 
 export interface MainHeaderProps {
@@ -39,7 +39,7 @@ export function MainHeader({
   return (
     <View style={styles.kepalaGelap}>
       <View style={styles.baris}>
-        <Logo variant="inverse" height={TINGGI_LOGO} />
+        <Logo height={TINGGI_LOGO} />
         <View style={styles.judulArea}>
           <Text style={styles.judulGelap}>{title}</Text>
           <Text style={styles.subjudulGelap}>{subtitle}</Text>

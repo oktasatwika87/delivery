@@ -11,7 +11,8 @@ import { View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 
 import { iconPaths, type IconName } from './icons';
-import { colors, size } from './tokens';
+import { useTheme } from './ThemeProvider';
+import { size } from './tokens';
 
 export interface IconProps {
   /** Nama ikon, harus salah satu kunci iconPaths. */
@@ -27,9 +28,11 @@ export interface IconProps {
 export function Icon({
   name,
   size: ukuran = size.icon,
-  color = colors.text,
+  color,
   accessibilityLabel,
 }: IconProps): React.JSX.Element {
+  const { colors } = useTheme();
+  const warna = color ?? colors.text;
   const data = iconPaths[name];
   const adaLabel = accessibilityLabel != null && accessibilityLabel !== '';
 
@@ -41,7 +44,7 @@ export function Icon({
       importantForAccessibility={adaLabel ? 'yes' : 'no-hide-descendants'}
     >
       <Svg width={ukuran} height={ukuran} viewBox={data.viewBox}>
-        <Path d={data.d} fill={color} />
+        <Path d={data.d} fill={warna} />
       </Svg>
     </View>
   );
