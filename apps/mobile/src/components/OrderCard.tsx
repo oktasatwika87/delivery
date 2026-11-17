@@ -30,6 +30,8 @@ export interface OrderCardPoolProps {
   onAccept: () => void;
   acceptDisabled?: boolean;
   acceptLoading?: boolean;
+  /** Tombolnya sudah centang, artinya order berhasil diterima. */
+  acceptSuccess?: boolean;
   acceptHelp?: string;
   onPress?: () => void;
 }
@@ -198,7 +200,8 @@ function KartuPool(props: OrderCardPoolProps): React.JSX.Element {
           variant="primary"
           size="card"
           disabled={props.acceptDisabled}
-          loading={props.acceptLoading}
+          loading={props.acceptLoading && !props.acceptSuccess}
+          success={props.acceptSuccess}
         />
       </View>
       {props.acceptHelp ? <HelpLine text={props.acceptHelp} /> : null}

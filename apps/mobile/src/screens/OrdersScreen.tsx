@@ -97,6 +97,12 @@ const KELUAR_KANAN = exitRight();
 // Berapa baris pertama yang digambar sekaligus digerakkan.
 const JUMLAH_AWAL = 10;
 
+/** Tahap urutan Terima: centang dulu, baru kartu keluar. */
+interface UrutanTerima {
+  id: string;
+  tahap: 'centang' | 'keluar';
+}
+
 interface Props {
   database: Database;
   // Kosong kalau layar belum tahu order milik sendiri.
@@ -194,6 +200,13 @@ export function OrdersScreenBase({
   // Opasitas isi daftar, dipakai pudar saat ganti tab.
   const opasitasDaftar = useSharedValue(1);
   const daftarRef = useRef<FlatList<OrderModel>>(null);
+  // Urutan Terima yang sedang jalan: tombol jadi centang, kartu keluar,
+  // baru tab pindah.
+  const [terimaBerhasil, setTerimaBerhasil] = useState<UrutanTerima | null>(null);
+  // Ref selalu berisi nilai terbaru, jadi handleAccept dan onTabChange
+  // membaca urutan yang sedang jalan tanpa closure basi.
+  const terimaRef = useRef<UrutanTerima | null>(null);
+  terimaRef.current = terimaBerhasil;
 
   // GPS location state
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -573,6 +586,40 @@ export function OrdersScreenBase({
     setRefreshing(false);
   }, [fetchPool]);
 
+  // Buang satu kartu dari daftar Tersedia.
+  const buangDariTersedia = useCallback((id: string) => {
+    setPoolOrders((prev) => prev.filter((o) => o.id !== id));
+  }, []);
+
+  // Kartu yang sedang ditahan masih ada di daftar Tersedia.
+  const kartuTerimaAda = useMemo(() => {
+    if (!terimaBerhasil) return false;
+    return poolOrders.some((row) => row.id === terimaBerhasil.id);
+  }, [terimaBerhasil, poolOrders]);
+
+  // Urutan Terima: tombol jadi centang, kartu keluar ke kanan, baru tab
+  // pindah ke Order Saya. Kartunya ditahan di daftar selama centang.
+  useEffect(() => {
+    if (!terimaBerhasil) return;
+    if (terimaBerhasil.tahap === 'centang') {
+      // Kartunya sudah hilang duluan, jadi sisa waktu centang dipotong.
+      if (!kartuTerimaAda) {
+        setTerimaBerhasil({ id: terimaBerhasil.id, tahap: 'keluar' });
+        return;
+      }
+      const timer = setTimeout(() => {
+        buangDariTersedia(terimaBerhasil.id);
+        setTerimaBerhasil({ id: terimaBerhasil.id, tahap: 'keluar' });
+      }, motion.duration.drawLine);
+      return () => clearTimeout(timer);
+    }
+    const timer = setTimeout(() => {
+      setTerimaBerhasil(null);
+      setActiveTab(TAB_SAYA);
+    }, motion.duration.exit);
+    return () => clearTimeout(timer);
+  }, [terimaBerhasil, kartuTerimaAda, buangDariTersedia]);
+
   // Accept order
   const handleAccept = useCallback(
     async (order: OrderModel): Promise<void> => {
@@ -666,12 +713,19 @@ export function OrdersScreenBase({
         // Terima berhasil, jadi beri tahu lewat getaran.
         hapticAccept();
 
-        // Remove from pool (local state)
-        setPoolOrders((prev) => prev.filter((o) => o.id !== order.id));
-
-        // Terima berhasil, jadi pengguna mau lihat ordernya: pindah ke tab
-        // Order Saya.
-        setActiveTab(TAB_SAYA);
+        if (kurangiGerak) {
+          // Tanpa gerakan, kartu langsung hilang dan tab langsung pindah.
+          buangDariTersedia(order.id);
+          setActiveTab(TAB_SAYA);
+        } else {
+          // Kalau urutan sebelumnya masih jalan, kartunya langsung dibuang.
+          const sebelumnya = terimaRef.current;
+          if (sebelumnya && sebelumnya.id !== order.id) {
+            buangDariTersedia(sebelumnya.id);
+          }
+          // Tombol jadi centang dulu, kartu keluar kemudian.
+          setTerimaBerhasil({ id: order.id, tahap: 'centang' });
+        }
 
         // Pre-compute route for offline-ready. Pakai koordinat dari respons
         // (bukan dari model baris), karena baris pool awalnya tidak punya
@@ -694,7 +748,7 @@ export function OrdersScreenBase({
         setAcceptingOrderId(null);
       }
     },
-    [database, routeService, currentLocation],
+    [database, routeService, currentLocation, kurangiGerak, buangDariTersedia],
   );
   // Sinkronkan ref agar tes bisa memanggil langsung dari luar komponen.
   handleAcceptRef.current = handleAccept;
@@ -713,11 +767,21 @@ export function OrdersScreenBase({
   // tanpa perlu timer.
   const ringkasan = deriveDaySummary(myOrders, payments, pendingActions, Date.now());
 
-  const onTabChange = useCallback((key: string) => {
-    if (key === TAB_TERSEDIA || key === TAB_SAYA) {
-      setActiveTab(key);
-    }
-  }, []);
+  const onTabChange = useCallback(
+    (key: string) => {
+      if (key === TAB_TERSEDIA || key === TAB_SAYA) {
+        // Pengguna pindah tab sendiri di tengah urutan Terima, jadi urutannya
+        // dipotong ke keadaan akhir.
+        const urutan = terimaRef.current;
+        if (urutan) {
+          buangDariTersedia(urutan.id);
+          setTerimaBerhasil(null);
+        }
+        setActiveTab(key);
+      }
+    },
+    [buangDariTersedia],
+  );
 
   // Ganti isi daftar: gulir ke atas dulu, lalu tampilkan isi tab tujuan.
   const gantiIsi = useCallback((tujuan: TabKey) => {
@@ -768,8 +832,8 @@ export function OrdersScreenBase({
   // Nilai di luar data yang dipakai renderItem. FlatList cuma pasti
   // menggambar ulang sel kalau data atau extraData berubah.
   const extraData = useMemo(
-    () => ({ acceptingOrderId, online, keluarTersedia, actionsByOrderId }),
-    [acceptingOrderId, online, keluarTersedia, actionsByOrderId],
+    () => ({ acceptingOrderId, online, keluarTersedia, actionsByOrderId, terimaBerhasil }),
+    [acceptingOrderId, online, keluarTersedia, actionsByOrderId, terimaBerhasil],
   );
 
   // Kartu di Tersedia tidak dibuka ke detail: baris pool hanya berisi
@@ -794,6 +858,7 @@ export function OrdersScreenBase({
           acceptDisabled={!online}
           acceptHelp={online ? undefined : TEKS_BUTUH_KONEKSI}
           acceptLoading={acceptingOrderId === item.id}
+          acceptSuccess={terimaBerhasil?.id === item.id}
         />
       </ListEnterRow>
     );

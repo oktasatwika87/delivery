@@ -6,10 +6,11 @@
  */
 
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { ActivityIndicator, StyleSheet } from 'react-native';
 import { act, fireEvent, render } from '@testing-library/react-native';
 
 import { OrderCard } from './OrderCard';
+import { CheckMark } from './motion/CheckMark';
 import { Icon } from '../theme/Icon';
 import { motion, themes } from '../theme/tokens';
 
@@ -131,6 +132,24 @@ describe('OrderCard bentuk pool', () => {
       />,
     );
     expect(getByText('Order ini sudah diambil kurir lain')).toBeTruthy();
+  });
+
+  it('acceptSuccess menampilkan centang tanpa pemutar walau acceptLoading masih true', () => {
+    const { UNSAFE_getByType, UNSAFE_queryByType, getByTestId } = render(
+      <OrderCard
+        variant="pool"
+        orderNumber="#1D42E3E2"
+        timeText="10 menit lalu"
+        city="Bandung"
+        amountText="Rp45.000"
+        onAccept={() => {}}
+        acceptSuccess
+        acceptLoading
+      />,
+    );
+    expect(UNSAFE_getByType(CheckMark)).toBeTruthy();
+    expect(UNSAFE_queryByType(ActivityIndicator)).toBeNull();
+    expect(StyleSheet.flatten(getByTestId('judul-tombol').props.style).opacity).toBe(0);
   });
 });
 

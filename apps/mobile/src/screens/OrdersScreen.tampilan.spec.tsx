@@ -9,8 +9,9 @@
  */
 
 import React from 'react';
-import { FlatList, StatusBar, StyleSheet } from 'react-native';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { ActivityIndicator, FlatList, StatusBar, StyleSheet } from 'react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { trigger } from 'react-native-haptic-feedback';
 
 jest.mock('@nozbe/watermelondb/react', () => ({
   withDatabase: (C: unknown) => C,
@@ -246,6 +247,7 @@ import { ApiError } from '../sync/client';
 import { formatOrderTime } from '../formatOrderTime';
 import { formatCurrency } from '../formatCurrency';
 import { getCurrentUserId } from '../sync/session';
+import { syncEvents } from '../sync/syncEvents';
 import { ConnectionBar } from '../components/ConnectionBar';
 import { DaySummary } from '../components/DaySummary';
 import { MainHeader } from '../components/AppBar';
@@ -254,7 +256,7 @@ import { ListEnterRow } from '../components/motion/listEnter';
 import { InitialWindowProvider } from '../components/motion/InitialWindow';
 import { SlideOutRight } from 'react-native-reanimated';
 import { Icon } from '../theme/Icon';
-import { size, space, themes, type } from '../theme/tokens';
+import { motion, size, space, themes, type } from '../theme/tokens';
 
 const WAKTU_KUNCI = 1_750_000_000_000;
 
@@ -379,30 +381,40 @@ describe('tab layar Order', () => {
   });
 
   test('terima sukses pindah ke tab Order Saya', async () => {
-    setBarisPool([makeBaris({ id: 'pool-terima-1' })]);
+    jest.useFakeTimers();
+    try {
+      setBarisPool([makeBaris({ id: 'pool-terima-1' })]);
 
-    const { getByText, queryByText } = render(
-      <OrdersScreenBase
-        database={mockDatabase as never}
-        myOrders={[] as never}
-        onLogout={jest.fn()}
-      />,
-    );
+      const { getByText, queryByText } = render(
+        <OrdersScreenBase
+          database={mockDatabase as never}
+          myOrders={[] as never}
+          onLogout={jest.fn()}
+        />,
+      );
 
-    await waitFor(() => {
-      expect(getByText('Terima Order')).toBeTruthy();
-    });
+      await waitFor(() => {
+        expect(getByText('Terima Order')).toBeTruthy();
+      });
 
-    fireEvent.press(getByText('Terima Order'));
+      await act(async () => {
+        fireEvent.press(getByText('Terima Order'));
+      });
 
-    await waitFor(() => {
-      expect(acceptOrder).toHaveBeenCalled();
-    });
-    // Tab Order Saya terbuka, jadi daftar pool tidak tampil lagi.
-    await waitFor(() => {
+      await act(async () => {
+        jest.advanceTimersByTime(motion.duration.drawLine);
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(motion.duration.exit);
+      });
+
+      // Tab Order Saya terbuka, jadi daftar pool tidak tampil lagi.
       expect(getByText('Belum ada order diterima')).toBeTruthy();
-    });
-    expect(queryByText('Terima Order')).toBeNull();
+      expect(queryByText('Terima Order')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('terima gagal 409 tetap di tab Tersedia', async () => {
@@ -575,6 +587,244 @@ describe('gerak kartu daftar Order', () => {
     });
 
     expect(UNSAFE_getByType(FlatList).props.itemLayoutAnimation).toBeDefined();
+  });
+});
+
+describe('urutan Terima di layar Order', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    (acceptOrder as jest.Mock).mockResolvedValue({
+      id: 'pool-terima-urutan',
+      customerId: 'cust-1',
+      driverId: 'driver-123',
+      status: 'PREPARING',
+      items: [],
+      deliveryAddress: { street: 'Jl. Terima 1', city: 'Jakarta' },
+      totalCents: 25000,
+      currency: 'IDR',
+      notes: null,
+      createdAt: '2026-01-15T03:04:05.000Z',
+      updatedAt: '2026-01-15T03:05:00.000Z',
+      version: 4,
+      cancelledBy: null,
+      cancelReason: null,
+    });
+    mockPendingActions = [];
+    setBarisPool([makeBaris({ id: 'pool-terima-urutan' })]);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  test('sesudah Terima sukses tab masih Tersedia dan tombolnya jadi centang', async () => {
+    const { getByText, getByLabelText, getByTestId, UNSAFE_queryAllByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Terima Order'));
+    });
+
+    // Tab belum berganti, masih di Tersedia.
+    expect(getByText('Terima Order')).toBeTruthy();
+    expect(StyleSheet.flatten(getByTestId('judul-tombol').props.style).opacity).toBe(0);
+    const tombol = getByLabelText('Terima Order');
+    const spinner = UNSAFE_queryAllByType(ActivityIndicator).filter((indikator) =>
+      leluhur(indikator).includes(tombol),
+    );
+    expect(spinner).toHaveLength(0);
+    expect(trigger).toHaveBeenCalledTimes(1);
+    expect(trigger).toHaveBeenCalledWith('impactMedium');
+  });
+
+  test('sesudah waktu centang kartu hilang dari Tersedia tapi tab belum pindah', async () => {
+    const { getByText, queryByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Terima Order'));
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(motion.duration.drawLine);
+    });
+
+    expect(queryByText('Terima Order')).toBeNull();
+    expect(queryByText('Belum ada order diterima')).toBeNull();
+  });
+
+  test('sesudah waktu keluar isi Order Saya tampil', async () => {
+    const { getByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Terima Order'));
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(motion.duration.drawLine);
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(motion.duration.exit);
+    });
+
+    expect(getByText('Belum ada order diterima')).toBeTruthy();
+  });
+
+  test('pengguna pindah tab sendiri di tengah centang, urutan dipotong', async () => {
+    const { getByText, queryByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Terima Order'));
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Order Saya'));
+    });
+
+    // Order Saya langsung tampil.
+    expect(getByText('Belum ada order diterima')).toBeTruthy();
+
+    // Kembali ke Tersedia, kartunya sudah dibuang.
+    await act(async () => {
+      fireEvent.press(getByText('Tersedia'));
+    });
+    expect(queryByText('Terima Order')).toBeNull();
+    expect(getByText('Belum ada order')).toBeTruthy();
+
+    // Timer lama tidak memindah tab lagi.
+    await act(async () => {
+      jest.advanceTimersByTime(motion.duration.drawLine + motion.duration.exit);
+    });
+    expect(getByText('Belum ada order')).toBeTruthy();
+  });
+
+  test('kartu dibuang daftar server di tengah centang, tab pindah setelah waktu keluar saja', async () => {
+    const { getByText, queryByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Terima Order'));
+    });
+
+    // Server sudah tidak punya order itu, jadi daftar diperbarui.
+    setBarisPool([]);
+    await act(async () => {
+      syncEvents.emit('pool-refresh', {});
+    });
+
+    expect(queryByText('Terima Order')).toBeNull();
+
+    // Baru lewat waktu keluar, tanpa menunggu waktu centang.
+    await act(async () => {
+      jest.advanceTimersByTime(motion.duration.exit);
+    });
+    expect(getByText('Belum ada order diterima')).toBeTruthy();
+  });
+
+  test('kurangi gerakan: kartu langsung hilang dan tab langsung pindah', async () => {
+    const reanimated = require('react-native-reanimated') as {
+      useReducedMotion: () => boolean;
+    };
+    jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+
+    const { getByText, queryByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Terima Order'));
+    });
+
+    expect(queryByText('Terima Order')).toBeNull();
+    expect(getByText('Belum ada order diterima')).toBeTruthy();
+  });
+
+  test('layar dilepas di tengah urutan tidak bikin peringatan state', async () => {
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { getByText, unmount } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Terima Order'));
+    });
+
+    errorSpy.mockClear();
+    unmount();
+
+    await act(async () => {
+      jest.advanceTimersByTime(motion.duration.drawLine + motion.duration.exit);
+    });
+
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 });
 
