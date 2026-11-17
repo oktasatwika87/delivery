@@ -6,7 +6,8 @@
 
 import React from 'react';
 import { StyleSheet } from 'react-native';
-import { render } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
+import Svg, { Rect } from 'react-native-svg';
 
 import { DaySummary, formatSelesai, formatTunai } from './DaySummary';
 import { formatCurrency } from '../formatCurrency';
@@ -59,5 +60,33 @@ describe('DaySummary', () => {
     expect(gaya.borderTopColor).toBe(themes.gelap.edgeHighlight);
     expect(gaya.paddingVertical).toBe(14);
     expect(gaya.paddingHorizontal).toBe(16);
+  });
+
+  it('sebelum panel diukur gradasi belum ada dan panelnya berlatar', () => {
+    const { getByTestId, UNSAFE_queryByType } = render(
+      <DaySummary doneCount={3} cashAmount={120000} currency="IDR" />,
+    );
+
+    expect(UNSAFE_queryByType(Svg)).toBeNull();
+    const gayaPanel = StyleSheet.flatten(getByTestId('panel-ringkasan').props.style);
+    expect(gayaPanel.backgroundColor).toBe(themes.gelap.surface);
+  });
+
+  it('sesudah panel diukur gradasi memakai ukuran panel', () => {
+    const { getByTestId, UNSAFE_getByType } = render(
+      <DaySummary doneCount={3} cashAmount={120000} currency="IDR" />,
+    );
+
+    fireEvent(getByTestId('panel-ringkasan'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 0, width: 328, height: 64 } },
+    });
+
+    const svg = UNSAFE_getByType(Svg);
+    expect(svg.props.width).toBe(328);
+    expect(svg.props.height).toBe(64);
+
+    const rect = UNSAFE_getByType(Rect);
+    expect(rect.props.width).toBe(328);
+    expect(rect.props.height).toBe(64);
   });
 });

@@ -5,9 +5,9 @@
  * di dalam supaya angkanya bisa bergulir saat berubah.
  */
 
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import type { TextStyle } from 'react-native';
+import type { LayoutChangeEvent, TextStyle } from 'react-native';
 import Svg, { LinearGradient, Rect, Stop } from 'react-native-svg';
 
 import { formatCurrency } from '../formatCurrency';
@@ -50,6 +50,9 @@ const gaya = perTema((c) =>
       paddingVertical: PADDING_ATAS,
       paddingHorizontal: space[4],
       overflow: 'hidden',
+      // Warna ujung bawah gradasi, jadi bingkai pertama sebelum panel diukur
+      // tidak tembus ke latar layar.
+      backgroundColor: c.surface,
     },
     kolomKiri: {
       flex: 1,
@@ -81,6 +84,20 @@ export function DaySummary({
   const { name, colors } = useTheme();
   const s = gaya[name];
   const [idGradasi] = useState(() => `gradasi-ringkasan-${hitungan++}`);
+  // Ukuran panel, diisi dari event layout. Gradasi butuh ukuran angka, kalau
+  // pakai persen di Android gradasinya berhenti sebelum tepi panel.
+  const [ukuran, setUkuran] = useState<{ lebar: number; tinggi: number } | null>(null);
+
+  const saatTerukur = useCallback((event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setUkuran((sebelumnya) =>
+      sebelumnya !== null &&
+      sebelumnya.lebar === width &&
+      sebelumnya.tinggi === height
+        ? sebelumnya
+        : { lebar: width, tinggi: height },
+    );
+  }, []);
 
   const gayaAngka: TextStyle & { lineHeight: number } = {
     ...s.angka,
@@ -88,14 +105,22 @@ export function DaySummary({
   };
 
   return (
-    <View style={s.panel}>
-      <Svg style={StyleSheet.absoluteFill} width="100%" height="100%">
-        <LinearGradient id={idGradasi} x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0" stopColor={colors.surfaceLift} />
-          <Stop offset="1" stopColor={colors.surface} />
-        </LinearGradient>
-        <Rect x="0" y="0" width="100%" height="100%" fill={`url(#${idGradasi})`} />
-      </Svg>
+    <View style={s.panel} testID="panel-ringkasan" onLayout={saatTerukur}>
+      {ukuran ? (
+        <Svg style={StyleSheet.absoluteFill} width={ukuran.lebar} height={ukuran.tinggi}>
+          <LinearGradient id={idGradasi} x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor={colors.surfaceLift} />
+            <Stop offset="1" stopColor={colors.surface} />
+          </LinearGradient>
+          <Rect
+            x="0"
+            y="0"
+            width={ukuran.lebar}
+            height={ukuran.tinggi}
+            fill={`url(#${idGradasi})`}
+          />
+        </Svg>
+      ) : null}
       <View style={s.kolomKiri}>
         <Text style={s.label}>Hari ini</Text>
         <RollingNumber value={doneCount} format={formatSelesai} style={gayaAngka} />
