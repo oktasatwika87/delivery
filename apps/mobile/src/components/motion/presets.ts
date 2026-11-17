@@ -13,6 +13,7 @@ import {
   FadeOut,
   FadeOutUp,
   LinearTransition,
+  SlideOutRight,
   ZoomOut,
 } from 'react-native-reanimated';
 
@@ -58,6 +59,11 @@ export function shrinkOut() {
 /** Geser posisi saat tata letak berubah. */
 export function shift() {
   return LinearTransition.duration(motion.duration.shift).easing(standardEasing);
+}
+
+/** Keluar ke kanan: kartu hilang ke arah kanan. */
+export function exitRight() {
+  return SlideOutRight.duration(motion.duration.exit).easing(exitEasing);
 }
 
 /**

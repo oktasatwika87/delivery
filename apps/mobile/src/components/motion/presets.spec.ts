@@ -5,6 +5,7 @@
 import {
   enterFromAbove,
   enterFromBelow,
+  exitRight,
   exitUp,
   fadeIn,
   fadeOut,
@@ -12,6 +13,7 @@ import {
   shrinkOut,
   staggerDelay,
 } from './presets';
+import { SlideOutRight } from 'react-native-reanimated';
 
 describe('pola gerak', () => {
   it('jeda baris pertama nol', () => {
@@ -42,5 +44,10 @@ describe('pola gerak', () => {
     expect(fadeOut()).toBeDefined();
     expect(shrinkOut()).toBeDefined();
     expect(shift()).toBeDefined();
+    expect(exitRight()).toBeDefined();
+  });
+
+  it('keluar ke kanan memakai SlideOutRight', () => {
+    expect(exitRight()).toBe(SlideOutRight);
   });
 });

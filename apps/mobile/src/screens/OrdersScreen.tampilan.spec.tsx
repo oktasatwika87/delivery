@@ -250,6 +250,9 @@ import { ConnectionBar } from '../components/ConnectionBar';
 import { DaySummary } from '../components/DaySummary';
 import { MainHeader } from '../components/AppBar';
 import { Tabs } from '../components/Tabs';
+import { ListEnterRow } from '../components/motion/listEnter';
+import { InitialWindowProvider } from '../components/motion/InitialWindow';
+import { SlideOutRight } from 'react-native-reanimated';
 import { Icon } from '../theme/Icon';
 import { size, space, themes, type } from '../theme/tokens';
 
@@ -486,6 +489,92 @@ describe('ganti tab di layar Order', () => {
     // Isi Order Saya sudah tampil, tidak menunggu pudar.
     expect(idDariDaftar(UNSAFE_getByType(FlatList).props.data)).toEqual([]);
     expect(getByText('Belum ada order diterima')).toBeTruthy();
+  });
+});
+
+describe('gerak kartu daftar Order', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    (acceptOrder as jest.Mock).mockResolvedValue({});
+    mockPendingActions = [];
+    setBarisPool([]);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('kartu Tersedia keluar ke kanan, kartu Order Saya tidak keluar', async () => {
+    setBarisPool([makeBaris({ id: 'pool-gerak-1' })]);
+    const myOrders = [
+      makeBaris({ id: 'order-gerak-1', status: 'DELIVERED', driverId: 'driver-123' }),
+    ];
+
+    const { UNSAFE_getAllByType, getByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={myOrders as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    const barisTersedia = UNSAFE_getAllByType(ListEnterRow);
+    expect(barisTersedia).toHaveLength(1);
+    expect(barisTersedia[0].props.exiting).toBe(SlideOutRight);
+
+    fireEvent.press(getByText('Order Saya'));
+
+    await waitFor(() => {
+      expect(getByText(/Order #ORDER-GE/)).toBeTruthy();
+    });
+
+    const barisSaya = UNSAFE_getAllByType(ListEnterRow);
+    expect(barisSaya).toHaveLength(1);
+    expect(barisSaya[0].props.exiting).toBeUndefined();
+  });
+
+  test('di dalam jendela awal tidak ada gerak keluar dan tidak ada geser baris', async () => {
+    setBarisPool([makeBaris({ id: 'pool-jendela-1' })]);
+
+    const { UNSAFE_getAllByType, UNSAFE_getByType, getByText } = render(
+      <InitialWindowProvider>
+        <OrdersScreenBase
+          database={mockDatabase as never}
+          myOrders={[] as never}
+          onLogout={jest.fn()}
+        />
+      </InitialWindowProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    expect(UNSAFE_getAllByType(ListEnterRow)[0].props.exiting).toBeUndefined();
+    expect(UNSAFE_getByType(FlatList).props.itemLayoutAnimation).toBeUndefined();
+  });
+
+  test('di luar jendela awal baris lain bergeser saat kartu masuk atau keluar', async () => {
+    setBarisPool([makeBaris({ id: 'pool-geser-1' })]);
+
+    const { UNSAFE_getByType, getByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    expect(UNSAFE_getByType(FlatList).props.itemLayoutAnimation).toBeDefined();
   });
 });
 

@@ -61,7 +61,8 @@ import type { TabItem } from '../components/Tabs';
 import { OrderCard } from '../components/OrderCard';
 import { EmptyState } from '../components/EmptyState';
 import { Icon } from '../theme/Icon';
-import { exitEasing, shift, standardEasing } from '../components/motion/presets';
+import { exitEasing, exitRight, shift, standardEasing } from '../components/motion/presets';
+import { ListEnterRow, useListEnter } from '../components/motion/listEnter';
 import { useInitialWindow } from '../components/motion/InitialWindow';
 import { perTema, ThemeProvider, useTheme } from '../theme/ThemeProvider';
 import { motion, size, space, type } from '../theme/tokens';
@@ -86,6 +87,15 @@ const MATA_UANG_TUNAI = 'IDR';
 
 // Geser posisi isi layar, dipakai satu kali jadi konstanta modul.
 const GESER = shift();
+
+// Geser posisi baris daftar, dipakai satu kali jadi konstanta modul.
+const GESER_BARIS = shift();
+
+// Bentuk keluar kartu yang hilang dari daftar Tersedia.
+const KELUAR_KANAN = exitRight();
+
+// Berapa baris pertama yang digambar sekaligus digerakkan.
+const JUMLAH_AWAL = 10;
 
 interface Props {
   database: Database;
@@ -493,6 +503,22 @@ export function OrdersScreenBase({
   );
   const poolUrut = useMemo(() => sortPoolOrders(poolOrders), [poolOrders]);
 
+  // Id baris tiap daftar, dipakai pelacak gerak masuk. Id-nya dijaga
+  // identitasnya, karena efek pelacak bergantung pada identitas larik.
+  const idTersedia = useMemo(() => poolUrut.map((row) => row.id), [poolUrut]);
+  const idSaya = useMemo(() => myOrdersUrut.map((row) => row.id), [myOrdersUrut]);
+
+  // Setiap tab punya pelacak sendiri, jadi baris di tab lain tidak ikut
+  // digerakkan.
+  const pelacakTersedia = useListEnter(idTersedia, {
+    initialCount: JUMLAH_AWAL,
+    active: tabTampil === TAB_TERSEDIA,
+  });
+  const pelacakSaya = useListEnter(idSaya, {
+    initialCount: JUMLAH_AWAL,
+    active: tabTampil === TAB_SAYA,
+  });
+
   // Pil Order Saya cuma menghitung order yang masih dikerjakan.
   const orderAktif = useMemo(
     () => countActiveOrders(myOrders, actionsByOrderId),
@@ -731,45 +757,69 @@ export function OrdersScreenBase({
     opacity: opasitasDaftar.value,
   }));
 
+  // Kartu yang hilang dari Tersedia keluar ke kanan. Syarat tab aktif
+  // mematikan gerak keluar begitu isi lama mulai memudar, jadi kartu tidak
+  // meluncur saat tab diganti.
+  const keluarTersedia =
+    !dalamJendela && tabTampil === TAB_TERSEDIA && activeTab === TAB_TERSEDIA
+      ? KELUAR_KANAN
+      : undefined;
+
+  // Nilai di luar data yang dipakai renderItem. FlatList cuma pasti
+  // menggambar ulang sel kalau data atau extraData berubah.
+  const extraData = useMemo(
+    () => ({ acceptingOrderId, online, keluarTersedia, actionsByOrderId }),
+    [acceptingOrderId, online, keluarTersedia, actionsByOrderId],
+  );
+
   // Kartu di Tersedia tidak dibuka ke detail: baris pool hanya berisi
   // kota, jadi detailnya tampil seperti order rusak. Tombol Terima di
   // dalam kartu tetap dipakai.
-  const renderPoolItem = ({ item }: { item: OrderModel }) => {
+  const renderPoolItem = ({ item, index }: { item: OrderModel; index: number }) => {
     const alamat = readAlamat(item);
     return (
-      <OrderCard
-        variant="pool"
-        orderNumber={formatOrderNumber(item.id)}
-        timeText={formatOrderTime(readWaktu(item, 'created_at'), Date.now())}
-        city={alamat.city}
-        amountText={formatCurrency(readTotalCents(item), readCurrency(item))}
-        onAccept={() => { void handleAccept(item); }}
-        acceptDisabled={!online}
-        acceptHelp={online ? undefined : TEKS_BUTUH_KONEKSI}
-        acceptLoading={acceptingOrderId === item.id}
-      />
+      <ListEnterRow
+        tracker={pelacakTersedia}
+        id={item.id}
+        index={index}
+        exiting={keluarTersedia}
+      >
+        <OrderCard
+          variant="pool"
+          orderNumber={formatOrderNumber(item.id)}
+          timeText={formatOrderTime(readWaktu(item, 'created_at'), Date.now())}
+          city={alamat.city}
+          amountText={formatCurrency(readTotalCents(item), readCurrency(item))}
+          onAccept={() => { void handleAccept(item); }}
+          acceptDisabled={!online}
+          acceptHelp={online ? undefined : TEKS_BUTUH_KONEKSI}
+          acceptLoading={acceptingOrderId === item.id}
+        />
+      </ListEnterRow>
     );
   };
 
-  const renderMineItem = ({ item }: { item: OrderModel }) => {
+  const renderMineItem = ({ item, index }: { item: OrderModel; index: number }) => {
     // Kartu Order Saya memakai status yang sedang berlaku: kalau ada aksi
     // status yang antre, status targetnya yang tampil.
     const actions = actionsByOrderId.get(item.id) ?? [];
     const { displayStatus, syncState } = deriveOrderSyncView(readOrderStatus(item), actions);
     const alamat = readAlamat(item);
     return (
-      <OrderCard
-        variant="mine"
-        orderNumber={formatOrderNumber(item.id)}
-        status={displayStatus}
-        statusText={driverStatusLabel(displayStatus)}
-        addressMain={alamat.street ?? 'Alamat tidak tersedia'}
-        addressSub={alamat.city ?? undefined}
-        syncState={syncState ?? undefined}
-        amountText={formatCurrency(readTotalCents(item), readCurrency(item))}
-        timeText={formatOrderTime(readWaktu(item, 'created_at'), Date.now())}
-        onPress={() => navigation.navigate('OrderDetail', { orderId: item.id })}
-      />
+      <ListEnterRow tracker={pelacakSaya} id={item.id} index={index}>
+        <OrderCard
+          variant="mine"
+          orderNumber={formatOrderNumber(item.id)}
+          status={displayStatus}
+          statusText={driverStatusLabel(displayStatus)}
+          addressMain={alamat.street ?? 'Alamat tidak tersedia'}
+          addressSub={alamat.city ?? undefined}
+          syncState={syncState ?? undefined}
+          amountText={formatCurrency(readTotalCents(item), readCurrency(item))}
+          timeText={formatOrderTime(readWaktu(item, 'created_at'), Date.now())}
+          onPress={() => navigation.navigate('OrderDetail', { orderId: item.id })}
+        />
+      </ListEnterRow>
     );
   };
 
@@ -873,9 +923,12 @@ export function OrdersScreenBase({
         {/* Isi daftar dibungkus lapisan sendiri, jadi isinya bisa pudar
             saat ganti tab tanpa ikut menggeser isi layar. */}
         <Animated.View style={[gayaLayar.wadahDaftar, gayaOpasitas]}>
-          <FlatList
+          <Animated.FlatList
             ref={daftarRef}
             data={tampilTersedia ? poolUrut : myOrdersUrut}
+            extraData={extraData}
+            initialNumToRender={JUMLAH_AWAL}
+            itemLayoutAnimation={dalamJendela ? undefined : GESER_BARIS}
             keyExtractor={(row) => row.id}
             renderItem={tampilTersedia ? renderPoolItem : renderMineItem}
             ListHeaderComponent={tampilTersedia ? renderPoolHeader() : notice}
