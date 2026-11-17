@@ -312,6 +312,22 @@ function jumlahPil(tabs: unknown, label: string): number | undefined {
   return undefined;
 }
 
+/** Daftar nilai gaya, baik satu gaya atau beberapa gaya. */
+function bagianGaya(gaya: unknown): unknown[] {
+  if (Array.isArray(gaya)) return gaya;
+  return [gaya];
+}
+
+/** Opasitas lapisan isi daftar, dibaca dari gaya yang terpasang. */
+function opasitasIsiDaftar(term: { props: Record<string, unknown> }): number | undefined {
+  for (const gaya of bagianGaya(term.props.style)) {
+    if (typeof gaya !== 'object' || gaya === null || !('opacity' in gaya)) continue;
+    const nilai = gaya.opacity;
+    if (typeof nilai === 'number') return nilai;
+  }
+  return undefined;
+}
+
 // Status jaringan dibalas ke nilai awal tiap tes, soalnya nilai mock
 // tidak direset oleh clearAllMocks.
 beforeEach(() => {
@@ -501,6 +517,113 @@ describe('ganti tab di layar Order', () => {
     // Isi Order Saya sudah tampil, tidak menunggu pudar.
     expect(idDariDaftar(UNSAFE_getByType(FlatList).props.data)).toEqual([]);
     expect(getByText('Belum ada order diterima')).toBeTruthy();
+  });
+
+  test('isi baru belum pudar masuk sebelum kepala daftar tertata', async () => {
+    setBarisPool([makeBaris({ id: 'pool-pudar-1' })]);
+
+    const { getByText, getByTestId, rerender } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    fireEvent.press(getByText('Order Saya'));
+
+    // Isi Order Saya sudah tampil, tapi masih gelap karena pudar masuk
+    // ditunggu sampai kepala daftar yang baru siap.
+    expect(getByText('Belum ada order diterima')).toBeTruthy();
+
+    rerender(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    expect(opasitasIsiDaftar(getByTestId('isi-daftar'))).toBe(0);
+  });
+
+  test('pudar masuk jalan setelah kepala daftar yang baru tertata', async () => {
+    setBarisPool([makeBaris({ id: 'pool-pudar-2' })]);
+
+    const { getByText, getByTestId, rerender } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    fireEvent.press(getByText('Order Saya'));
+
+    rerender(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    expect(opasitasIsiDaftar(getByTestId('isi-daftar'))).toBe(0);
+
+    fireEvent(getByTestId('kepala-daftar'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 0, width: 328, height: 0 } },
+    });
+
+    rerender(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    expect(opasitasIsiDaftar(getByTestId('isi-daftar'))).toBe(1);
+  });
+
+  test('kurangi gerakan: isi baru langsung terang tanpa nunggu kepala daftar', async () => {
+    const reanimated = require('react-native-reanimated') as {
+      useReducedMotion: () => boolean;
+    };
+    jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+    setBarisPool([makeBaris({ id: 'pool-pudar-3' })]);
+
+    const { getByText, getByTestId, rerender } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    fireEvent.press(getByText('Order Saya'));
+
+    rerender(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    expect(getByText('Belum ada order diterima')).toBeTruthy();
+    expect(opasitasIsiDaftar(getByTestId('isi-daftar'))).toBe(1);
   });
 });
 

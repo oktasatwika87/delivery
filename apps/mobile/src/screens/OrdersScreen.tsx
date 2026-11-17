@@ -312,6 +312,9 @@ export function OrdersScreenBase({
   // Tab yang isinya sedang tampil. Berbeda dari activeTab selama isi lama
   // masih memudar keluar sebelum isi baru masuk.
   const [tabTampil, setTabTampil] = useState<TabKey>(() => activeTab);
+  // Isi tab baru sudah dipasang tapi belum tertata. Pudar masuk ditunggu
+  // sampai kepala daftar memberi tahu barunya sudah siap.
+  const menungguTata = useRef(false);
   // Kurangi gerakan: isi langsung berubah tanpa pudar.
   const kurangiGerak = useReducedMotion();
   // Opasitas isi daftar, dipakai pudar saat ganti tab.
@@ -979,16 +982,24 @@ export function OrdersScreenBase({
   );
 
   // Ganti isi daftar: gulir ke atas dulu, lalu tampilkan isi tab tujuan.
+  // Isi baru ditandai sedang menunggu tertata, jadi pudar masuk ditunggu
+  // sampai isi baru benar-benar siap tampil.
   const gantiIsi = useCallback((tujuan: TabKey) => {
     daftarRef.current?.scrollToOffset({ offset: 0, animated: false });
+    menungguTata.current = true;
     setTabTampil(tujuan);
   }, []);
 
   // Isi daftar pudar keluar dulu, baru isi tab baru pudar masuk. Kalau
   // pengguna kembali ke tab semula sebelum pudar keluar selesai, pudar
-  // keluar dibatalkan dan isi lama kembali terang.
+  // keluar dibatalkan dan isi lama kembali terang. Kalau isi baru sedang
+  // menunggu tertata, pudar masuk datang dari kepala daftar yang sudah
+  // mengukur barunya.
   useEffect(() => {
     if (activeTab === tabTampil) {
+      if (menungguTata.current) {
+        return;
+      }
       opasitasDaftar.value = kurangiGerak
         ? 1
         : withTiming(1, {
@@ -1015,6 +1026,20 @@ export function OrdersScreenBase({
   const gayaOpasitas = useAnimatedStyle(() => ({
     opacity: opasitasDaftar.value,
   }));
+
+  // Kepala daftar baru sudah tertata: isi tab yang baru ditampilkan sudah
+  // siap digambar, jadi pudar masuk boleh jalan.
+  const saatKepalaTertata = useCallback(() => {
+    if (!menungguTata.current) return;
+    if (activeTab !== tabTampil) return;
+    menungguTata.current = false;
+    opasitasDaftar.value = kurangiGerak
+      ? 1
+      : withTiming(1, {
+          duration: motion.duration.fadeIn,
+          easing: standardEasing,
+        });
+  }, [activeTab, tabTampil, kurangiGerak, opasitasDaftar]);
 
   // Kartu yang hilang dari Tersedia keluar ke kanan. Syarat tab aktif
   // mematikan gerak keluar begitu isi lama mulai memudar, jadi kartu tidak
@@ -1154,6 +1179,17 @@ export function OrdersScreenBase({
 
   const tampilTersedia = tabTampil === TAB_TERSEDIA;
 
+  // Kepala daftar dibungkus satu View yang selalu dipasang, walau isinya
+  // kosong. Wrapper ini memberitahu kalau isi tab baru sudah tertata, jadi
+  // pudar masuk tidak jalan sebelum isi baru benar-benar siap tampil. Kuncinya
+  // diganti tiap tab berganti, jadi wrapper dipasang ulang dan event layout
+  // datang lagi.
+  const kepalaDaftar = (
+    <View key={tabTampil} testID="kepala-daftar" onLayout={saatKepalaTertata}>
+      {tampilTersedia ? renderPoolHeader() : notice}
+    </View>
+  );
+
   return (
     <View style={gayaLayar.layar}>
       <StatusBar barStyle="light-content" backgroundColor={warnaTema.header} />
@@ -1185,7 +1221,10 @@ export function OrdersScreenBase({
         </View>
         {/* Isi daftar dibungkus lapisan sendiri, jadi isinya bisa pudar
             saat ganti tab tanpa ikut menggeser isi layar. */}
-        <Animated.View style={[gayaLayar.wadahDaftar, gayaOpasitas]}>
+        <Animated.View
+          testID="isi-daftar"
+          style={[gayaLayar.wadahDaftar, gayaOpasitas]}
+        >
           <Animated.FlatList
             ref={daftarRef}
             data={tampilTersedia ? poolUrut : myOrdersUrut}
@@ -1194,7 +1233,7 @@ export function OrdersScreenBase({
             itemLayoutAnimation={dalamJendela ? undefined : GESER_BARIS}
             keyExtractor={(row) => row.id}
             renderItem={tampilTersedia ? renderPoolItem : renderMineItem}
-            ListHeaderComponent={tampilTersedia ? renderPoolHeader() : notice}
+            ListHeaderComponent={kepalaDaftar}
             ListEmptyComponent={tampilTersedia ? kosongTersedia : kosongSaya}
             refreshControl={
               <RefreshControl
