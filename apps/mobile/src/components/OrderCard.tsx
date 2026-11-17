@@ -6,9 +6,14 @@
  * customer.
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { OrderStatus } from '@delivery/shared';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { Button } from './Button';
 import { HelpLine } from './HelpLine';
@@ -16,11 +21,15 @@ import { StatusLabel } from './StatusLabel';
 import { SyncBadge } from './SyncBadge';
 import type { SyncState } from './SyncBadge';
 import { Icon } from '../theme/Icon';
+import { exitEasing } from './motion/presets';
+import { useInitialWindow } from './motion/InitialWindow';
 import { perTema, ThemeProvider, useTheme } from '../theme/ThemeProvider';
-import { elevation, radius, size, space, stroke, type } from '../theme/tokens';
+import { elevation, motion, radius, size, space, stroke, type } from '../theme/tokens';
 
 const TITIK_TENGAH = '\u00b7';
 const JARAK_IKON = 6;
+// Tebal cincin sorot di sekeliling kartu.
+const TEBAL_SOROTAN = 2;
 
 export interface OrderCardPoolProps {
   orderNumber: string;
@@ -46,6 +55,8 @@ export interface OrderCardMineProps {
   amountText: string;
   onPress: () => void;
   timeText?: string;
+  /** Kartu ini baru diterima, jadi dikelilingi cincin sorot sekali. */
+  highlight?: boolean;
 }
 
 export interface OrderCardRowProps {
@@ -128,6 +139,16 @@ const gaya = perTema((c) =>
     },
     lencana: {
       marginTop: 12,
+    },
+    sorotan: {
+      position: 'absolute',
+      top: -(stroke.hairline + TEBAL_SOROTAN),
+      left: -(stroke.hairline + TEBAL_SOROTAN),
+      right: -(stroke.hairline + TEBAL_SOROTAN),
+      bottom: -(stroke.hairline + TEBAL_SOROTAN),
+      borderWidth: TEBAL_SOROTAN,
+      borderColor: c.accent,
+      borderRadius: radius.xl2 + TEBAL_SOROTAN,
     },
   }),
 );
@@ -213,6 +234,7 @@ function KartuMine(props: OrderCardMineProps): React.JSX.Element {
   const { name } = useTheme();
   const s = gaya[name];
   const bayangan = name === 'terang' ? { elevation: elevation.card } : null;
+  const dalamJendela = useInitialWindow();
 
   return (
     <Pressable
@@ -220,6 +242,7 @@ function KartuMine(props: OrderCardMineProps): React.JSX.Element {
       accessibilityRole="button"
       style={[s.kartu, bayangan]}
     >
+      {props.highlight && !dalamJendela ? <CincinSorot /> : null}
       <View style={s.atas}>
         <StatusLabel status={props.status} label={props.statusText} />
         <Text style={s.jumlah}>{props.amountText}</Text>
@@ -239,6 +262,34 @@ function KartuMine(props: OrderCardMineProps): React.JSX.Element {
       */}
       <SyncBadge state={props.syncState ?? null} style={s.lencana} />
     </Pressable>
+  );
+}
+
+/**
+ * Cincin sorot di sekeliling kartu.
+ *
+ * Cincin muncul utuh lalu memudar habis, jadi mata sempat menangkap order
+ * baru itu sebelum sorotannya hilang.
+ */
+function CincinSorot(): React.JSX.Element {
+  const { name } = useTheme();
+  const s = gaya[name];
+  const opasitas = useSharedValue(1);
+  const gayaSorot = useAnimatedStyle(() => ({ opacity: opasitas.value }));
+
+  useEffect(() => {
+    opasitas.value = withTiming(0, {
+      duration: motion.duration.highlight,
+      easing: exitEasing,
+    });
+  }, [opasitas]);
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      testID="sorotan-kartu"
+      style={[s.sorotan, gayaSorot]}
+    />
   );
 }
 

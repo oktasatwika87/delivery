@@ -11,6 +11,7 @@ import { act, fireEvent, render } from '@testing-library/react-native';
 
 import { OrderCard } from './OrderCard';
 import { CheckMark } from './motion/CheckMark';
+import { InitialWindowProvider } from './motion/InitialWindow';
 import { Icon } from '../theme/Icon';
 import { motion, themes } from '../theme/tokens';
 
@@ -325,6 +326,60 @@ describe('OrderCard lencana sinkron yang bertahan', () => {
     });
 
     expect(queryByTestId('lencana-sinkron')).toBeNull();
+  });
+});
+
+describe('OrderCard sorotan kartu', () => {
+  it('dengan highlight ada cincin oranye di sekeliling kartu', () => {
+    const { getByTestId } = render(
+      <OrderCard
+        variant="mine"
+        orderNumber="#1D42E3E2"
+        status="DELIVERED"
+        statusText="Selesai"
+        addressMain="Jl. Merdeka 10"
+        amountText="Rp45.000"
+        onPress={() => {}}
+        highlight
+      />,
+    );
+    const gaya = StyleSheet.flatten(getByTestId('sorotan-kartu').props.style);
+    expect(gaya.borderColor).toBe(themes.gelap.accent);
+    expect(gaya.borderWidth).toBe(2);
+    expect(gaya.borderRadius).toBe(20);
+  });
+
+  it('tanpa highlight tidak ada cincin sorotan', () => {
+    const { queryByTestId } = render(
+      <OrderCard
+        variant="mine"
+        orderNumber="#1D42E3E2"
+        status="DELIVERED"
+        statusText="Selesai"
+        addressMain="Jl. Merdeka 10"
+        amountText="Rp45.000"
+        onPress={() => {}}
+      />,
+    );
+    expect(queryByTestId('sorotan-kartu')).toBeNull();
+  });
+
+  it('di dalam jendela awal tidak ada cincin sorotan', () => {
+    const { queryByTestId } = render(
+      <InitialWindowProvider>
+        <OrderCard
+          variant="mine"
+          orderNumber="#1D42E3E2"
+          status="DELIVERED"
+          statusText="Selesai"
+          addressMain="Jl. Merdeka 10"
+          amountText="Rp45.000"
+          onPress={() => {}}
+          highlight
+        />
+      </InitialWindowProvider>,
+    );
+    expect(queryByTestId('sorotan-kartu')).toBeNull();
   });
 });
 

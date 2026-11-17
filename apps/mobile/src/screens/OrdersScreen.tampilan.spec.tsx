@@ -828,6 +828,105 @@ describe('urutan Terima di layar Order', () => {
   });
 });
 
+describe('sorotan order yang baru diterima', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    (acceptOrder as jest.Mock).mockResolvedValue({
+      id: 'pool-terima-urutan',
+      customerId: 'cust-1',
+      driverId: 'driver-123',
+      status: 'PREPARING',
+      items: [],
+      deliveryAddress: { street: 'Jl. Terima 1', city: 'Jakarta' },
+      totalCents: 25000,
+      currency: 'IDR',
+      notes: null,
+      createdAt: '2026-01-15T03:04:05.000Z',
+      updatedAt: '2026-01-15T03:05:00.000Z',
+      version: 4,
+      cancelledBy: null,
+      cancelReason: null,
+    });
+    mockPendingActions = [];
+    setBarisPool([makeBaris({ id: 'pool-terima-urutan' })]);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  test('kartu di Order Saya disorot lalu sorotannya hilang', async () => {
+    const myOrders = [
+      makeBaris({ id: 'pool-terima-urutan', status: 'ASSIGNED', driverId: 'driver-123' }),
+    ];
+
+    const { getByText, getByTestId, queryByTestId } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={myOrders as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Terima Order'));
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(motion.duration.drawLine);
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(motion.duration.exit);
+    });
+
+    expect(getByTestId('sorotan-kartu')).toBeTruthy();
+
+    // Sorotannya cuma sekali, jadi hilang sendiri setelah waktunya lewat.
+    await act(async () => {
+      jest.advanceTimersByTime(motion.duration.fadeOut + motion.duration.highlight);
+    });
+
+    expect(queryByTestId('sorotan-kartu')).toBeNull();
+  });
+
+  test('kurangi gerakan tidak ada sorotan', async () => {
+    const reanimated = require('react-native-reanimated') as {
+      useReducedMotion: () => boolean;
+    };
+    jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+
+    const myOrders = [
+      makeBaris({ id: 'pool-terima-urutan', status: 'ASSIGNED', driverId: 'driver-123' }),
+    ];
+
+    const { getByText, queryByTestId } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={myOrders as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Terima Order'));
+    });
+
+    expect(queryByTestId('sorotan-kartu')).toBeNull();
+  });
+});
+
 describe('kepala daftar Tersedia', () => {
   beforeEach(() => {
     jest.clearAllMocks();

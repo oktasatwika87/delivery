@@ -207,6 +207,8 @@ export function OrdersScreenBase({
   // membaca urutan yang sedang jalan tanpa closure basi.
   const terimaRef = useRef<UrutanTerima | null>(null);
   terimaRef.current = terimaBerhasil;
+  // Order yang baru diterima, disorot sekali.
+  const [sorotId, setSorotId] = useState<string | null>(null);
 
   // GPS location state
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -615,10 +617,21 @@ export function OrdersScreenBase({
     }
     const timer = setTimeout(() => {
       setTerimaBerhasil(null);
+      setSorotId(terimaBerhasil.id);
       setActiveTab(TAB_SAYA);
     }, motion.duration.exit);
     return () => clearTimeout(timer);
   }, [terimaBerhasil, kartuTerimaAda, buangDariTersedia]);
+
+  // Sorotan cuma sekali. Kartunya dipasang lagi setelah isi tab lama
+  // memudar, jadi sorotannya dibersihkan setelah waktu sorot lewat.
+  useEffect(() => {
+    if (!sorotId) return;
+    const timer = setTimeout(() => {
+      setSorotId(null);
+    }, motion.duration.fadeOut + motion.duration.highlight);
+    return () => clearTimeout(timer);
+  }, [sorotId]);
 
   // Accept order
   const handleAccept = useCallback(
@@ -775,6 +788,7 @@ export function OrdersScreenBase({
         const urutan = terimaRef.current;
         if (urutan) {
           buangDariTersedia(urutan.id);
+          setSorotId(urutan.id);
           setTerimaBerhasil(null);
         }
         setActiveTab(key);
@@ -832,8 +846,15 @@ export function OrdersScreenBase({
   // Nilai di luar data yang dipakai renderItem. FlatList cuma pasti
   // menggambar ulang sel kalau data atau extraData berubah.
   const extraData = useMemo(
-    () => ({ acceptingOrderId, online, keluarTersedia, actionsByOrderId, terimaBerhasil }),
-    [acceptingOrderId, online, keluarTersedia, actionsByOrderId, terimaBerhasil],
+    () => ({
+      acceptingOrderId,
+      online,
+      keluarTersedia,
+      actionsByOrderId,
+      terimaBerhasil,
+      sorotId,
+    }),
+    [acceptingOrderId, online, keluarTersedia, actionsByOrderId, terimaBerhasil, sorotId],
   );
 
   // Kartu di Tersedia tidak dibuka ke detail: baris pool hanya berisi
@@ -883,6 +904,7 @@ export function OrdersScreenBase({
           amountText={formatCurrency(readTotalCents(item), readCurrency(item))}
           timeText={formatOrderTime(readWaktu(item, 'created_at'), Date.now())}
           onPress={() => navigation.navigate('OrderDetail', { orderId: item.id })}
+          highlight={item.id === sorotId}
         />
       </ListEnterRow>
     );
