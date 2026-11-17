@@ -285,10 +285,9 @@ const CHAT_PULL_RESPONSE: SyncPullResponse = {
 
 // Nilai yang diharapkan per kolom snake_case, dihitung manual dari payload
 // (tidak lewat buildRawRowForCreate, supaya tidak memakai kode yang sedang
-// diuji). created_at dari server.createdAt (diurai ke ms) kalau ada, kalau
-// tidak Date.now() di buildRawRowForCreate. updated_at selalu Date.now()
-// saat disimpan lokal, jadi updated_at TIDAK cocok dengan nilai payload
-// server; hanya created_at yang cocok persis.
+// diuji). created_at dan updated_at order dari server (diurai ke ms), jadi
+// keduanya cocok persis dengan nilai payload server. Payment dan chat
+// updated_at tetap Date.now() saat disimpan lokal, jadi hanya dicek > 0.
 const ORDERS_EXPECTED: Record<string, unknown> = {
   customer_id: 'cust-regression-pull-1',
   driver_id: 'driver-regression-pull-1',
@@ -307,10 +306,9 @@ const ORDERS_EXPECTED: Record<string, unknown> = {
   // v8 - tidak di-set di buildRawRowForCreate, default null:
   last_conflict_reason: null,
   last_conflict_at: null,
-  // created_at dari server.createdAt; updated_at dari Date.now()
-  // saat persist jadi hanya dicek > 0 (lihat it.each khusus timestamp).
+  // created_at dan updated_at dari server; keduanya diurai ke ms
   created_at: parseIsoMs(ORDER_PAYLOAD_DATA.createdAt),
-  updated_at: expect.any(Number),
+  updated_at: parseIsoMs(ORDER_PAYLOAD_DATA.updatedAt),
 };
 
 const PAYMENTS_EXPECTED: Record<string, unknown> = {
@@ -485,18 +483,10 @@ describe('jalur pull - regresi buildRawRowForCreate dengan adapter LokiJS asli',
         const row = await db.get<OrderModel>('orders').find(ORDER_ID);
         const actual = row._getRaw(col.name);
         const expected = ORDERS_EXPECTED[col.name];
-        // updated_at diisi Date.now() saat persist, pastikan > 0 saja,
-        // kecocokan persis dicek terpisah di tes "created_at sama dengan
-        // waktu server".
-        if (col.name === 'updated_at') {
-          expect(typeof actual).toBe('number');
-          expect(actual).toBeGreaterThan(0);
-        } else {
-          expect({ column: col.name, actual }).toEqual({
-            column: col.name,
-            actual: expected,
-          });
-        }
+        expect({ column: col.name, actual }).toEqual({
+          column: col.name,
+          actual: expected,
+        });
       },
     );
 

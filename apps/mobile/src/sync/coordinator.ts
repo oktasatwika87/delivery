@@ -42,9 +42,10 @@ const MAX_SYNC_ATTEMPTS = 5;
 /**
  * Parse string ISO 8601 jadi epoch milliseconds, atau null kalau input
  * tidak valid (bukan string, string kosong, atau string yang gagal di-parse
- * oleh Date constructor). Dipakai oleh buildRawRowForCreate untuk
- * konversi createdAt dari server (ISO string) jadi nilai kolom number
- * `created_at` / `client_created_at` / `server_created_at` di schema.
+ * oleh Date constructor). Dipakai buildRawRowForCreate dan
+ * applyServerDataToLocalRow untuk konversi createdAt dan updatedAt dari
+ * server (ISO string) jadi nilai kolom number `created_at` / `updated_at` /
+ * `client_created_at` / `server_created_at` di schema.
  */
 function parseIsoMsOrNull(value: unknown): number | null {
   if (typeof value !== 'string' || value.length === 0) return null;
@@ -601,6 +602,13 @@ export class SyncCoordinator implements Coordinator {
       row.notes = (d as any).notes ?? null;
       row.cancelledBy = (d as any).cancelledBy ?? null;
       row.cancelReason = (d as any).cancelReason ?? null;
+      // Waktu ubah ikut dari server, bukan waktu simpan lokal. Kolom ini
+      // dipakai ringkasan hari ini sebagai waktu order selesai, jadi kalau
+      // diisi waktu HP, order bulan lama ikut terhitung hari ini.
+      const updatedAtMs = parseIsoMsOrNull((d as any).updatedAt);
+      if (updatedAtMs !== null) {
+        row._setRaw('updated_at', updatedAtMs);
+      }
     } else if (record.entityType === 'payment') {
       row.orderId = (d as any).orderId;
       row.idempotencyKey = (d as any).idempotencyKey;
@@ -651,7 +659,9 @@ export class SyncCoordinator implements Coordinator {
    * created_at dan updated_at tidak diisi otomatis oleh
    * prepareCreateFromDirtyRaw, jadi keduanya dikirim eksplisit di sini:
    * created_at dari server (`data.createdAt`, parsed ke ms) atau fallback
-   * Date.now(); updated_at selalu Date.now() (waktu persist lokal).
+   * Date.now(); updated_at untuk order dari server (`data.updatedAt`, parsed
+   * ke ms) atau fallback Date.now(), untuk payment dan chat selalu
+   * Date.now() (waktu persist lokal).
    *
    * Function terpisah dari applyServerDataToLocalRow karena dua API ini
    * secara struktural berbeda (Model setter vs raw object API). Shared
@@ -691,6 +701,7 @@ export class SyncCoordinator implements Coordinator {
         notes: orderData.notes ?? null,
         cancelled_by: orderData.cancelledBy ?? null,
         cancel_reason: orderData.cancelReason ?? null,
+        updated_at: parseIsoMsOrNull(orderData.updatedAt) ?? now,
       };
     } else if (record.entityType === 'payment') {
       const paymentData = d as Payment;

@@ -517,6 +517,154 @@ describe('SyncCoordinator', () => {
       expect(updated!._raw._status).toBe('synced');
     });
 
+    // Waktu ubah order ikut dari server, bukan waktu simpan lokal, soalnya
+    // ringkasan hari ini memakainya sebagai waktu order selesai.
+    test('order baru dari server: updated_at ikut waktu server', async () => {
+      const pullResponse: SyncPullResponse = {
+        nextCursor: 'cursor-updated-at',
+        records: [
+          {
+            entityType: 'order',
+            id: 'order-updated-at-1',
+            serverVersion: 1,
+            serverChangedAt: '2026-01-20T10:00:00.000Z',
+            deleted: false,
+            data: {
+              customerId: 'cust-1',
+              driverId: null,
+              status: 'CONFIRMED',
+              items: [],
+              deliveryAddress: {},
+              totalCents: 25000,
+              currency: 'IDR',
+              notes: null,
+              updatedAt: '2026-01-20T10:00:00.000Z',
+            },
+          },
+        ],
+        serverTime: '2026-01-20T10:00:00.000Z',
+      };
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.applyPull(pullResponse, mockDb);
+
+      const created = state.records.get('orders')!.get('order-updated-at-1')!;
+      expect(created._raw.updated_at).toBe(Date.parse('2026-01-20T10:00:00.000Z'));
+    });
+
+    test('order yang sudah ada diperbarui: updated_at ikut waktu server', async () => {
+      const existingRow = createMockRow('order-updated-at-2', 'updated');
+      existingRow._raw.server_version = 2;
+      state.records.get('orders')!.set('order-updated-at-2', existingRow);
+
+      const pullResponse: SyncPullResponse = {
+        nextCursor: 'cursor-updated-at-2',
+        records: [
+          {
+            entityType: 'order',
+            id: 'order-updated-at-2',
+            serverVersion: 5,
+            serverChangedAt: '2026-02-01T08:00:00.000Z',
+            deleted: false,
+            data: {
+              customerId: 'cust-1',
+              driverId: 'driver-1',
+              status: 'DELIVERED',
+              items: [],
+              deliveryAddress: {},
+              totalCents: 25000,
+              currency: 'IDR',
+              notes: null,
+              updatedAt: '2026-02-01T08:00:00.000Z',
+            },
+          },
+        ],
+        serverTime: '2026-02-01T08:00:00.000Z',
+      };
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.applyPull(pullResponse, mockDb);
+
+      const updated = state.records.get('orders')!.get('order-updated-at-2')!;
+      expect(updated._raw.updated_at).toBe(Date.parse('2026-02-01T08:00:00.000Z'));
+    });
+
+    test('order baru dengan updatedAt kosong: updated_at waktu simpan lokal', async () => {
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+      try {
+        const pullResponse: SyncPullResponse = {
+          nextCursor: 'cursor-updated-at-3',
+          records: [
+            {
+              entityType: 'order',
+              id: 'order-updated-at-3',
+              serverVersion: 1,
+              serverChangedAt: '2026-01-20T10:00:00.000Z',
+              deleted: false,
+              data: {
+                customerId: 'cust-1',
+                driverId: null,
+                status: 'CONFIRMED',
+                items: [],
+                deliveryAddress: {},
+                totalCents: 25000,
+                currency: 'IDR',
+                notes: null,
+                updatedAt: '',
+              },
+            },
+          ],
+          serverTime: '2026-01-20T10:00:00.000Z',
+        };
+
+        // @ts-expect-error - accessing private method for testing
+        await coordinator.applyPull(pullResponse, mockDb);
+
+        const created = state.records.get('orders')!.get('order-updated-at-3')!;
+        expect(created._raw.updated_at).toBe(1_800_000_000_000);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    test('payment baru dari pull: updated_at tetap waktu simpan lokal', async () => {
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+      try {
+        const pullResponse: SyncPullResponse = {
+          nextCursor: 'cursor-updated-at-payment',
+          records: [
+            {
+              entityType: 'payment',
+              id: 'payment-updated-at-1',
+              serverVersion: 1,
+              serverChangedAt: '2026-01-20T10:00:00.000Z',
+              deleted: false,
+              data: {
+                orderId: 'order-1',
+                idempotencyKey: 'cod:abc-123-uuid',
+                method: 'CASH',
+                status: 'CAPTURED',
+                amountCents: 50000,
+                currency: 'IDR',
+                kind: 'PAYMENT',
+                externalRef: null,
+                updatedAt: '2026-01-20T10:00:00.000Z',
+              },
+            },
+          ],
+          serverTime: '2026-01-20T10:00:00.000Z',
+        };
+
+        // @ts-expect-error - accessing private method for testing
+        await coordinator.applyPull(pullResponse, mockDb);
+
+        const created = state.records.get('payments')!.get('payment-updated-at-1')!;
+        expect(created._raw.updated_at).toBe(1_800_000_000_000);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
     test('dengan record deleted -> row di-mark deleted_at dengan _status synced', async () => {
       // Setup: ada row lokal existing
       const existingRow = createMockRow('order-to-delete', 'updated');
@@ -1675,6 +1823,44 @@ describe('SyncCoordinator', () => {
         orderId: 'order-rejected-emit',
         reason: 'Order sudah di-reassign ke driver lain',
       }));
+    });
+
+    test('conflict ack on order: updated_at ikut waktu server', async () => {
+      const orderRow = createMockRow('order-conflict-updated-at', 'updated');
+      orderRow.serverVersion = 5;
+      orderRow.status = 'OUT_FOR_DELIVERY';
+      orderRow.itemsJson = '[]';
+      orderRow.addressJson = '{}';
+      orderRow.totalCents = 50000;
+      orderRow.currency = 'IDR';
+      state.records.get('orders')!.set('order-conflict-updated-at', orderRow);
+
+      const acks: SyncPushResponse['acks'] = [
+        {
+          entityType: 'order',
+          id: 'order-conflict-updated-at',
+          status: 'conflict',
+          serverVersion: 10,
+          serverChangedAt: '2026-02-01T00:00:00.000Z',
+          serverData: {
+            customerId: 'cust-1',
+            driverId: 'bob',
+            status: 'DELIVERED',
+            items: [],
+            deliveryAddress: {},
+            totalCents: 75000,
+            currency: 'IDR',
+            notes: null,
+            updatedAt: '2026-02-01T00:00:00.000Z',
+          },
+        },
+      ];
+
+      // @ts-expect-error - accessing private method for testing
+      await coordinator.resolveAcks(acks, mockDb);
+
+      const overwritten = state.records.get('orders')!.get('order-conflict-updated-at')!;
+      expect(overwritten._raw.updated_at).toBe(Date.parse('2026-02-01T00:00:00.000Z'));
     });
 
     test('conflict ack on order overwrites local data with server data', async () => {
