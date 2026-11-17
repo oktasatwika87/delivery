@@ -210,27 +210,44 @@ export function OrdersScreenBase({
   // Order yang baru diterima, disorot sekali.
   const [sorotId, setSorotId] = useState<string | null>(null);
 
-  // GPS location state
-  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
+  // Posisi GPS terakhir. Dipakai buat asal rute saat Terima, jadi disimpan
+  // di ref: posisinya sering berubah dan layar tidak perlu digambar ulang
+  // cuma karena GPS maju satu langkah.
+  const lokasiRef = useRef<{ lat: number; lng: number } | null>(null);
 
   // Refs for socket unsubscribe
   const unsubscribeRef = useRef<Array<() => void>>([]);
 
-  // Location subscription
+  // Langganan lokasi, polanya sama dengan layar Peta.
   useEffect(() => {
     let cancelled = false;
-    // Initial fix dari last-known cache
+    let unsubscribe: (() => void) | undefined;
+
+    // Lokasi cache, buat awal saat layar baru dibuka.
     locationService.getLastKnown().then((loc) => {
       if (cancelled || !loc) return;
-      setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
+      // Kalau langganan sudah memberi posisi, cache tidak boleh menimpanya.
+      if (lokasiRef.current !== null) return;
+      lokasiRef.current = { lat: loc.coords.latitude, lng: loc.coords.longitude };
     });
-    // Subscribe to updates
-    locationService.subscribe((loc) => {
-      setCurrentLocation({ lat: loc.coords.latitude, lng: loc.coords.longitude });
-    }).then((unsub) => {
-      if (cancelled) unsub();
-    });
-    return () => { cancelled = true; };
+
+    locationService
+      .subscribe((loc) => {
+        lokasiRef.current = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+      })
+      .then((unsub) => {
+        // Kalau layar sudah dilepas saat subscribe selesai, langsung berhenti.
+        if (cancelled) {
+          unsub();
+        } else {
+          unsubscribe = unsub;
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   // Network monitor subscription
@@ -745,13 +762,14 @@ export function OrdersScreenBase({
         // address_json. Asal dari GPS terakhir, syarat status 'online' dan
         // GPS tersedia. Tidak di-await (Terima tidak menunggu rute); gagal
         // hanya dicatat di log.
-        if (networkMonitor.getStatus() === 'online' && currentLocation) {
+        const lokasi = lokasiRef.current;
+        if (networkMonitor.getStatus() === 'online' && lokasi) {
           const addressJson = response.deliveryAddress;
           const coordinates = addressJson.coordinates;
           if (coordinates && coordinates.length === 2) {
             const [lng, lat] = coordinates;
             const destination = { lng, lat };
-            const origin = { lng: currentLocation.lng, lat: currentLocation.lat };
+            const origin = { lng: lokasi.lng, lat: lokasi.lat };
             routeService.getRoute({ origin, destination }).catch((err) => {
               console.warn('[OrdersScreen] pre-compute route failed:', err);
             });
@@ -761,7 +779,7 @@ export function OrdersScreenBase({
         setAcceptingOrderId(null);
       }
     },
-    [database, routeService, currentLocation, kurangiGerak, buangDariTersedia],
+    [database, routeService, kurangiGerak, buangDariTersedia],
   );
   // Sinkronkan ref agar tes bisa memanggil langsung dari luar komponen.
   handleAcceptRef.current = handleAccept;
@@ -1147,7 +1165,7 @@ const gaya = perTema((c) =>
 // handleAcceptRef dijaga agar selalu merujuk ke callback handleAccept terbaru,
 // yang bisa dipanggil langsung dari tes tanpa harus render/tekan tombol.
 // Fungsi-fungsi ini sudah punya closure terhadap database, setPoolOrders, fetchPool,
-// currentLocation, dan routeService saat dipanggil dari dalam OrdersScreenBase.
+// lokasiRef, dan routeService saat dipanggil dari dalam OrdersScreenBase.
 export const handleAcceptRef: { current: ((order: OrderModel) => Promise<void>) | null } = {
   current: null,
 };
