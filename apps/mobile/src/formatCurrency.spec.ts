@@ -17,4 +17,23 @@ describe('formatCurrency', () => {
     const result = formatCurrency(0, 'IDR');
     expect(result).toMatch(/Rp\s0/);
   });
+
+  it('formatter dibuat sekali per mata uang', () => {
+    const asli = Intl.NumberFormat;
+    const spy = jest
+      .spyOn(Intl, 'NumberFormat')
+      .mockImplementation(
+        (locales?: Intl.LocalesArgument, options?: Intl.NumberFormatOptions) =>
+          new asli(locales, options),
+      );
+
+    formatCurrency(1000, 'JPY');
+    formatCurrency(2000, 'JPY');
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    formatCurrency(1000, 'EUR');
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    spy.mockRestore();
+  });
 });
