@@ -6,6 +6,7 @@ import {
   StatusBar,
   StyleSheet,
   Text,
+  unstable_batchedUpdates,
   View,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -182,10 +183,6 @@ export function OrdersScreenBase({
   // Semua aksi outbox, untuk semua order. Satu langganan untuk seluruh
   // layar, jadi lencana hilang sendiri begitu aksi terkirim dan dihapus.
   const [pendingActions, setPendingActions] = useState<PendingActionModel[]>([]);
-  // Jumlah aksi yang masih antre, dipakai ConnectionBar.
-  const [pendingActionCount, setPendingActionCount] = useState(0);
-  // Jumlah aksi yang ditolak server atau COD yatim, dipakai ConnectionBar.
-  const [failedActionCount, setFailedActionCount] = useState(0);
   // Fetch pertama sudah selesai, berhasil atau gagal.
   const [firstFetchDone, setFirstFetchDone] = useState(false);
   // Order yang sedang diterima, buat menandai satu kartu saja.
@@ -265,7 +262,7 @@ export function OrdersScreenBase({
   }, [database]);
 
   // Fetch available pool from REST
-  const runFetchPool = useCallback(async (): Promise<void> => {
+  const runFetchPool = useCallback(async (): Promise<OrderModel[] | null> => {
     let response: Awaited<ReturnType<typeof fetchAvailableOrders>>;
     try {
       response = await fetchAvailableOrders();
@@ -276,7 +273,7 @@ export function OrdersScreenBase({
       if (!(err instanceof UnauthorizedError)) {
         console.warn('[OrdersScreen] fetchPool failed:', err);
       }
-      return;
+      return null;
     }
 
     const { items: serverItems, hasMore } = response;
@@ -430,16 +427,23 @@ export function OrdersScreenBase({
         Q.where('deleted_at', null),
       )
       .fetch();
-    setPoolOrders(pool);
+    return pool;
   }, [database]);
 
   // Penanda fetch pertama tetap terisi walau fetch gagal, supaya layar tahu
   // daftar sudah ditanyakan ke server.
   const fetchPool = useCallback(async (): Promise<void> => {
+    let pool: OrderModel[] | null = null;
     try {
-      await runFetchPool();
+      pool = await runFetchPool();
     } finally {
-      setFirstFetchDone(true);
+      // Daftar baru dan penanda fetch ikut digambar sekali.
+      unstable_batchedUpdates(() => {
+        if (pool) {
+          setPoolOrders(pool);
+        }
+        setFirstFetchDone(true);
+      });
     }
   }, [runFetchPool]);
 
@@ -491,23 +495,31 @@ export function OrdersScreenBase({
       .observeWithColumns(['status'])
       .subscribe((actions) => {
         setPendingActions(actions);
-        setPendingActionCount(
-          actions.filter((action) => {
-            const status = action._getRaw('status');
-            return status === 'pending' || status === 'syncing';
-          }).length,
-        );
-        setFailedActionCount(
-          actions.filter((action) => {
-            const status = action._getRaw('status');
-            return status === 'failed' || status === 'orphaned_needs_review';
-          }).length,
-        );
       });
     return () => {
       subscription.unsubscribe();
     };
   }, [database]);
+
+  // Jumlah aksi yang masih antre, dipakai ConnectionBar.
+  const pendingActionCount = useMemo(
+    () =>
+      pendingActions.filter((action) => {
+        const status = action._getRaw('status');
+        return status === 'pending' || status === 'syncing';
+      }).length,
+    [pendingActions],
+  );
+
+  // Jumlah aksi yang ditolak server atau COD yatim, dipakai ConnectionBar.
+  const failedActionCount = useMemo(
+    () =>
+      pendingActions.filter((action) => {
+        const status = action._getRaw('status');
+        return status === 'failed' || status === 'orphaned_needs_review';
+      }).length,
+    [pendingActions],
+  );
 
   // Aksi dikelompokkan per order, supaya tiap kartu cuma melihat aksinya
   // sendiri.
@@ -627,15 +639,19 @@ export function OrdersScreenBase({
         return;
       }
       const timer = setTimeout(() => {
-        buangDariTersedia(terimaBerhasil.id);
-        setTerimaBerhasil({ id: terimaBerhasil.id, tahap: 'keluar' });
+        unstable_batchedUpdates(() => {
+          buangDariTersedia(terimaBerhasil.id);
+          setTerimaBerhasil({ id: terimaBerhasil.id, tahap: 'keluar' });
+        });
       }, motion.duration.drawLine);
       return () => clearTimeout(timer);
     }
     const timer = setTimeout(() => {
-      setTerimaBerhasil(null);
-      setSorotId(terimaBerhasil.id);
-      setActiveTab(TAB_SAYA);
+      unstable_batchedUpdates(() => {
+        setTerimaBerhasil(null);
+        setSorotId(terimaBerhasil.id);
+        setActiveTab(TAB_SAYA);
+      });
     }, motion.duration.exit);
     return () => clearTimeout(timer);
   }, [terimaBerhasil, kartuTerimaAda, buangDariTersedia]);
@@ -679,6 +695,8 @@ export function OrdersScreenBase({
       }
 
       setAcceptingOrderId(order.id);
+      // Penanda sukses, jadi penanda menerima tidak diulang di finally.
+      let berhasil = false;
       try {
         let response: Awaited<ReturnType<typeof acceptOrder>>;
         try {
@@ -743,19 +761,24 @@ export function OrdersScreenBase({
         // Terima berhasil, jadi beri tahu lewat getaran.
         hapticAccept();
 
-        if (kurangiGerak) {
-          // Tanpa gerakan, kartu langsung hilang dan tab langsung pindah.
-          buangDariTersedia(order.id);
-          setActiveTab(TAB_SAYA);
-        } else {
-          // Kalau urutan sebelumnya masih jalan, kartunya langsung dibuang.
-          const sebelumnya = terimaRef.current;
-          if (sebelumnya && sebelumnya.id !== order.id) {
-            buangDariTersedia(sebelumnya.id);
+        // Semua perubahan keadaan digabung, layar cuma digambar sekali.
+        unstable_batchedUpdates(() => {
+          if (kurangiGerak) {
+            // Tanpa gerakan, kartu langsung hilang dan tab langsung pindah.
+            buangDariTersedia(order.id);
+            setActiveTab(TAB_SAYA);
+          } else {
+            // Kalau urutan sebelumnya masih jalan, kartunya langsung dibuang.
+            const sebelumnya = terimaRef.current;
+            if (sebelumnya && sebelumnya.id !== order.id) {
+              buangDariTersedia(sebelumnya.id);
+            }
+            // Tombol jadi centang dulu, kartu keluar kemudian.
+            setTerimaBerhasil({ id: order.id, tahap: 'centang' });
           }
-          // Tombol jadi centang dulu, kartu keluar kemudian.
-          setTerimaBerhasil({ id: order.id, tahap: 'centang' });
-        }
+          setAcceptingOrderId(null);
+          berhasil = true;
+        });
 
         // Pre-compute route for offline-ready. Pakai koordinat dari respons
         // (bukan dari model baris), karena baris pool awalnya tidak punya
@@ -776,7 +799,10 @@ export function OrdersScreenBase({
           }
         }
       } finally {
-        setAcceptingOrderId(null);
+        // Jalur sukses sudah mengosongkan penanda menerima dalam satu batch.
+        if (!berhasil) {
+          setAcceptingOrderId(null);
+        }
       }
     },
     [database, routeService, kurangiGerak, buangDariTersedia],
