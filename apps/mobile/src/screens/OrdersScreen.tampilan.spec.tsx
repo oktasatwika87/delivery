@@ -431,6 +431,64 @@ describe('tab layar Order', () => {
   });
 });
 
+describe('ganti tab di layar Order', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    (acceptOrder as jest.Mock).mockResolvedValue({});
+    mockPendingActions = [];
+    setBarisPool([]);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('penanda tab langsung pindah di render yang sama dengan ketukan', async () => {
+    const { getByText, UNSAFE_getByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Tersedia')).toBeTruthy();
+    });
+
+    fireEvent.press(getByText('Order Saya'));
+
+    expect(UNSAFE_getByType(Tabs).props.activeKey).toBe('mine');
+  });
+
+  test('kurangi gerakan: isi daftar langsung berganti tanpa pudar', async () => {
+    const reanimated = require('react-native-reanimated') as {
+      useReducedMotion: () => boolean;
+    };
+    jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+    setBarisPool([makeBaris({ id: 'pool-kurang-1' })]);
+
+    const { getByText, UNSAFE_getByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    fireEvent.press(getByText('Order Saya'));
+
+    // Isi Order Saya sudah tampil, tidak menunggu pudar.
+    expect(idDariDaftar(UNSAFE_getByType(FlatList).props.data)).toEqual([]);
+    expect(getByText('Belum ada order diterima')).toBeTruthy();
+  });
+});
+
 describe('kepala daftar Tersedia', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -1030,7 +1088,9 @@ describe('tema dan tata letak layar Order', () => {
     expect(urutan[0].type).toBe(MainHeader);
     expect(urutan[1].props.style).toBe(UNSAFE_getByType(DaySummary).parent?.props.style);
     expect(urutan[2].props.style).toBe(UNSAFE_getByType(Tabs).parent?.props.style);
-    expect(urutan[3].type).toBe(FlatList);
+    // Daftar dibungkus lapisan yang bisa pudar, jadi FlatList ada di dalam
+    // lapisan itu, bukan langsung jadi anak isi layar.
+    expect(leluhur(UNSAFE_getByType(FlatList)).includes(urutan[3])).toBe(true);
   });
 
   test('kepala daftar memakai tinggi 28, ikon kecil, dan warna teks halus', async () => {

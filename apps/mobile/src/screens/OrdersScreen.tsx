@@ -15,7 +15,13 @@ import { withDatabase, withObservables } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
 import { of } from 'rxjs';
 import { OrderStatus } from '@delivery/shared';
-import Animated from 'react-native-reanimated';
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
@@ -55,10 +61,10 @@ import type { TabItem } from '../components/Tabs';
 import { OrderCard } from '../components/OrderCard';
 import { EmptyState } from '../components/EmptyState';
 import { Icon } from '../theme/Icon';
-import { shift } from '../components/motion/presets';
+import { exitEasing, shift, standardEasing } from '../components/motion/presets';
 import { useInitialWindow } from '../components/motion/InitialWindow';
 import { perTema, ThemeProvider, useTheme } from '../theme/ThemeProvider';
-import { size, space, type } from '../theme/tokens';
+import { motion, size, space, type } from '../theme/tokens';
 import { formatCurrency } from '../formatCurrency';
 import { formatOrderNumber } from '../formatOrderNumber';
 import { formatOrderTime } from '../formatOrderTime';
@@ -170,6 +176,14 @@ export function OrdersScreenBase({
   const [acceptingOrderId, setAcceptingOrderId] = useState<string | null>(null);
   // Tab awal ditentukan sekali, waktu layar dipasang.
   const [activeTab, setActiveTab] = useState(() => tabAwal(myOrders));
+  // Tab yang isinya sedang tampil. Berbeda dari activeTab selama isi lama
+  // masih memudar keluar sebelum isi baru masuk.
+  const [tabTampil, setTabTampil] = useState<TabKey>(() => activeTab);
+  // Kurangi gerakan: isi langsung berubah tanpa pudar.
+  const kurangiGerak = useReducedMotion();
+  // Opasitas isi daftar, dipakai pudar saat ganti tab.
+  const opasitasDaftar = useSharedValue(1);
+  const daftarRef = useRef<FlatList<OrderModel>>(null);
 
   // GPS location state
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -679,6 +693,44 @@ export function OrdersScreenBase({
     }
   }, []);
 
+  // Ganti isi daftar: gulir ke atas dulu, lalu tampilkan isi tab tujuan.
+  const gantiIsi = useCallback((tujuan: TabKey) => {
+    daftarRef.current?.scrollToOffset({ offset: 0, animated: false });
+    setTabTampil(tujuan);
+  }, []);
+
+  // Isi daftar pudar keluar dulu, baru isi tab baru pudar masuk. Kalau
+  // pengguna kembali ke tab semula sebelum pudar keluar selesai, pudar
+  // keluar dibatalkan dan isi lama kembali terang.
+  useEffect(() => {
+    if (activeTab === tabTampil) {
+      opasitasDaftar.value = kurangiGerak
+        ? 1
+        : withTiming(1, {
+            duration: motion.duration.fadeIn,
+            easing: standardEasing,
+          });
+      return;
+    }
+    if (kurangiGerak) {
+      gantiIsi(activeTab);
+      return;
+    }
+    opasitasDaftar.value = withTiming(
+      0,
+      { duration: motion.duration.fadeOut, easing: exitEasing },
+      (selesai) => {
+        if (selesai) {
+          runOnJS(gantiIsi)(activeTab);
+        }
+      },
+    );
+  }, [activeTab, tabTampil, kurangiGerak, gantiIsi, opasitasDaftar]);
+
+  const gayaOpasitas = useAnimatedStyle(() => ({
+    opacity: opasitasDaftar.value,
+  }));
+
   // Kartu di Tersedia tidak dibuka ke detail: baris pool hanya berisi
   // kota, jadi detailnya tampil seperti order rusak. Tombol Terima di
   // dalam kartu tetap dipakai.
@@ -787,7 +839,7 @@ export function OrdersScreenBase({
     />
   );
 
-  const tampilTersedia = activeTab === TAB_TERSEDIA;
+  const tampilTersedia = tabTampil === TAB_TERSEDIA;
 
   return (
     <View style={gayaLayar.layar}>
@@ -818,20 +870,25 @@ export function OrdersScreenBase({
         <View style={gayaLayar.wadahTab}>
           <Tabs tabs={tabs} activeKey={activeTab} onChange={onTabChange} />
         </View>
-        <FlatList
-          data={tampilTersedia ? poolUrut : myOrdersUrut}
-          keyExtractor={(row) => row.id}
-          renderItem={tampilTersedia ? renderPoolItem : renderMineItem}
-          ListHeaderComponent={tampilTersedia ? renderPoolHeader() : notice}
-          ListEmptyComponent={tampilTersedia ? kosongTersedia : kosongSaya}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing || (fetchBelumSelesai && networkStatus !== 'offline')}
-              onRefresh={onRefresh}
-            />
-          }
-          contentContainerStyle={gayaLayar.daftar}
-        />
+        {/* Isi daftar dibungkus lapisan sendiri, jadi isinya bisa pudar
+            saat ganti tab tanpa ikut menggeser isi layar. */}
+        <Animated.View style={[gayaLayar.wadahDaftar, gayaOpasitas]}>
+          <FlatList
+            ref={daftarRef}
+            data={tampilTersedia ? poolUrut : myOrdersUrut}
+            keyExtractor={(row) => row.id}
+            renderItem={tampilTersedia ? renderPoolItem : renderMineItem}
+            ListHeaderComponent={tampilTersedia ? renderPoolHeader() : notice}
+            ListEmptyComponent={tampilTersedia ? kosongTersedia : kosongSaya}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing || (fetchBelumSelesai && networkStatus !== 'offline')}
+                onRefresh={onRefresh}
+              />
+            }
+            contentContainerStyle={gayaLayar.daftar}
+          />
+        </Animated.View>
       </Animated.View>
     </View>
   );
@@ -918,6 +975,9 @@ const gaya = perTema((c) =>
     wadahTab: {
       marginTop: space[3],
       marginHorizontal: space[4],
+    },
+    wadahDaftar: {
+      flex: 1,
     },
     daftar: {
       paddingTop: space[2],

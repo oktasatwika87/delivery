@@ -27,9 +27,11 @@
  * Module ini di-resolve via moduleNameMapper di jest.config.js.
  */
 
-import type { ComponentType, ReactElement, ReactNode } from 'react';
+import type { ComponentType, ReactElement, ReactNode, Ref } from 'react';
 declare const module: { exports: unknown };
 
+// React di-require tanpa tipe supaya stub ini bebas dari aturan komponen
+// asli, seperti yang dipakai file ini sejak awal.
 const React = require('react');
 
 // Helpers
@@ -162,6 +164,7 @@ const KeyboardAvoidingView = makeComponent('KeyboardAvoidingView');
 // asli tidak pakai children, tapi render data lewat renderItem.
 // Stub ini memanggil renderItem / ListEmptyComponent / ListHeaderComponent /
 // ListFooterComponent supaya RNTL bisa query output yang sesungguhnya.
+// Dipakai forwardRef supaya layar bisa memanggil scrollToOffset tanpa cast.
 interface FlatListProps {
   data?: readonly unknown[];
   renderItem?: (info: { item: unknown; index: number }) => ReactNode;
@@ -171,7 +174,18 @@ interface FlatListProps {
   ListFooterComponent?: ReactElement | ComponentType;
   [key: string]: unknown;
 }
-function FlatList(props: FlatListProps): ReactElement {
+
+/** Metode daftar yang dipakai layar, semuanya tidak melakukan apa-apa. */
+interface FlatListMethods {
+  scrollToOffset: (params: { offset: number; animated?: boolean }) => void;
+  scrollToIndex: (params: { index: number; animated?: boolean }) => void;
+  scrollToEnd: (params?: { animated?: boolean }) => void;
+}
+
+const FlatList = React.forwardRef(function FlatList(
+  props: FlatListProps,
+  ref: Ref<FlatListMethods>,
+) {
   const {
     data = [],
     renderItem,
@@ -181,6 +195,15 @@ function FlatList(props: FlatListProps): ReactElement {
     ListFooterComponent,
     ...rest
   } = props;
+  React.useImperativeHandle(
+    ref,
+    () => ({
+      scrollToOffset: () => {},
+      scrollToIndex: () => {},
+      scrollToEnd: () => {},
+    }),
+    [],
+  );
   const children: unknown[] = [];
   if (ListHeaderComponent) {
     children.push(
@@ -217,7 +240,7 @@ function FlatList(props: FlatListProps): ReactElement {
     );
   }
   return React.createElement(View, rest, children);
-}
+});
 FlatList.displayName = 'FlatList';
 
 class ActivityIndicator extends React.Component {
