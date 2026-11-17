@@ -55,10 +55,12 @@ jest.mock('../sync/ordersSocket', () => ({
   },
 }));
 
+// Objek navigasi dijaga tetap sama, seperti aslinya. Kalau berubah tiap
+// render, kartu akan digambar ulang terus.
+const mockNavigasi = { navigate: jest.fn() };
+
 jest.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({
-    navigate: jest.fn(),
-  }),
+  useNavigation: () => mockNavigasi,
 }));
 
 jest.mock('../map/routing', () => ({
@@ -74,6 +76,23 @@ jest.mock('../map/routeService', () => ({
     getRoute: (...args: unknown[]) => mockGetRoute(...args),
   })),
 }));
+
+// Hitungan gambar per nomor order, buat lihat kartu mana yang digambar ulang.
+const mockHitunganRender = new Map<string, number>();
+
+jest.mock('../components/OrderCard', () => {
+  const asli = jest.requireActual<typeof import('../components/OrderCard')>(
+    '../components/OrderCard',
+  );
+  return {
+    ...asli,
+    OrderCard: (props: import('../components/OrderCard').OrderCardProps) => {
+      const sebelumnya = mockHitunganRender.get(props.orderNumber) ?? 0;
+      mockHitunganRender.set(props.orderNumber, sebelumnya + 1);
+      return asli.OrderCard(props);
+    },
+  };
+});
 
 /** Posisi GPS yang dipakai tiruan langganan. */
 interface PosisiLokasi {
@@ -106,6 +125,7 @@ jest.mock('../db', () => ({ database: {} }));
 // Baris tiruan. Kolom dibaca layar lewat _getRaw.
 interface BarisPalsu {
   id: string;
+  raw: Record<string, unknown>;
   _getRaw: (column: string) => unknown;
   prepareUpdate: jest.Mock;
   prepareDestroyPermanently: jest.Mock;
@@ -137,6 +157,7 @@ function makeBaris(fields: FieldsBaris): BarisPalsu {
   };
   return {
     id: fields.id,
+    raw,
     _getRaw: (column: string) => raw[column],
     prepareUpdate: jest.fn((cb: (row: unknown) => void) => {
       const row = {
@@ -157,12 +178,27 @@ interface AksiPalsu {
   _getRaw: (column: string) => unknown;
 }
 
+function makeAksi(targetOrderId: string, status: string): AksiPalsu {
+  const raw: Record<string, unknown> = {
+    target_order_id: targetOrderId,
+    action_type: 'update_status',
+    status,
+    created_at: Date.now(),
+    payload_json: '',
+  };
+  return { _getRaw: (column: string) => raw[column] };
+}
+
+// Panggil balik langganan pending_actions, buat kirim aksi baru dari tes.
+let mockPanggilAksi: ((actions: AksiPalsu[]) => void) | null = null;
+
 const mockPendingActionsCollection = {
   query: jest.fn().mockReturnValue({
     fetch: jest.fn().mockResolvedValue([]),
     fetchCount: jest.fn().mockResolvedValue(0),
     observeWithColumns: jest.fn().mockReturnValue({
       subscribe: jest.fn((onChange: (actions: AksiPalsu[]) => void) => {
+        mockPanggilAksi = onChange;
         onChange([]);
         return { unsubscribe: jest.fn() };
       }),
@@ -207,18 +243,54 @@ function setBarisPool(rows: BarisPalsu[]): void {
 
 import { OrdersScreenBase } from './OrdersScreen';
 import { acceptOrder, fetchAvailableOrders } from '../sync/client';
+import { formatOrderNumber } from '../formatOrderNumber';
+
+// Respons server saat Terima berhasil.
+const responsAccept = {
+  id: 'pool-1',
+  customerId: 'cust-1',
+  driverId: 'driver-123',
+  status: 'PREPARING',
+  items: [],
+  deliveryAddress: {
+    street: 'Jl. Terima 1',
+    city: 'Jakarta',
+    coordinates: [106.8, -6.2],
+  },
+  totalCents: 25000,
+  currency: 'IDR',
+  notes: null,
+  createdAt: '2026-01-15T03:04:05.000Z',
+  updatedAt: '2026-01-15T03:05:00.000Z',
+  version: 4,
+  cancelledBy: null,
+  cancelReason: null,
+};
+
+/** Berapa kali kartu dengan nomor itu digambar. */
+function hitung(orderNumber: string): number {
+  return mockHitunganRender.get(orderNumber) ?? 0;
+}
 
 /** Tunggu semua kerja awal layar selesai: bacaan pool dan fetch pertama. */
-async function tungguAwalSelesai(getByText: (teks: string) => unknown): Promise<void> {
-  await waitFor(() => {
-    expect(getByText('Terima Order')).toBeTruthy();
-  });
+async function tungguAwalSelesai(): Promise<void> {
   await waitFor(() => {
     expect(fetchAvailableOrders).toHaveBeenCalled();
   });
   await act(async () => {
     await new Promise<void>((selesai) => setTimeout(selesai, 0));
   });
+  await act(async () => {
+    await new Promise<void>((selesai) => setTimeout(selesai, 0));
+  });
+}
+
+/** Tunggu kartu pool tampil, lalu tunggu kerja awal selesai. */
+async function tungguKartuPool(getAllByText: (teks: string) => readonly unknown[]): Promise<void> {
+  await waitFor(() => {
+    expect(getAllByText('Terima Order').length).toBeGreaterThan(0);
+  });
+  await tungguAwalSelesai();
 }
 
 describe('lokasi gps di layar Order', () => {
@@ -230,26 +302,7 @@ describe('lokasi gps di layar Order', () => {
     mockGetLastKnown.mockResolvedValue(null);
     mockGetRoute.mockClear();
     (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
-    (acceptOrder as jest.Mock).mockResolvedValue({
-      id: 'pool-terima-1',
-      customerId: 'cust-1',
-      driverId: 'driver-123',
-      status: 'PREPARING',
-      items: [],
-      deliveryAddress: {
-        street: 'Jl. Terima 1',
-        city: 'Jakarta',
-        coordinates: [106.8, -6.2],
-      },
-      totalCents: 25000,
-      currency: 'IDR',
-      notes: null,
-      createdAt: '2026-01-15T03:04:05.000Z',
-      updatedAt: '2026-01-15T03:05:00.000Z',
-      version: 4,
-      cancelledBy: null,
-      cancelReason: null,
-    });
+    (acceptOrder as jest.Mock).mockResolvedValue(responsAccept);
     setBarisPool([]);
   });
 
@@ -257,7 +310,7 @@ describe('lokasi gps di layar Order', () => {
     setBarisPool([makeBaris({ id: 'pool-lokasi-1' })]);
     const onRender = jest.fn();
 
-    const { getByText } = render(
+    const { getAllByText } = render(
       <Profiler id="layar-order" onRender={onRender}>
         <OrdersScreenBase
           database={mockDatabase as never}
@@ -267,7 +320,7 @@ describe('lokasi gps di layar Order', () => {
       </Profiler>,
     );
 
-    await tungguAwalSelesai(getByText);
+    await tungguKartuPool(getAllByText);
 
     // Layar sudah tenang, jadi hitungan komit tidak berubah sendiri.
     const sebelum = onRender.mock.calls.length;
@@ -287,7 +340,7 @@ describe('lokasi gps di layar Order', () => {
   test('terima memakai posisi terakhir dari langganan buat asal rute', async () => {
     setBarisPool([makeBaris({ id: 'pool-terima-1' })]);
 
-    const { getByText } = render(
+    const { getByText, getAllByText } = render(
       <OrdersScreenBase
         database={mockDatabase as never}
         myOrders={[] as never}
@@ -295,7 +348,7 @@ describe('lokasi gps di layar Order', () => {
       />,
     );
 
-    await tungguAwalSelesai(getByText);
+    await tungguKartuPool(getAllByText);
 
     await act(async () => {
       mockPendengarLokasi[0]({ coords: { latitude: -6.1, longitude: 106.9 } });
@@ -361,7 +414,7 @@ describe('lokasi gps di layar Order', () => {
   test('layar dilepas berhenti langganan lokasi', async () => {
     setBarisPool([makeBaris({ id: 'pool-lokasi-2' })]);
 
-    const { getByText, unmount } = render(
+    const { getAllByText, unmount } = render(
       <OrdersScreenBase
         database={mockDatabase as never}
         myOrders={[] as never}
@@ -369,10 +422,176 @@ describe('lokasi gps di layar Order', () => {
       />,
     );
 
-    await tungguAwalSelesai(getByText);
+    await tungguKartuPool(getAllByText);
 
     unmount();
 
     expect(mockBerhentiLangganan).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('kartu yang tidak berubah tidak digambar ulang', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockHitunganRender.clear();
+    mockPanggilAksi = null;
+    mockGetLastKnown.mockReset();
+    mockGetLastKnown.mockResolvedValue(null);
+    mockGetRoute.mockClear();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    (acceptOrder as jest.Mock).mockResolvedValue(responsAccept);
+    setBarisPool([]);
+  });
+
+  test('saat terima berjalan cuma kartu yang menerima digambar ulang', async () => {
+    setBarisPool([
+      makeBaris({ id: 'pool-1' }),
+      makeBaris({ id: 'pool-2' }),
+      makeBaris({ id: 'pool-3' }),
+    ]);
+    // Terima belum selesai, jadi tombolnya masih memuat.
+    (acceptOrder as jest.Mock).mockImplementation(() => new Promise(() => {}));
+
+    const { getAllByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await tungguKartuPool(getAllByText);
+
+    const nomorSatu = formatOrderNumber('pool-1');
+    const nomorDua = formatOrderNumber('pool-2');
+    const nomorTiga = formatOrderNumber('pool-3');
+    const sebelumSatu = hitung(nomorSatu);
+    const sebelumDua = hitung(nomorDua);
+    const sebelumTiga = hitung(nomorTiga);
+
+    await act(async () => {
+      fireEvent.press(getAllByText('Terima Order')[0]);
+    });
+
+    expect(hitung(nomorSatu)).toBeGreaterThan(sebelumSatu);
+    expect(hitung(nomorDua)).toBe(sebelumDua);
+    expect(hitung(nomorTiga)).toBe(sebelumTiga);
+  });
+
+  test('setelah terima selesai cuma kartu yang menerima digambar ulang', async () => {
+    setBarisPool([
+      makeBaris({ id: 'pool-1' }),
+      makeBaris({ id: 'pool-2' }),
+      makeBaris({ id: 'pool-3' }),
+    ]);
+    let selesaiAccept: (() => void) | undefined;
+    (acceptOrder as jest.Mock).mockImplementation(
+      () =>
+        new Promise((selesai) => {
+          selesaiAccept = () => selesai(responsAccept);
+        }),
+    );
+
+    const { getAllByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await tungguKartuPool(getAllByText);
+
+    const nomorSatu = formatOrderNumber('pool-1');
+    const nomorDua = formatOrderNumber('pool-2');
+    const nomorTiga = formatOrderNumber('pool-3');
+    const sebelumSatu = hitung(nomorSatu);
+    const sebelumDua = hitung(nomorDua);
+    const sebelumTiga = hitung(nomorTiga);
+
+    await act(async () => {
+      fireEvent.press(getAllByText('Terima Order')[0]);
+    });
+
+    const setelahMuat = hitung(nomorSatu);
+    expect(setelahMuat).toBeGreaterThan(sebelumSatu);
+
+    await act(async () => {
+      selesaiAccept?.();
+      await new Promise<void>((selesai) => setTimeout(selesai, 0));
+    });
+
+    expect(hitung(nomorSatu)).toBeGreaterThan(setelahMuat);
+    expect(hitung(nomorDua)).toBe(sebelumDua);
+    expect(hitung(nomorTiga)).toBe(sebelumTiga);
+  });
+
+  test('aksi baru cuma menggambar ulang kartu order itu', async () => {
+    const myOrders = [
+      makeBaris({ id: 'order-1', status: 'PREPARING', driverId: 'driver-123' }),
+      makeBaris({ id: 'order-2', status: 'PREPARING', driverId: 'driver-123' }),
+      makeBaris({ id: 'order-3', status: 'PREPARING', driverId: 'driver-123' }),
+    ];
+
+    const { getByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={myOrders as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await tungguAwalSelesai();
+
+    await waitFor(() => {
+      expect(getByText(/Order #ORDER-1/)).toBeTruthy();
+    });
+
+    const nomorSatu = formatOrderNumber('order-1');
+    const nomorDua = formatOrderNumber('order-2');
+    const nomorTiga = formatOrderNumber('order-3');
+    const sebelumSatu = hitung(nomorSatu);
+    const sebelumDua = hitung(nomorDua);
+    const sebelumTiga = hitung(nomorTiga);
+
+    await act(async () => {
+      mockPanggilAksi?.([makeAksi('order-2', 'pending')]);
+    });
+
+    expect(hitung(nomorDua)).toBeGreaterThan(sebelumDua);
+    expect(hitung(nomorSatu)).toBe(sebelumSatu);
+    expect(hitung(nomorTiga)).toBe(sebelumTiga);
+  });
+
+  test('status yang berubah di model yang sama tetap tampil di kartu', async () => {
+    const baris = makeBaris({
+      id: 'order-1',
+      status: 'PREPARING',
+      driverId: 'driver-123',
+    });
+
+    const { getByText, rerender } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[baris] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await tungguAwalSelesai();
+
+    expect(getByText('Diterima')).toBeTruthy();
+
+    baris.raw.status = 'DELIVERED';
+
+    rerender(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[baris] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    expect(getByText('Selesai')).toBeTruthy();
   });
 });

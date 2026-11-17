@@ -60,10 +60,12 @@ import { MainHeader } from '../components/AppBar';
 import { Tabs } from '../components/Tabs';
 import type { TabItem } from '../components/Tabs';
 import { OrderCard } from '../components/OrderCard';
+import type { SyncState } from '../components/SyncBadge';
 import { EmptyState } from '../components/EmptyState';
 import { Icon } from '../theme/Icon';
 import { exitEasing, exitRight, shift, standardEasing } from '../components/motion/presets';
 import { ListEnterRow, useListEnter } from '../components/motion/listEnter';
+import type { ListEnterTracker } from '../components/motion/listEnter';
 import { useInitialWindow } from '../components/motion/InitialWindow';
 import { perTema, ThemeProvider, useTheme } from '../theme/ThemeProvider';
 import { motion, size, space, type } from '../theme/tokens';
@@ -156,6 +158,124 @@ function tabAwal(myOrders: OrderModel[]): TabKey {
   });
   return adaYangDikerjakan ? TAB_SAYA : TAB_TERSEDIA;
 }
+
+// Bentuk keluar kartu, diambil dari tipe baris daftar.
+type BentukKeluar = React.ComponentProps<typeof ListEnterRow>['exiting'];
+
+interface BarisTersediaProps {
+  order: OrderModel;
+  index: number;
+  tracker: ListEnterTracker;
+  exiting?: BentukKeluar;
+  orderNumber: string;
+  timeText: string;
+  city: string | null;
+  amountText: string;
+  online: boolean;
+  loading: boolean;
+  success: boolean;
+  onAccept: (order: OrderModel) => void;
+}
+
+/**
+ * Baris kartu di tab Tersedia.
+ *
+ * Semua nilai tampilan dihitung di layar lalu masuk sebagai props biasa.
+ * Baris ini dibungkus memo, jadi kartu yang tidak berubah tidak digambar
+ * ulang. Model order sendiri tidak dibaca di dalam baris, karena model
+ * diubah di tempat dan memo tidak melihat perubahan kolom.
+ */
+const BarisTersedia = React.memo(function BarisTersedia({
+  order,
+  index,
+  tracker,
+  exiting,
+  orderNumber,
+  timeText,
+  city,
+  amountText,
+  online,
+  loading,
+  success,
+  onAccept,
+}: BarisTersediaProps): React.JSX.Element {
+  const terima = useCallback(() => onAccept(order), [onAccept, order]);
+
+  return (
+    <ListEnterRow tracker={tracker} id={order.id} index={index} exiting={exiting}>
+      <OrderCard
+        variant="pool"
+        orderNumber={orderNumber}
+        timeText={timeText}
+        city={city}
+        amountText={amountText}
+        onAccept={terima}
+        acceptDisabled={!online}
+        acceptHelp={online ? undefined : TEKS_BUTUH_KONEKSI}
+        acceptLoading={loading}
+        acceptSuccess={success}
+      />
+    </ListEnterRow>
+  );
+});
+
+interface BarisSayaProps {
+  id: string;
+  index: number;
+  tracker: ListEnterTracker;
+  orderNumber: string;
+  status: OrderStatus;
+  statusText: string;
+  addressMain: string;
+  addressSub?: string;
+  syncState?: SyncState;
+  amountText: string;
+  timeText: string;
+  highlight: boolean;
+  onOpen: (id: string) => void;
+}
+
+/**
+ * Baris kartu di tab Order Saya.
+ *
+ * Sama seperti baris Tersedia: nilai tampilan datang dari layar, jadi kartu
+ * yang tidak berubah tidak digambar ulang.
+ */
+const BarisSaya = React.memo(function BarisSaya({
+  id,
+  index,
+  tracker,
+  orderNumber,
+  status,
+  statusText,
+  addressMain,
+  addressSub,
+  syncState,
+  amountText,
+  timeText,
+  highlight,
+  onOpen,
+}: BarisSayaProps): React.JSX.Element {
+  const buka = useCallback(() => onOpen(id), [onOpen, id]);
+
+  return (
+    <ListEnterRow tracker={tracker} id={id} index={index}>
+      <OrderCard
+        variant="mine"
+        orderNumber={orderNumber}
+        status={status}
+        statusText={statusText}
+        addressMain={addressMain}
+        addressSub={addressSub}
+        syncState={syncState}
+        amountText={amountText}
+        timeText={timeText}
+        onPress={buka}
+        highlight={highlight}
+      />
+    </ListEnterRow>
+  );
+});
 
 // Exported (in addition to the default HOC-wrapped OrdersScreen below) so
 // tests can render it directly with plain-object props, bypassing the
@@ -810,6 +930,23 @@ export function OrdersScreenBase({
   // Sinkronkan ref agar tes bisa memanggil langsung dari luar komponen.
   handleAcceptRef.current = handleAccept;
 
+  // Terima order dari kartu. Identitasnya tetap antar render, jadi kartu
+  // yang tidak berubah tidak digambar ulang.
+  const terimaOrder = useCallback(
+    (order: OrderModel) => {
+      void handleAccept(order);
+    },
+    [handleAccept],
+  );
+
+  // Buka detail order dari kartu.
+  const bukaDetail = useCallback(
+    (orderId: string) => {
+      navigation.navigate('OrderDetail', { orderId });
+    },
+    [navigation],
+  );
+
   const online = networkStatus === 'online';
   // Selama fetch pertama belum selesai, layar belum tahu apa isi daftar.
   const fetchBelumSelesai = !firstFetchDone;
@@ -907,25 +1044,20 @@ export function OrdersScreenBase({
   const renderPoolItem = ({ item, index }: { item: OrderModel; index: number }) => {
     const alamat = readAlamat(item);
     return (
-      <ListEnterRow
-        tracker={pelacakTersedia}
-        id={item.id}
+      <BarisTersedia
+        order={item}
         index={index}
+        tracker={pelacakTersedia}
         exiting={keluarTersedia}
-      >
-        <OrderCard
-          variant="pool"
-          orderNumber={formatOrderNumber(item.id)}
-          timeText={formatOrderTime(readWaktu(item, 'created_at'), Date.now())}
-          city={alamat.city}
-          amountText={formatCurrency(readTotalCents(item), readCurrency(item))}
-          onAccept={() => { void handleAccept(item); }}
-          acceptDisabled={!online}
-          acceptHelp={online ? undefined : TEKS_BUTUH_KONEKSI}
-          acceptLoading={acceptingOrderId === item.id}
-          acceptSuccess={terimaBerhasil?.id === item.id}
-        />
-      </ListEnterRow>
+        orderNumber={formatOrderNumber(item.id)}
+        timeText={formatOrderTime(readWaktu(item, 'created_at'), Date.now())}
+        city={alamat.city}
+        amountText={formatCurrency(readTotalCents(item), readCurrency(item))}
+        online={online}
+        loading={acceptingOrderId === item.id}
+        success={terimaBerhasil?.id === item.id}
+        onAccept={terimaOrder}
+      />
     );
   };
 
@@ -936,21 +1068,21 @@ export function OrdersScreenBase({
     const { displayStatus, syncState } = deriveOrderSyncView(readOrderStatus(item), actions);
     const alamat = readAlamat(item);
     return (
-      <ListEnterRow tracker={pelacakSaya} id={item.id} index={index}>
-        <OrderCard
-          variant="mine"
-          orderNumber={formatOrderNumber(item.id)}
-          status={displayStatus}
-          statusText={driverStatusLabel(displayStatus)}
-          addressMain={alamat.street ?? 'Alamat tidak tersedia'}
-          addressSub={alamat.city ?? undefined}
-          syncState={syncState ?? undefined}
-          amountText={formatCurrency(readTotalCents(item), readCurrency(item))}
-          timeText={formatOrderTime(readWaktu(item, 'created_at'), Date.now())}
-          onPress={() => navigation.navigate('OrderDetail', { orderId: item.id })}
-          highlight={item.id === sorotId}
-        />
-      </ListEnterRow>
+      <BarisSaya
+        id={item.id}
+        index={index}
+        tracker={pelacakSaya}
+        orderNumber={formatOrderNumber(item.id)}
+        status={displayStatus}
+        statusText={driverStatusLabel(displayStatus)}
+        addressMain={alamat.street ?? 'Alamat tidak tersedia'}
+        addressSub={alamat.city ?? undefined}
+        syncState={syncState ?? undefined}
+        amountText={formatCurrency(readTotalCents(item), readCurrency(item))}
+        timeText={formatOrderTime(readWaktu(item, 'created_at'), Date.now())}
+        highlight={item.id === sorotId}
+        onOpen={bukaDetail}
+      />
     );
   };
 
