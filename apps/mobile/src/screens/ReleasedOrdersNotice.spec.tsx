@@ -15,6 +15,7 @@ import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
 import { schema } from '../db/schema';
 import { OrderModel } from '../db/models/OrderModel';
 import { PendingActionModel } from '../db/models/PendingActionModel';
+import { formatOrderNumber } from '../formatOrderNumber';
 import { themes } from '../theme/tokens';
 import {
   ReleasedOrdersNotice,
@@ -41,7 +42,7 @@ describe('ReleasedOrdersNotice (komponen presentasi)', () => {
     );
     // Judul dan baris
     expect(getByText('Order sudah tidak ditugaskan ke Anda')).toBeTruthy();
-    expect(getByText('Order #order-uu')).toBeTruthy();
+    expect(getByText('Order #ORDER-UU')).toBeTruthy();
     // Keterangan
     expect(
       getByText(
@@ -71,6 +72,19 @@ describe('ReleasedOrdersNotice (komponen presentasi)', () => {
     expect(gayaBaris.height).toBe(44);
   });
 
+  it('kotaknya tidak menambah jarak sendiri, jaraknya dari daftar', () => {
+    const { getByTestId } = render(
+      <ReleasedOrdersNotice
+        items={[{ id: 'order-uuid-1', lastConflictAt: Date.now() }]}
+        onOpen={jest.fn()}
+        onDismiss={jest.fn()}
+      />,
+    );
+    const gayaWadah = StyleSheet.flatten(getByTestId('kotak-order-lepas').props.style);
+    expect(gayaWadah.marginHorizontal).toBeUndefined();
+    expect(gayaWadah.marginTop).toBeUndefined();
+  });
+
   it('tidak menampilkan order yang lastConflictAt-nya lebih dari 24 jam', () => {
     const { queryByText, getByText } = render(
       <ReleasedOrdersNotice
@@ -81,7 +95,7 @@ describe('ReleasedOrdersNotice (komponen presentasi)', () => {
         onDismiss={jest.fn()}
       />,
     );
-    expect(queryByText('Order #order-ol')).toBeNull();
+    expect(queryByText('Order #ORDER-OL')).toBeNull();
     // Judul ikut tidak tampil karena tidak ada order yang lolos syarat 24 jam
     expect(queryByText('Order sudah tidak ditugaskan ke Anda')).toBeNull();
     expect(getByText).toBeTruthy();
@@ -117,9 +131,9 @@ describe('ReleasedOrdersNotice (komponen presentasi)', () => {
         onDismiss={jest.fn()}
       />,
     );
-    expect(getByText('Order #order-re')).toBeTruthy();
-    expect(getByText('Order #order-ed')).toBeTruthy();
-    expect(queryByText('Order #order-st')).toBeNull();
+    expect(getByText('Order #ORDER-RE')).toBeTruthy();
+    expect(getByText('Order #ORDER-ED')).toBeTruthy();
+    expect(queryByText('Order #ORDER-ST')).toBeNull();
   });
 
   it('mengetuk baris memanggil onOpen dengan id lengkap', () => {
@@ -133,7 +147,7 @@ describe('ReleasedOrdersNotice (komponen presentasi)', () => {
         onDismiss={onDismiss}
       />,
     );
-    fireEvent.press(getByText(`Order #${fullId.slice(0, 8)}`));
+    fireEvent.press(getByText(`Order ${formatOrderNumber(fullId)}`));
     expect(onOpen).toHaveBeenCalledWith(fullId);
     expect(onOpen).toHaveBeenCalledTimes(1);
   });

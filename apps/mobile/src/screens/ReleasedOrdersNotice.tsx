@@ -14,6 +14,7 @@ import { Q } from '@nozbe/watermelondb';
 import { OrderModel } from '../db/models/OrderModel';
 import { Button } from '../components/Button';
 import { Icon } from '../theme/Icon';
+import { formatOrderNumber } from '../formatOrderNumber';
 import { perTema, useTheme } from '../theme/ThemeProvider';
 import { radius, size, space, stroke, type } from '../theme/tokens';
 
@@ -42,8 +43,6 @@ const gaya = perTema((c) =>
       paddingTop: PADDING_ATAS,
       paddingHorizontal: space[4],
       paddingBottom: space[2],
-      marginHorizontal: space[4],
-      marginTop: space[3],
     },
     barisJudul: {
       flexDirection: 'row',
@@ -98,7 +97,7 @@ export function ReleasedOrdersNotice({ items, onOpen, onDismiss }: ReleasedOrder
   if (visible.length === 0) return null;
 
   return (
-    <View style={s.wadah}>
+    <View style={s.wadah} testID="kotak-order-lepas">
       <View style={s.barisJudul}>
         <Icon name="info" size={size.iconMd} color={colors.info} />
         <Text style={s.judul}>Order sudah tidak ditugaskan ke Anda</Text>
@@ -110,7 +109,7 @@ export function ReleasedOrdersNotice({ items, onOpen, onDismiss }: ReleasedOrder
           accessibilityRole="button"
           style={s.barisOrder}
         >
-          <Text style={s.teksOrder}>Order #{item.id.slice(0, 8)}</Text>
+          <Text style={s.teksOrder}>Order {formatOrderNumber(item.id)}</Text>
           <Icon name="chevron_right" size={size.iconSm} color={colors.textSubtle} />
         </Pressable>
       ))}
