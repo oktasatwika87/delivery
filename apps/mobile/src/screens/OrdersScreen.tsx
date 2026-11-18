@@ -922,7 +922,7 @@ export function OrdersScreenBase({
           }
         }
       } finally {
-        // Jalur sukses sudah mengosongkan penanda menerima dalam satu batch.
+        // Jalur sukses sudah mengosongkan penanda menerima bersama perubahan lain di atas.
         if (!berhasil) {
           setAcceptingOrderId(null);
         }

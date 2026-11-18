@@ -270,8 +270,8 @@ const Platform = {
   Version: 35,
 };
 
-// unstable_batchedUpdates: runtime asli menggabungkan beberapa setState jadi
-// satu gambar. Di tes cukup memanggil fungsinya langsung, tanpa any.
+// unstable_batchedUpdates: di aplikasi beberapa setState digabung jadi satu
+// gambar. Di tes cukup memanggil fungsinya langsung, tanpa any.
 function unstable_batchedUpdates<T>(fn: (arg?: unknown) => T, arg?: unknown): T {
   return arg === undefined ? fn() : fn(arg);
 }
