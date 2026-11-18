@@ -131,13 +131,21 @@ const SlideOutRight = buatRangkai();
 const LinearTransition = buatRangkai();
 const ZoomOut = buatRangkai();
 
-/** Easing: semua varian mengembalikan fungsi (t => t). */
+/** Easing dasar: mengembalikan nilai input apa adanya. */
 function fungsiEasing(t: number): number {
   return t;
 }
 
+/**
+ * Kurva bezier dibuat baru tiap dipanggil, jadi kurva yang berbeda bisa
+ * dibedakan di tes.
+ */
+function easingBezierBaru(): (t: number) => number {
+  return (t: number) => t;
+}
+
 const Easing = {
-  bezier: (_x1: number, _y1: number, _x2: number, _y2: number) => fungsiEasing,
+  bezier: (_x1: number, _y1: number, _x2: number, _y2: number) => easingBezierBaru(),
   linear: () => fungsiEasing,
   in: () => fungsiEasing,
   out: () => fungsiEasing,

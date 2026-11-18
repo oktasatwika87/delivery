@@ -5,6 +5,7 @@
 import {
   enterFromAbove,
   enterFromBelow,
+  exitEasing,
   exitRight,
   exitUp,
   fadeIn,
@@ -12,6 +13,7 @@ import {
   shift,
   shrinkOut,
   staggerDelay,
+  standardEasing,
 } from './presets';
 import { SlideOutRight } from 'react-native-reanimated';
 
@@ -49,5 +51,18 @@ describe('pola gerak', () => {
 
   it('keluar ke kanan memakai SlideOutRight', () => {
     expect(exitRight()).toBe(SlideOutRight);
+  });
+
+  it('keluar ke kanan memakai kurva cepat di awal', () => {
+    const spy = jest.spyOn(SlideOutRight, 'easing');
+
+    try {
+      exitRight();
+
+      expect(spy).toHaveBeenCalledWith(standardEasing);
+      expect(standardEasing).not.toBe(exitEasing);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

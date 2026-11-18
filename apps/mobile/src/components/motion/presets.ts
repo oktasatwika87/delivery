@@ -61,9 +61,14 @@ export function shift() {
   return LinearTransition.duration(motion.duration.shift).easing(standardEasing);
 }
 
-/** Keluar ke kanan: kartu hilang ke arah kanan. */
+/**
+ * Keluar ke kanan: kartu hilang ke arah kanan.
+ *
+ * Kurvanya cepat di awal: kartu langsung menjauh, jadi tidak tertimpa baris
+ * di bawahnya yang naik ke ruang yang ditinggalkan.
+ */
 export function exitRight() {
-  return SlideOutRight.duration(motion.duration.exit).easing(exitEasing);
+  return SlideOutRight.duration(motion.duration.exit).easing(standardEasing);
 }
 
 /**
