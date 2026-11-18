@@ -18,7 +18,7 @@ describe('formatCurrency', () => {
     expect(result).toMatch(/Rp\s0/);
   });
 
-  it('formatter dibuat sekali per mata uang', () => {
+  it('pemformat dibuat sekali per mata uang', () => {
     const asli = Intl.NumberFormat;
     const spy = jest
       .spyOn(Intl, 'NumberFormat')

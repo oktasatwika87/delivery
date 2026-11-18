@@ -3,7 +3,7 @@
  */
 
 /**
- * Formatter dipakai ulang per mata uang. Membuat Intl.NumberFormat itu
+ * Pemformat dipakai ulang per mata uang. Membuat Intl.NumberFormat itu
  * mahal, dan layar order memformat angka berkali-kali dalam satu gambar.
  */
 const formatterCache = new Map<string, Intl.NumberFormat>();
