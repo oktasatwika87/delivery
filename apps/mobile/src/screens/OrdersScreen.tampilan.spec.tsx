@@ -11,7 +11,7 @@
 import React from 'react';
 import { ActivityIndicator, FlatList, StatusBar, StyleSheet } from 'react-native';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-import { trigger } from 'react-native-haptic-feedback';
+import { trigger, triggerPattern } from 'react-native-haptic-feedback';
 
 jest.mock('@nozbe/watermelondb/react', () => ({
   withDatabase: (C: unknown) => C,
@@ -863,8 +863,11 @@ describe('urutan Terima di layar Order', () => {
       leluhur(indikator).includes(tombol),
     );
     expect(spinner).toHaveLength(0);
-    expect(trigger).toHaveBeenCalledTimes(1);
-    expect(trigger).toHaveBeenCalledWith('impactMedium');
+    expect(triggerPattern).toHaveBeenCalledTimes(1);
+    expect(triggerPattern).toHaveBeenCalledWith([
+      { time: 0, duration: 70, intensity: 1 },
+    ]);
+    expect(trigger).not.toHaveBeenCalled();
   });
 
   test('sesudah waktu centang kartu hilang dari Tersedia tapi tab belum pindah', async () => {
