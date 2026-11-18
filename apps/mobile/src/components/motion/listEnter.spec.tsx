@@ -27,21 +27,26 @@ function renderPelacak(
   opsi: OpsiPelacak,
 ): {
   hasil: ListEnterDecision[];
-  rerender: (idsBaru: string[], initialWindow?: boolean) => void;
+  rerender: (idsBaru: string[], initialWindow?: boolean, active?: boolean) => void;
 } {
   const hasil: ListEnterDecision[] = [];
+  // Nilai active terakhir, jadi rerender bisa mengubahnya tanpa mengubah
+  // isi tes lama.
+  let activeSekarang = opsi.active ?? true;
   const view = renderHook(
     ({
       ids: idsSekarang,
       initialWindow,
+      active,
     }: {
       ids: string[];
       initialWindow: boolean;
+      active: boolean;
     }) => {
       const idsTerakhir = React.useRef<readonly string[] | null>(null);
       const tracker = useListEnter(idsSekarang, {
         initialCount: opsi.initialCount,
-        active: opsi.active,
+        active,
       });
       // Baris baru diputuskan hanya kalau datanya berubah, jadi render
       // ulang lain tidak dihitung sebagai baris baru.
@@ -57,13 +62,15 @@ function renderPelacak(
       }
       return tracker;
     },
-    { initialProps: { ids, initialWindow: false } },
+    { initialProps: { ids, initialWindow: false, active: activeSekarang } },
   );
 
   return {
     hasil,
-    rerender: (idsBaru: string[], initialWindow = false) =>
-      view.rerender({ ids: idsBaru, initialWindow }),
+    rerender: (idsBaru: string[], initialWindow = false, active?: boolean) => {
+      if (active !== undefined) activeSekarang = active;
+      view.rerender({ ids: idsBaru, initialWindow, active: activeSekarang });
+    },
   };
 }
 
@@ -177,6 +184,37 @@ describe('pelacak masuk daftar', () => {
     });
 
     expect(hasil.map((satu) => satu.kind)).toEqual(['none', 'none']);
+  });
+
+  it('daftar yang tidak aktif sejak awal tidak menggerakkan baris baru', () => {
+    const { hasil, rerender } = renderPelacak(['a'], {
+      initialCount: 2,
+      active: false,
+    });
+
+    rerender(['b', 'a']);
+
+    expect(hasil[0].kind).toBe('none');
+  });
+
+  it('daftar yang aktif lalu disembunyikan tidak menggerakkan baris baru', () => {
+    const { hasil, rerender } = renderPelacak(['a'], { initialCount: 2 });
+
+    rerender(['a'], false, false);
+    rerender(['b', 'a']);
+
+    expect(hasil[0].kind).toBe('none');
+  });
+
+  it('daftar yang aktif lagi menggerakkan baris baru', () => {
+    const { hasil, rerender } = renderPelacak(['a'], {
+      initialCount: 2,
+      active: false,
+    });
+
+    rerender(['b', 'a'], false, true);
+
+    expect(hasil[0].kind).toBe('fromAbove');
   });
 });
 

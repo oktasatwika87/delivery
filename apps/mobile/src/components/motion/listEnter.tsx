@@ -32,7 +32,11 @@ export interface ListEnterTracker {
 interface OpsiListEnter {
   /** Berapa baris pertama yang digerakkan, diisi dengan initialNumToRender. */
   initialCount: number;
-  /** False kalau daftarnya sedang tersembunyi, misalnya di tab lain. */
+  /**
+   * False kalau daftarnya sedang tersembunyi, misalnya di tab lain. Daftar
+   * yang tersembunyi tidak mencatat urutan awal dan tidak menggerakkan baris
+   * yang baru masuk.
+   */
   active?: boolean;
 }
 
@@ -53,6 +57,10 @@ export function useListEnter(
   const commitRef = useRef<readonly string[]>([]);
   const sudahCommitRef = useRef(false);
   const terpakaiRef = useRef<Set<string>>(new Set());
+  // Nilai active terbaru, supaya decide tahu daftar ini sedang tampil atau
+  // disembunyikan, tanpa perlu dibuat ulang tiap render.
+  const aktifRef = useRef(active);
+  aktifRef.current = active;
 
   // Data pertama dicatat saat render, bukan di efek, jadi urutan baris yang
   // pertama masuk sudah pasti walau data baru menyusul beberapa render
@@ -81,6 +89,12 @@ export function useListEnter(
         const posisi = daftar.indexOf(id);
         if (posisi >= 0 && !terpakaiRef.current.has(id)) {
           return { kind: 'stagger', delay: staggerDelay(posisi) };
+        }
+
+        // Daftar yang disembunyikan tidak menggerakkan baris baru, soalnya
+        // geraknya cuma kelihatan kalau daftarnya yang sedang tampil.
+        if (!aktifRef.current) {
+          return { kind: 'none' };
         }
 
         const commit = commitRef.current;
