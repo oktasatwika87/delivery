@@ -545,7 +545,7 @@ describe('SyncCoordinator', () => {
         serverTime: '2026-01-20T10:00:00.000Z',
       };
 
-      // @ts-expect-error - accessing private method for testing
+      // @ts-expect-error metode privat dipanggil langsung untuk tes
       await coordinator.applyPull(pullResponse, mockDb);
 
       const created = state.records.get('orders')!.get('order-updated-at-1')!;
@@ -582,7 +582,7 @@ describe('SyncCoordinator', () => {
         serverTime: '2026-02-01T08:00:00.000Z',
       };
 
-      // @ts-expect-error - accessing private method for testing
+      // @ts-expect-error metode privat dipanggil langsung untuk tes
       await coordinator.applyPull(pullResponse, mockDb);
 
       const updated = state.records.get('orders')!.get('order-updated-at-2')!;
@@ -617,7 +617,7 @@ describe('SyncCoordinator', () => {
           serverTime: '2026-01-20T10:00:00.000Z',
         };
 
-        // @ts-expect-error - accessing private method for testing
+        // @ts-expect-error metode privat dipanggil langsung untuk tes
         await coordinator.applyPull(pullResponse, mockDb);
 
         const created = state.records.get('orders')!.get('order-updated-at-3')!;
@@ -655,7 +655,7 @@ describe('SyncCoordinator', () => {
           serverTime: '2026-01-20T10:00:00.000Z',
         };
 
-        // @ts-expect-error - accessing private method for testing
+        // @ts-expect-error metode privat dipanggil langsung untuk tes
         await coordinator.applyPull(pullResponse, mockDb);
 
         const created = state.records.get('payments')!.get('payment-updated-at-1')!;
@@ -1825,7 +1825,7 @@ describe('SyncCoordinator', () => {
       }));
     });
 
-    test('conflict ack on order: updated_at ikut waktu server', async () => {
+    test('balasan conflict untuk order: updated_at ikut waktu server', async () => {
       const orderRow = createMockRow('order-conflict-updated-at', 'updated');
       orderRow.serverVersion = 5;
       orderRow.status = 'OUT_FOR_DELIVERY';
@@ -1856,7 +1856,7 @@ describe('SyncCoordinator', () => {
         },
       ];
 
-      // @ts-expect-error - accessing private method for testing
+      // @ts-expect-error metode privat dipanggil langsung untuk tes
       await coordinator.resolveAcks(acks, mockDb);
 
       const overwritten = state.records.get('orders')!.get('order-conflict-updated-at')!;

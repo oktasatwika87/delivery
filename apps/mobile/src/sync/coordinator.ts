@@ -605,7 +605,7 @@ export class SyncCoordinator implements Coordinator {
       // Waktu ubah ikut dari server, bukan waktu simpan lokal. Kolom ini
       // dipakai ringkasan hari ini sebagai waktu order selesai, jadi kalau
       // diisi waktu HP, order bulan lama ikut terhitung hari ini.
-      const updatedAtMs = parseIsoMsOrNull((d as any).updatedAt);
+      const updatedAtMs = parseIsoMsOrNull(d.updatedAt);
       if (updatedAtMs !== null) {
         row._setRaw('updated_at', updatedAtMs);
       }
@@ -658,10 +658,10 @@ export class SyncCoordinator implements Coordinator {
    *
    * created_at dan updated_at tidak diisi otomatis oleh
    * prepareCreateFromDirtyRaw, jadi keduanya dikirim eksplisit di sini:
-   * created_at dari server (`data.createdAt`, parsed ke ms) atau fallback
-   * Date.now(); updated_at untuk order dari server (`data.updatedAt`, parsed
-   * ke ms) atau fallback Date.now(), untuk payment dan chat selalu
-   * Date.now() (waktu persist lokal).
+   * created_at dari server (`data.createdAt`, diubah ke ms) atau cadangan
+   * Date.now(); updated_at untuk order dari server (`data.updatedAt`, diubah
+   * ke ms) atau cadangan Date.now(), untuk payment dan chat selalu
+   * Date.now() (waktu simpan lokal).
    *
    * Function terpisah dari applyServerDataToLocalRow karena dua API ini
    * secara struktural berbeda (Model setter vs raw object API). Shared
