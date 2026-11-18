@@ -1180,9 +1180,9 @@ export function OrdersScreenBase({
   const tampilTersedia = tabTampil === TAB_TERSEDIA;
 
   // Kepala daftar dibungkus satu View yang selalu dipasang, walau isinya
-  // kosong. Wrapper ini memberitahu kalau isi tab baru sudah tertata, jadi
+  // kosong. Pembungkus ini memberitahu kalau isi tab baru sudah tertata, jadi
   // pudar masuk tidak jalan sebelum isi baru benar-benar siap tampil. Kuncinya
-  // diganti tiap tab berganti, jadi wrapper dipasang ulang dan event layout
+  // diganti tiap tab berganti, jadi pembungkus dipasang ulang dan event layout
   // datang lagi.
   const kepalaDaftar = (
     <View key={tabTampil} testID="kepala-daftar" onLayout={saatKepalaTertata}>
