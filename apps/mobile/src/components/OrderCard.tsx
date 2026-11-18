@@ -92,14 +92,25 @@ const gaya = perTema((c) =>
     atas: {
       flexDirection: 'row',
       alignItems: 'flex-start',
-      justifyContent: 'space-between',
-      gap: space[3],
+      // Isi baris atas boleh turun ke baris kedua: kalau tidak muat
+      // berdampingan, jumlah turun ke bawah dalam ukuran penuh. Jumlah dan
+      // label status tidak pernah dikecilkan atau dipotong.
+      flexWrap: 'wrap',
+      columnGap: space[3],
+      rowGap: space[1],
     },
     barisKota: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: JARAK_IKON,
       flexShrink: 1,
+    },
+    // Kalimat pengganti kota panjang, jadi kolomnya melebar dan kalimatnya
+    // bisa dilipat. Kalau ikut aturan kota, jumlah hampir selalu turun ke
+    // baris kedua.
+    barisKotaKosong: {
+      flexBasis: 0,
+      flexGrow: 1,
     },
     kota: {
       ...type.titleLg,
@@ -114,10 +125,12 @@ const gaya = perTema((c) =>
     jumlahBesar: {
       ...type.amountLg,
       color: c.text,
+      marginLeft: 'auto',
     },
     jumlah: {
       ...type.amount,
       color: c.text,
+      marginLeft: 'auto',
     },
     barisOrder: {
       ...type.bodySm,
@@ -196,8 +209,11 @@ function KartuPool(props: OrderCardPoolProps): React.JSX.Element {
 
   return (
     <WadahKartu onPress={props.onPress}>
-      <View style={s.atas}>
-        <View style={s.barisKota}>
+      <View style={s.atas} testID="baris-atas">
+        <View
+          style={[s.barisKota, props.city ? null : s.barisKotaKosong]}
+          testID="baris-kota"
+        >
           <Icon
             name="location_on"
             size={size.iconMd}
@@ -243,7 +259,7 @@ function KartuMine(props: OrderCardMineProps): React.JSX.Element {
       style={[s.kartu, bayangan]}
     >
       {props.highlight && !dalamJendela ? <CincinSorot /> : null}
-      <View style={s.atas}>
+      <View style={s.atas} testID="baris-atas">
         <StatusLabel status={props.status} label={props.statusText} />
         <Text style={s.jumlah}>{props.amountText}</Text>
       </View>
@@ -304,7 +320,7 @@ function KartuRow(props: OrderCardRowProps): React.JSX.Element {
       accessibilityRole="button"
       style={[s.kartu, bayangan]}
     >
-      <View style={s.atas}>
+      <View style={s.atas} testID="baris-atas">
         <StatusLabel status={props.status} label={props.statusText} />
         <Text style={s.jumlah}>{props.amountText}</Text>
       </View>

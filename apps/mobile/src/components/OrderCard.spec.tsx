@@ -383,6 +383,99 @@ describe('OrderCard sorotan kartu', () => {
   });
 });
 
+describe('baris atas kartu', () => {
+  it('baris atas boleh turun baris dan jumlah rata kanan di pool', () => {
+    const { getByTestId, getByText } = render(
+      <OrderCard
+        variant="pool"
+        orderNumber="#1D42E3E2"
+        timeText="10 menit lalu"
+        city="Bandung"
+        amountText="Rp45.000"
+        onAccept={() => {}}
+      />,
+    );
+    const gayaAtas = StyleSheet.flatten(getByTestId('baris-atas').props.style);
+    expect(gayaAtas.flexWrap).toBe('wrap');
+    expect(gayaAtas.columnGap).toBe(12);
+    expect(gayaAtas.rowGap).toBe(4);
+    expect(gayaAtas.justifyContent).toBeUndefined();
+    expect(StyleSheet.flatten(getByText('Rp45.000').props.style).marginLeft).toBe('auto');
+  });
+
+  it('baris atas boleh turun baris dan jumlah rata kanan di mine', () => {
+    const { getByTestId, getByText } = render(
+      <OrderCard
+        variant="mine"
+        orderNumber="#1D42E3E2"
+        status="DELIVERED"
+        statusText="Selesai"
+        addressMain="Jl. Merdeka 10"
+        amountText="Rp45.000"
+        onPress={() => {}}
+      />,
+    );
+    const gayaAtas = StyleSheet.flatten(getByTestId('baris-atas').props.style);
+    expect(gayaAtas.flexWrap).toBe('wrap');
+    expect(gayaAtas.columnGap).toBe(12);
+    expect(gayaAtas.rowGap).toBe(4);
+    expect(gayaAtas.justifyContent).toBeUndefined();
+    expect(StyleSheet.flatten(getByText('Rp45.000').props.style).marginLeft).toBe('auto');
+  });
+
+  it('baris atas boleh turun baris dan jumlah rata kanan di row', () => {
+    const { getByTestId, getByText } = render(
+      <OrderCard
+        variant="row"
+        orderNumber="#1D42E3E2"
+        dateText="29 Okt 2026"
+        status="DELIVERED"
+        statusText="Selesai"
+        amountText="Rp45.000"
+        onPress={() => {}}
+      />,
+    );
+    const gayaAtas = StyleSheet.flatten(getByTestId('baris-atas').props.style);
+    expect(gayaAtas.flexWrap).toBe('wrap');
+    expect(gayaAtas.columnGap).toBe(12);
+    expect(gayaAtas.rowGap).toBe(4);
+    expect(gayaAtas.justifyContent).toBeUndefined();
+    expect(StyleSheet.flatten(getByText('Rp45.000').props.style).marginLeft).toBe('auto');
+  });
+
+  it('baris kota bisa menyusut tapi tidak melebar sendiri', () => {
+    const { getByTestId } = render(
+      <OrderCard
+        variant="pool"
+        orderNumber="#1D42E3E2"
+        timeText="10 menit lalu"
+        city="Tabanan"
+        amountText="Rp14.500.000"
+        onAccept={() => {}}
+      />,
+    );
+    const gayaKota = StyleSheet.flatten(getByTestId('baris-kota').props.style);
+    expect(gayaKota.flexShrink).toBe(1);
+    expect(gayaKota.flexGrow).toBeUndefined();
+  });
+
+  it('kalimat alamat melebar supaya jumlah tetap di sampingnya', () => {
+    const { getByTestId } = render(
+      <OrderCard
+        variant="pool"
+        orderNumber="#1D42E3E2"
+        timeText="10 menit lalu"
+        city={null}
+        amountText="Rp14.500.000"
+        onAccept={() => {}}
+      />,
+    );
+    const gayaKota = StyleSheet.flatten(getByTestId('baris-kota').props.style);
+    expect(gayaKota.flexBasis).toBe(0);
+    expect(gayaKota.flexGrow).toBe(1);
+  });
+});
+
 describe('OrderCard bentuk row', () => {
   it('baris order, alamat, label status, dan total tampil', () => {
     const { getByText } = render(
