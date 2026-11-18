@@ -54,7 +54,15 @@ const StyleSheet = {
 };
 
 // Components
-const View = makeComponent('View');
+// View memakai forwardRef, jadi layar bisa menyimpan ref ke elemen View
+// dan mengukur posisinya. Ref ke elemen dasar di tes tetap null.
+const View = React.forwardRef(function View(
+  props: Record<string, unknown>,
+  ref: Ref<unknown>,
+) {
+  return React.createElement('View', { ...props, ref }, props.children);
+});
+View.displayName = 'View';
 const Text = makeComponent('Text');
 const TextInput = makeComponent('TextInput');
 const Image = makeComponent('Image');

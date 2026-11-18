@@ -8,6 +8,7 @@ import {
   Text,
   unstable_batchedUpdates,
   View,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -43,6 +44,7 @@ import {
   readWaktu,
 } from './orderRowRead';
 import { countActiveOrders, sortMyOrders, sortPoolOrders } from './orderListSort';
+import { revealOffset } from './orderListScroll';
 import { deriveDaySummary } from './daySummary';
 import {
   ReleasedOrdersNotice,
@@ -234,6 +236,8 @@ interface BarisSayaProps {
   timeText: string;
   highlight: boolean;
   onOpen: (id: string) => void;
+  /** Dipanggil saat kartu selesai diukur, buat menggulir daftar. */
+  onCardLayout: (id: string, kartu: View | null) => void;
 }
 
 /**
@@ -256,24 +260,32 @@ const BarisSaya = React.memo(function BarisSaya({
   timeText,
   highlight,
   onOpen,
+  onCardLayout,
 }: BarisSayaProps): React.JSX.Element {
   const buka = useCallback(() => onOpen(id), [onOpen, id]);
+  const kartuRef = useRef<View>(null);
+  const saatTertata = useCallback(
+    () => onCardLayout(id, kartuRef.current),
+    [onCardLayout, id],
+  );
 
   return (
     <ListEnterRow tracker={tracker} id={id} index={index}>
-      <OrderCard
-        variant="mine"
-        orderNumber={orderNumber}
-        status={status}
-        statusText={statusText}
-        addressMain={addressMain}
-        addressSub={addressSub}
-        syncState={syncState}
-        amountText={amountText}
-        timeText={timeText}
-        onPress={buka}
-        highlight={highlight}
-      />
+      <View ref={kartuRef} collapsable={false} onLayout={saatTertata}>
+        <OrderCard
+          variant="mine"
+          orderNumber={orderNumber}
+          status={status}
+          statusText={statusText}
+          addressMain={addressMain}
+          addressSub={addressSub}
+          syncState={syncState}
+          amountText={amountText}
+          timeText={timeText}
+          onPress={buka}
+          highlight={highlight}
+        />
+      </View>
     </ListEnterRow>
   );
 });
@@ -328,6 +340,15 @@ export function OrdersScreenBase({
   terimaRef.current = terimaBerhasil;
   // Order yang baru diterima, disorot sekali.
   const [sorotId, setSorotId] = useState<string | null>(null);
+  // Order yang baru diterima dan belum digulir ke layar. Urutan Order Saya
+  // tetap created_at, jadi order pool yang lebih lama bisa jatuh di bawah
+  // layar. Daftar digulir selagi masih tersembunyi, jadi pemakai tidak
+  // perlu menggulir sendiri.
+  const tampilkanRef = useRef<string | null>(null);
+  // Wadah kedua daftar, dipakai buat mengukur posisi kartu.
+  const wadahDaftarRef = useRef<View>(null);
+  // Tinggi bagian daftar yang terlihat, buat menghitung posisi gulir.
+  const tinggiDaftarRef = useRef(0);
 
   // Posisi GPS terakhir. Dipakai buat asal rute saat Terima, jadi disimpan
   // di ref: posisinya sering berubah dan layar tidak perlu digambar ulang
@@ -849,6 +870,9 @@ export function OrdersScreenBase({
         // JSON.stringify sama dengan buildRawRowForCreate di coordinator.ts
         // supaya serialisasi address_json/items_json konsisten.
         try {
+          // Tandai order ini buat digulir ke layar begitu masuk Order Saya,
+          // berlaku buat cabang dengan dan tanpa kurangi gerakan.
+          tampilkanRef.current = order.id;
           await database.write(async () => {
             await database.batch(
               order.prepareUpdate((r) => {
@@ -877,6 +901,8 @@ export function OrdersScreenBase({
           });
         } catch (err) {
           console.error('[OrdersScreen] acceptOrder: local write failed:', err);
+          // Tulis lokal gagal, jadi tidak ada yang perlu digulir.
+          tampilkanRef.current = null;
           return;
         }
 
@@ -986,6 +1012,32 @@ export function OrdersScreenBase({
     ref.current?.scrollToOffset({ offset: 0, animated: false });
   }, []);
 
+  // Tinggi daftar yang terlihat disimpan buat menghitung posisi gulir.
+  const saatWadahTerukur = useCallback((event: LayoutChangeEvent) => {
+    tinggiDaftarRef.current = event.nativeEvent.layout.height;
+  }, []);
+
+  // Pengukuran menunggu onLayout kartu, karena baru saat itu tata letaknya
+  // pasti sudah dihitung.
+  const kartuSayaTertata = useCallback((id: string, kartu: View | null) => {
+    if (id !== tampilkanRef.current) return;
+    if (!kartu || !wadahDaftarRef.current) return;
+    tampilkanRef.current = null;
+    const wadah = wadahDaftarRef.current;
+    kartu.measureLayout(wadah, (_x, atas, _lebar, tinggi) => {
+      daftarSayaRef.current?.scrollToOffset({
+        offset: revealOffset({
+          cardTop: atas,
+          cardHeight: tinggi,
+          viewportHeight: tinggiDaftarRef.current,
+          gapAbove: space[2],
+          gapBelow: space[3],
+        }),
+        animated: false,
+      });
+    });
+  }, []);
+
   // Ganti tab: daftar lama pudar keluar, lalu daftar tujuan pudar masuk.
   // Dua daftar tetap dipasang, jadi kartu tidak pernah dipasang ulang.
   useEffect(() => {
@@ -1088,6 +1140,7 @@ export function OrdersScreenBase({
         timeText={formatOrderTime(readWaktu(item, 'created_at'), Date.now())}
         highlight={item.id === sorotId}
         onOpen={bukaDetail}
+        onCardLayout={kartuSayaTertata}
       />
     );
   };
@@ -1194,7 +1247,12 @@ export function OrdersScreenBase({
             sama. Ganti tab cuma memudarkan isinya, jadi kartu tidak pernah
             dipasang ulang. Lapisan yang tidak aktif tidak bisa disentuh dan
             disembunyikan dari pembaca layar. */}
-        <View style={gayaLayar.wadahDaftar}>
+        <View
+          style={gayaLayar.wadahDaftar}
+          ref={wadahDaftarRef}
+          collapsable={false}
+          onLayout={saatWadahTerukur}
+        >
           <Animated.View
             testID="isi-tersedia"
             pointerEvents={tersediaAktif ? 'auto' : 'none'}
