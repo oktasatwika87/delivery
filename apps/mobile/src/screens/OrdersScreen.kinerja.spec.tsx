@@ -2,8 +2,8 @@
  * Tes kinerja layar Order.
  *
  * Yang diuji: posisi GPS tidak membuat layar digambar ulang, posisi terakhir
- * yang dipakai buat asal rute, dan langganan lokasi ditutup saat layar
- * dilepas.
+ * yang dipakai buat asal rute, langganan lokasi ditutup saat layar
+ * dilepas, dan ganti tab tidak memasang ulang kartu.
  *
  * Database tiruan dan tiruan modul disalin dari OrdersScreen.tampilan.spec.tsx.
  */
@@ -80,15 +80,25 @@ jest.mock('../map/routeService', () => ({
 // Hitungan gambar per nomor order, buat lihat kartu mana yang digambar ulang.
 const mockHitunganRender = new Map<string, number>();
 
+// Hitungan pasang per nomor order, buat lihat kartu mana yang dipasang ulang.
+const mockHitunganPasang = new Map<string, number>();
+
 jest.mock('../components/OrderCard', () => {
   const asli = jest.requireActual<typeof import('../components/OrderCard')>(
     '../components/OrderCard',
   );
+  // React di-require di dalam pabrik tiruan, karena pabrik jest.mock tidak
+  // boleh memakai variabel luar selain yang berawalan mock.
+  const ReactMock = require('react');
   return {
     ...asli,
     OrderCard: (props: import('../components/OrderCard').OrderCardProps) => {
       const sebelumnya = mockHitunganRender.get(props.orderNumber) ?? 0;
       mockHitunganRender.set(props.orderNumber, sebelumnya + 1);
+      ReactMock.useEffect(() => {
+        const lama = mockHitunganPasang.get(props.orderNumber) ?? 0;
+        mockHitunganPasang.set(props.orderNumber, lama + 1);
+      }, []);
       return asli.OrderCard(props);
     },
   };
@@ -272,6 +282,11 @@ function hitung(orderNumber: string): number {
   return mockHitunganRender.get(orderNumber) ?? 0;
 }
 
+/** Berapa kali kartu dengan nomor itu dipasang. */
+function pasang(orderNumber: string): number {
+  return mockHitunganPasang.get(orderNumber) ?? 0;
+}
+
 /** Tunggu semua kerja awal layar selesai: bacaan pool dan fetch pertama. */
 async function tungguAwalSelesai(): Promise<void> {
   await waitFor(() => {
@@ -434,6 +449,7 @@ describe('kartu yang tidak berubah tidak digambar ulang', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockHitunganRender.clear();
+    mockHitunganPasang.clear();
     mockPanggilAksi = null;
     mockGetLastKnown.mockReset();
     mockGetLastKnown.mockResolvedValue(null);
@@ -561,6 +577,39 @@ describe('kartu yang tidak berubah tidak digambar ulang', () => {
     expect(hitung(nomorDua)).toBeGreaterThan(sebelumDua);
     expect(hitung(nomorSatu)).toBe(sebelumSatu);
     expect(hitung(nomorTiga)).toBe(sebelumTiga);
+  });
+
+  test('ganti tab tidak memasang ulang kartu', async () => {
+    setBarisPool([
+      makeBaris({ id: 'pool-1' }),
+      makeBaris({ id: 'pool-2' }),
+    ]);
+    const myOrders = [
+      makeBaris({ id: 'order-1', status: 'DELIVERED', driverId: 'driver-123' }),
+    ];
+
+    const { getByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={myOrders as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await tungguAwalSelesai();
+
+    await act(async () => {
+      fireEvent.press(getByText('Order Saya'));
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Tersedia'));
+    });
+
+    // Dua daftar tetap dipasang, jadi tiap kartu dipasang tepat sekali.
+    expect(pasang(formatOrderNumber('pool-1'))).toBe(1);
+    expect(pasang(formatOrderNumber('pool-2'))).toBe(1);
+    expect(pasang(formatOrderNumber('order-1'))).toBe(1);
   });
 
   test('status yang berubah di model yang sama tetap tampil di kartu', async () => {

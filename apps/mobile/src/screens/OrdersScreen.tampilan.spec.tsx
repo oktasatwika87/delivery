@@ -328,6 +328,14 @@ function opasitasIsiDaftar(term: { props: Record<string, unknown> }): number | u
   return undefined;
 }
 
+/** Daftar dengan testID tertentu, dari seluruh daftar yang terpasang. */
+function daftarDengan(semua: Instansi[], testID: string): Instansi | undefined {
+  return semua.find((node) => {
+    const nilai = node.props.testID;
+    return typeof nilai === 'string' && nilai === testID;
+  });
+}
+
 // Status jaringan dibalas ke nilai awal tiap tes, soalnya nilai mock
 // tidak direset oleh clearAllMocks.
 beforeEach(() => {
@@ -500,7 +508,7 @@ describe('ganti tab di layar Order', () => {
     jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
     setBarisPool([makeBaris({ id: 'pool-kurang-1' })]);
 
-    const { getByText, UNSAFE_getByType } = render(
+    const { getByText, UNSAFE_getAllByType } = render(
       <OrdersScreenBase
         database={mockDatabase as never}
         myOrders={[] as never}
@@ -515,85 +523,12 @@ describe('ganti tab di layar Order', () => {
     fireEvent.press(getByText('Order Saya'));
 
     // Isi Order Saya sudah tampil, tidak menunggu pudar.
-    expect(idDariDaftar(UNSAFE_getByType(FlatList).props.data)).toEqual([]);
+    const daftarSaya = daftarDengan(UNSAFE_getAllByType(FlatList), 'daftar-saya');
+    expect(idDariDaftar(daftarSaya?.props.data)).toEqual([]);
     expect(getByText('Belum ada order diterima')).toBeTruthy();
   });
 
-  test('isi baru belum pudar masuk sebelum kepala daftar tertata', async () => {
-    setBarisPool([makeBaris({ id: 'pool-pudar-1' })]);
-
-    const { getByText, getByTestId, rerender } = render(
-      <OrdersScreenBase
-        database={mockDatabase as never}
-        myOrders={[] as never}
-        onLogout={jest.fn()}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(getByText('Terima Order')).toBeTruthy();
-    });
-
-    fireEvent.press(getByText('Order Saya'));
-
-    // Isi Order Saya sudah tampil, tapi masih gelap karena pudar masuk
-    // ditunggu sampai kepala daftar yang baru siap.
-    expect(getByText('Belum ada order diterima')).toBeTruthy();
-
-    rerender(
-      <OrdersScreenBase
-        database={mockDatabase as never}
-        myOrders={[] as never}
-        onLogout={jest.fn()}
-      />,
-    );
-
-    expect(opasitasIsiDaftar(getByTestId('isi-daftar'))).toBe(0);
-  });
-
-  test('pudar masuk jalan setelah kepala daftar yang baru tertata', async () => {
-    setBarisPool([makeBaris({ id: 'pool-pudar-2' })]);
-
-    const { getByText, getByTestId, rerender } = render(
-      <OrdersScreenBase
-        database={mockDatabase as never}
-        myOrders={[] as never}
-        onLogout={jest.fn()}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(getByText('Terima Order')).toBeTruthy();
-    });
-
-    fireEvent.press(getByText('Order Saya'));
-
-    rerender(
-      <OrdersScreenBase
-        database={mockDatabase as never}
-        myOrders={[] as never}
-        onLogout={jest.fn()}
-      />,
-    );
-
-    expect(opasitasIsiDaftar(getByTestId('isi-daftar'))).toBe(0);
-
-    fireEvent(getByTestId('kepala-daftar'), 'layout', {
-      nativeEvent: { layout: { x: 0, y: 0, width: 328, height: 0 } },
-    });
-
-    rerender(
-      <OrdersScreenBase
-        database={mockDatabase as never}
-        myOrders={[] as never}
-        onLogout={jest.fn()}
-      />,
-    );
-
-    expect(opasitasIsiDaftar(getByTestId('isi-daftar'))).toBe(1);
-  });
-
-  test('kurangi gerakan: isi baru langsung terang tanpa nunggu kepala daftar', async () => {
+  test('kurangi gerakan: isi baru langsung terang tanpa pudar', async () => {
     const reanimated = require('react-native-reanimated') as {
       useReducedMotion: () => boolean;
     };
@@ -623,7 +558,147 @@ describe('ganti tab di layar Order', () => {
     );
 
     expect(getByText('Belum ada order diterima')).toBeTruthy();
-    expect(opasitasIsiDaftar(getByTestId('isi-daftar'))).toBe(1);
+    expect(opasitasIsiDaftar(getByTestId('isi-saya'))).toBe(1);
+    expect(
+      opasitasIsiDaftar(getByTestId('isi-tersedia', { includeHiddenElements: true })),
+    ).toBe(0);
+  });
+
+  test('saat pasang ada dua daftar, satu per tab', async () => {
+    setBarisPool([makeBaris({ id: 'pool-dua-1' })]);
+    const myOrders = [
+      makeBaris({ id: 'order-dua-1', status: 'DELIVERED', driverId: 'driver-123' }),
+    ];
+
+    const { getByText, getByTestId, UNSAFE_getAllByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={myOrders as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    const daftar = UNSAFE_getAllByType(FlatList);
+    expect(idDariDaftar(daftarDengan(daftar, 'daftar-tersedia')?.props.data)).toEqual([
+      'pool-dua-1',
+    ]);
+    expect(idDariDaftar(daftarDengan(daftar, 'daftar-saya')?.props.data)).toEqual([
+      'order-dua-1',
+    ]);
+
+    // Lapisan yang tampil bisa disentuh dan dibaca pembaca layar.
+    const isiTersedia = getByTestId('isi-tersedia');
+    expect(opasitasIsiDaftar(isiTersedia)).toBe(1);
+    expect(isiTersedia.props.pointerEvents).toBe('auto');
+    expect(isiTersedia.props.importantForAccessibility).toBe('auto');
+    expect(isiTersedia.props.accessibilityElementsHidden).toBe(false);
+
+    // Lapisan yang disembunyikan tidak bisa disentuh dan disembunyikan dari
+    // pembaca layar.
+    const isiSaya = getByTestId('isi-saya', { includeHiddenElements: true });
+    expect(opasitasIsiDaftar(isiSaya)).toBe(0);
+    expect(isiSaya.props.pointerEvents).toBe('none');
+    expect(isiSaya.props.importantForAccessibility).toBe('no-hide-descendants');
+    expect(isiSaya.props.accessibilityElementsHidden).toBe(true);
+  });
+
+  test('ketuk Order Saya: lapisan langsung bertukar tanda sentuh dan aksesibilitas', async () => {
+    setBarisPool([makeBaris({ id: 'pool-bertukar-1' })]);
+
+    const { getByText, getByTestId, rerender } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    fireEvent.press(getByText('Order Saya'));
+
+    // Di render ketukan itu, lapisan sudah bertukar.
+    const isiTersedia = getByTestId('isi-tersedia', { includeHiddenElements: true });
+    expect(isiTersedia.props.pointerEvents).toBe('none');
+    expect(isiTersedia.props.accessibilityElementsHidden).toBe(true);
+    const isiSaya = getByTestId('isi-saya');
+    expect(isiSaya.props.pointerEvents).toBe('auto');
+    expect(isiSaya.props.accessibilityElementsHidden).toBe(false);
+
+    rerender(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    expect(opasitasIsiDaftar(getByTestId('isi-saya'))).toBe(1);
+    expect(
+      opasitasIsiDaftar(getByTestId('isi-tersedia', { includeHiddenElements: true })),
+    ).toBe(0);
+  });
+
+  test('pudar masuk ditunda selama pudar keluar jalan', async () => {
+    const reanimated = require('react-native-reanimated') as {
+      withDelay: (jeda: number, animasi: unknown) => unknown;
+    };
+    const spyWithDelay = jest.spyOn(reanimated, 'withDelay');
+    setBarisPool([makeBaris({ id: 'pool-urutan-pudar-1' })]);
+
+    const { getByText } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    fireEvent.press(getByText('Order Saya'));
+
+    // Pudar masuk baru jalan setelah pudar keluar selesai, jadi jeda sama
+    // dengan lama pudar keluar.
+    expect(
+      spyWithDelay.mock.calls.some(
+        (panggilan) => panggilan[0] === motion.duration.fadeOut && panggilan[1] === 1,
+      ),
+    ).toBe(true);
+  });
+
+  test('hanya daftar tab aktif yang menggulir ke atas', async () => {
+    setBarisPool([makeBaris({ id: 'pool-gulir-1' })]);
+
+    const { getByText, UNSAFE_getAllByType } = render(
+      <OrdersScreenBase
+        database={mockDatabase as never}
+        myOrders={[] as never}
+        onLogout={jest.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText('Terima Order')).toBeTruthy();
+    });
+
+    let daftar = UNSAFE_getAllByType(FlatList);
+    expect(daftarDengan(daftar, 'daftar-tersedia')?.props.scrollsToTop).toBe(true);
+    expect(daftarDengan(daftar, 'daftar-saya')?.props.scrollsToTop).toBe(false);
+
+    fireEvent.press(getByText('Order Saya'));
+
+    daftar = UNSAFE_getAllByType(FlatList);
+    expect(daftarDengan(daftar, 'daftar-tersedia')?.props.scrollsToTop).toBe(false);
+    expect(daftarDengan(daftar, 'daftar-saya')?.props.scrollsToTop).toBe(true);
   });
 });
 
@@ -658,9 +733,10 @@ describe('gerak kartu daftar Order', () => {
       expect(getByText('Terima Order')).toBeTruthy();
     });
 
-    const barisTersedia = UNSAFE_getAllByType(ListEnterRow);
-    expect(barisTersedia).toHaveLength(1);
-    expect(barisTersedia[0].props.exiting).toBe(SlideOutRight);
+    const barisTersedia = UNSAFE_getAllByType(ListEnterRow).find(
+      (node) => node.props.id === 'pool-gerak-1',
+    );
+    expect(barisTersedia?.props.exiting).toBe(SlideOutRight);
 
     fireEvent.press(getByText('Order Saya'));
 
@@ -668,15 +744,21 @@ describe('gerak kartu daftar Order', () => {
       expect(getByText(/Order #ORDER-GE/)).toBeTruthy();
     });
 
-    const barisSaya = UNSAFE_getAllByType(ListEnterRow);
-    expect(barisSaya).toHaveLength(1);
-    expect(barisSaya[0].props.exiting).toBeUndefined();
+    // Kartu tidak dipasang ulang saat ganti tab, jadi bentuk keluar dan
+    // tidak keluarnya tetap sama.
+    const barisSesudah = UNSAFE_getAllByType(ListEnterRow);
+    expect(
+      barisSesudah.find((node) => node.props.id === 'pool-gerak-1')?.props.exiting,
+    ).toBe(SlideOutRight);
+    expect(
+      barisSesudah.find((node) => node.props.id === 'order-gerak-1')?.props.exiting,
+    ).toBeUndefined();
   });
 
   test('di dalam jendela awal tidak ada gerak keluar dan tidak ada geser baris', async () => {
     setBarisPool([makeBaris({ id: 'pool-jendela-1' })]);
 
-    const { UNSAFE_getAllByType, UNSAFE_getByType, getByText } = render(
+    const { UNSAFE_getAllByType, getByText } = render(
       <InitialWindowProvider>
         <OrdersScreenBase
           database={mockDatabase as never}
@@ -691,13 +773,20 @@ describe('gerak kartu daftar Order', () => {
     });
 
     expect(UNSAFE_getAllByType(ListEnterRow)[0].props.exiting).toBeUndefined();
-    expect(UNSAFE_getByType(FlatList).props.itemLayoutAnimation).toBeUndefined();
+
+    const daftar = UNSAFE_getAllByType(FlatList);
+    expect(
+      daftarDengan(daftar, 'daftar-tersedia')?.props.itemLayoutAnimation,
+    ).toBeUndefined();
+    expect(
+      daftarDengan(daftar, 'daftar-saya')?.props.itemLayoutAnimation,
+    ).toBeUndefined();
   });
 
   test('di luar jendela awal baris lain bergeser saat kartu masuk atau keluar', async () => {
     setBarisPool([makeBaris({ id: 'pool-geser-1' })]);
 
-    const { UNSAFE_getByType, getByText } = render(
+    const { UNSAFE_getAllByType, getByText } = render(
       <OrdersScreenBase
         database={mockDatabase as never}
         myOrders={[] as never}
@@ -709,7 +798,13 @@ describe('gerak kartu daftar Order', () => {
       expect(getByText('Terima Order')).toBeTruthy();
     });
 
-    expect(UNSAFE_getByType(FlatList).props.itemLayoutAnimation).toBeDefined();
+    const daftar = UNSAFE_getAllByType(FlatList);
+    expect(
+      daftarDengan(daftar, 'daftar-tersedia')?.props.itemLayoutAnimation,
+    ).toBeDefined();
+    expect(
+      daftarDengan(daftar, 'daftar-saya')?.props.itemLayoutAnimation,
+    ).toBeDefined();
   });
 });
 
@@ -1334,7 +1429,7 @@ describe('urutan daftar di layar', () => {
       }),
     ];
 
-    const { UNSAFE_getByType } = render(
+    const { UNSAFE_getAllByType } = render(
       <OrdersScreenBase
         database={mockDatabase as never}
         myOrders={myOrders as never}
@@ -1343,10 +1438,10 @@ describe('urutan daftar di layar', () => {
     );
 
     await waitFor(() => {
-      expect(idDariDaftar(UNSAFE_getByType(FlatList).props.data)).toEqual([
-        'order-aktif-1',
-        'order-selesai-1',
-      ]);
+      const daftar = UNSAFE_getAllByType(FlatList);
+      expect(
+        idDariDaftar(daftarDengan(daftar, 'daftar-saya')?.props.data),
+      ).toEqual(['order-aktif-1', 'order-selesai-1']);
     });
   });
 
@@ -1356,7 +1451,7 @@ describe('urutan daftar di layar', () => {
       makeBaris({ id: 'pool-baru-1', createdAt: 2_000 }),
     ]);
 
-    const { UNSAFE_getByType } = render(
+    const { UNSAFE_getAllByType } = render(
       <OrdersScreenBase
         database={mockDatabase as never}
         myOrders={[] as never}
@@ -1365,10 +1460,10 @@ describe('urutan daftar di layar', () => {
     );
 
     await waitFor(() => {
-      expect(idDariDaftar(UNSAFE_getByType(FlatList).props.data)).toEqual([
-        'pool-baru-1',
-        'pool-lama-1',
-      ]);
+      const daftar = UNSAFE_getAllByType(FlatList);
+      expect(
+        idDariDaftar(daftarDengan(daftar, 'daftar-tersedia')?.props.data),
+      ).toEqual(['pool-baru-1', 'pool-lama-1']);
     });
   });
 });
@@ -1608,7 +1703,7 @@ describe('tema dan tata letak layar Order', () => {
   });
 
   test('bilah koneksi di luar isi layar, tab dan daftar di dalam', () => {
-    const { UNSAFE_getByType } = render(
+    const { UNSAFE_getAllByType, UNSAFE_getByType } = render(
       <OrdersScreenBase
         database={mockDatabase as never}
         myOrders={[] as never}
@@ -1621,9 +1716,8 @@ describe('tema dan tata letak layar Order', () => {
     expect(kepala.props.children).toBeUndefined();
 
     // Isi layar adalah pembungkus yang punya prop layout.
-    const isiLayar = leluhur(UNSAFE_getByType(FlatList)).find(
-      (node) => node.props.layout !== undefined,
-    );
+    const daftar = daftarDengan(UNSAFE_getAllByType(FlatList), 'daftar-tersedia')!;
+    const isiLayar = leluhur(daftar).find((node) => node.props.layout !== undefined);
     expect(isiLayar).toBeDefined();
 
     // Bilah bukan turunan kepala dan bukan turunan isi layar.
@@ -1633,7 +1727,7 @@ describe('tema dan tata letak layar Order', () => {
   });
 
   test('isi layar urutannya kepala, ringkasan, wadah tab, lalu daftar', () => {
-    const { UNSAFE_getByType } = render(
+    const { UNSAFE_getAllByType, UNSAFE_getByType } = render(
       <OrdersScreenBase
         database={mockDatabase as never}
         myOrders={[] as never}
@@ -1641,17 +1735,16 @@ describe('tema dan tata letak layar Order', () => {
       />,
     );
 
-    const isiLayar = leluhur(UNSAFE_getByType(FlatList)).find(
-      (node) => node.props.layout !== undefined,
-    );
+    const daftar = daftarDengan(UNSAFE_getAllByType(FlatList), 'daftar-tersedia')!;
+    const isiLayar = leluhur(daftar).find((node) => node.props.layout !== undefined);
     const urutan = anak(isiLayar!);
 
     expect(urutan[0].type).toBe(MainHeader);
     expect(urutan[1].props.style).toBe(UNSAFE_getByType(DaySummary).parent?.props.style);
     expect(urutan[2].props.style).toBe(UNSAFE_getByType(Tabs).parent?.props.style);
-    // Daftar dibungkus lapisan yang bisa pudar, jadi FlatList ada di dalam
-    // lapisan itu, bukan langsung jadi anak isi layar.
-    expect(leluhur(UNSAFE_getByType(FlatList)).includes(urutan[3])).toBe(true);
+    // Daftar dibungkus lapisan sendiri, jadi FlatList ada di dalam lapisan
+    // itu, bukan langsung jadi anak isi layar.
+    expect(leluhur(daftar).includes(urutan[3])).toBe(true);
   });
 
   test('kepala daftar memakai tinggi 28, ikon kecil, dan warna teks halus', async () => {
@@ -1685,7 +1778,7 @@ describe('tema dan tata letak layar Order', () => {
   });
 
   test('daftar memakai padding dan ruang bawah versi 2', () => {
-    const { UNSAFE_getByType } = render(
+    const { UNSAFE_getAllByType } = render(
       <OrdersScreenBase
         database={mockDatabase as never}
         myOrders={[] as never}
@@ -1693,13 +1786,15 @@ describe('tema dan tata letak layar Order', () => {
       />,
     );
 
-    const gayaDaftar = StyleSheet.flatten(
-      UNSAFE_getByType(FlatList).props.contentContainerStyle,
-    );
-    expect(gayaDaftar.paddingTop).toBe(space[2]);
-    expect(gayaDaftar.paddingHorizontal).toBe(space[4]);
-    expect(gayaDaftar.gap).toBe(space[3]);
-    expect(gayaDaftar.paddingBottom).toBe(space[10]);
+    const daftar = UNSAFE_getAllByType(FlatList);
+    expect(daftar).toHaveLength(2);
+    for (const node of daftar) {
+      const gayaDaftar = StyleSheet.flatten(node.props.contentContainerStyle);
+      expect(gayaDaftar.paddingTop).toBe(space[2]);
+      expect(gayaDaftar.paddingHorizontal).toBe(space[4]);
+      expect(gayaDaftar.gap).toBe(space[3]);
+      expect(gayaDaftar.paddingBottom).toBe(space[10]);
+    }
   });
 
   test('wadah tab punya margin atas dan sisi', () => {

@@ -21,6 +21,7 @@ import Animated, {
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
+  withDelay,
   withTiming,
 } from 'react-native-reanimated';
 
@@ -309,17 +310,15 @@ export function OrdersScreenBase({
   const [acceptingOrderId, setAcceptingOrderId] = useState<string | null>(null);
   // Tab awal ditentukan sekali, waktu layar dipasang.
   const [activeTab, setActiveTab] = useState(() => tabAwal(myOrders));
-  // Tab yang isinya sedang tampil. Berbeda dari activeTab selama isi lama
-  // masih memudar keluar sebelum isi baru masuk.
-  const [tabTampil, setTabTampil] = useState<TabKey>(() => activeTab);
-  // Isi tab baru sudah dipasang tapi belum tertata. Pudar masuk ditunggu
-  // sampai kepala daftar memberi tahu barunya sudah siap.
-  const menungguTata = useRef(false);
+  // Tab yang terakhir tampil, dipakai efek ganti tab.
+  const tabSebelumnya = useRef<TabKey>(activeTab);
   // Kurangi gerakan: isi langsung berubah tanpa pudar.
   const kurangiGerak = useReducedMotion();
-  // Opasitas isi daftar, dipakai pudar saat ganti tab.
-  const opasitasDaftar = useSharedValue(1);
-  const daftarRef = useRef<FlatList<OrderModel>>(null);
+  // Opasitas tiap lapisan daftar, dipakai pudar saat ganti tab.
+  const opasitasTersedia = useSharedValue(activeTab === TAB_TERSEDIA ? 1 : 0);
+  const opasitasSaya = useSharedValue(activeTab === TAB_SAYA ? 1 : 0);
+  const daftarTersediaRef = useRef<FlatList<OrderModel>>(null);
+  const daftarSayaRef = useRef<FlatList<OrderModel>>(null);
   // Urutan Terima yang sedang jalan: tombol jadi centang, kartu keluar,
   // baru tab pindah.
   const [terimaBerhasil, setTerimaBerhasil] = useState<UrutanTerima | null>(null);
@@ -679,11 +678,11 @@ export function OrdersScreenBase({
   // digerakkan.
   const pelacakTersedia = useListEnter(idTersedia, {
     initialCount: JUMLAH_AWAL,
-    active: tabTampil === TAB_TERSEDIA,
+    active: activeTab === TAB_TERSEDIA,
   });
   const pelacakSaya = useListEnter(idSaya, {
     initialCount: JUMLAH_AWAL,
-    active: tabTampil === TAB_SAYA,
+    active: activeTab === TAB_SAYA,
   });
 
   // Pil Order Saya cuma menghitung order yang masih dikerjakan.
@@ -779,8 +778,8 @@ export function OrdersScreenBase({
     return () => clearTimeout(timer);
   }, [terimaBerhasil, kartuTerimaAda, buangDariTersedia]);
 
-  // Sorotan cuma sekali. Kartunya dipasang lagi setelah isi tab lama
-  // memudar, jadi sorotannya dibersihkan setelah waktu sorot lewat.
+  // Sorotan cuma sekali. Kartu tidak lagi dipasang ulang saat ganti tab,
+  // jadi sorotannya dibersihkan setelah waktu sorot lewat.
   useEffect(() => {
     if (!sorotId) return;
     const timer = setTimeout(() => {
@@ -981,73 +980,55 @@ export function OrdersScreenBase({
     [buangDariTersedia],
   );
 
-  // Ganti isi daftar: gulir ke atas dulu, lalu tampilkan isi tab tujuan.
-  // Isi baru ditandai sedang menunggu tertata, jadi pudar masuk ditunggu
-  // sampai isi baru benar-benar siap tampil.
-  const gantiIsi = useCallback((tujuan: TabKey) => {
-    daftarRef.current?.scrollToOffset({ offset: 0, animated: false });
-    menungguTata.current = true;
-    setTabTampil(tujuan);
+  // Gulir daftar ke atas, jadi daftar selalu tampil dari atas.
+  const gulirKeAtas = useCallback((tab: TabKey) => {
+    const ref = tab === TAB_TERSEDIA ? daftarTersediaRef : daftarSayaRef;
+    ref.current?.scrollToOffset({ offset: 0, animated: false });
   }, []);
 
-  // Isi daftar pudar keluar dulu, baru isi tab baru pudar masuk. Kalau
-  // pengguna kembali ke tab semula sebelum pudar keluar selesai, pudar
-  // keluar dibatalkan dan isi lama kembali terang. Kalau isi baru sedang
-  // menunggu tertata, pudar masuk datang dari kepala daftar yang sudah
-  // mengukur barunya.
+  // Ganti tab: daftar lama pudar keluar, lalu daftar tujuan pudar masuk.
+  // Dua daftar tetap dipasang, jadi kartu tidak pernah dipasang ulang.
   useEffect(() => {
-    if (activeTab === tabTampil) {
-      if (menungguTata.current) {
-        return;
-      }
-      opasitasDaftar.value = kurangiGerak
-        ? 1
-        : withTiming(1, {
-            duration: motion.duration.fadeIn,
-            easing: standardEasing,
-          });
+    if (activeTab === tabSebelumnya.current) {
       return;
     }
+    tabSebelumnya.current = activeTab;
+    const tabKeluar = activeTab === TAB_TERSEDIA ? TAB_SAYA : TAB_TERSEDIA;
+    const opasitasKeluar = activeTab === TAB_TERSEDIA ? opasitasSaya : opasitasTersedia;
+    const opasitasMasuk = activeTab === TAB_TERSEDIA ? opasitasTersedia : opasitasSaya;
+
     if (kurangiGerak) {
-      gantiIsi(activeTab);
+      opasitasKeluar.value = 0;
+      opasitasMasuk.value = 1;
+      gulirKeAtas(tabKeluar);
       return;
     }
-    opasitasDaftar.value = withTiming(
+
+    opasitasKeluar.value = withTiming(
       0,
       { duration: motion.duration.fadeOut, easing: exitEasing },
       (selesai) => {
         if (selesai) {
-          runOnJS(gantiIsi)(activeTab);
+          runOnJS(gulirKeAtas)(tabKeluar);
         }
       },
     );
-  }, [activeTab, tabTampil, kurangiGerak, gantiIsi, opasitasDaftar]);
+    opasitasMasuk.value = withDelay(
+      motion.duration.fadeOut,
+      withTiming(1, { duration: motion.duration.fadeIn, easing: standardEasing }),
+    );
+  }, [activeTab, kurangiGerak, gulirKeAtas, opasitasTersedia, opasitasSaya]);
 
-  const gayaOpasitas = useAnimatedStyle(() => ({
-    opacity: opasitasDaftar.value,
+  const gayaOpasitasTersedia = useAnimatedStyle(() => ({
+    opacity: opasitasTersedia.value,
   }));
 
-  // Kepala daftar baru sudah tertata: isi tab yang baru ditampilkan sudah
-  // siap digambar, jadi pudar masuk boleh jalan.
-  const saatKepalaTertata = useCallback(() => {
-    if (!menungguTata.current) return;
-    if (activeTab !== tabTampil) return;
-    menungguTata.current = false;
-    opasitasDaftar.value = kurangiGerak
-      ? 1
-      : withTiming(1, {
-          duration: motion.duration.fadeIn,
-          easing: standardEasing,
-        });
-  }, [activeTab, tabTampil, kurangiGerak, opasitasDaftar]);
+  const gayaOpasitasSaya = useAnimatedStyle(() => ({
+    opacity: opasitasSaya.value,
+  }));
 
-  // Kartu yang hilang dari Tersedia keluar ke kanan. Syarat tab aktif
-  // mematikan gerak keluar begitu isi lama mulai memudar, jadi kartu tidak
-  // meluncur saat tab diganti.
-  const keluarTersedia =
-    !dalamJendela && tabTampil === TAB_TERSEDIA && activeTab === TAB_TERSEDIA
-      ? KELUAR_KANAN
-      : undefined;
+  // Kartu yang hilang dari Tersedia keluar ke kanan.
+  const keluarTersedia = !dalamJendela ? KELUAR_KANAN : undefined;
 
   // Nilai di luar data yang dipakai renderItem. FlatList cuma pasti
   // menggambar ulang sel kalau data atau extraData berubah.
@@ -1177,18 +1158,8 @@ export function OrdersScreenBase({
     />
   );
 
-  const tampilTersedia = tabTampil === TAB_TERSEDIA;
-
-  // Kepala daftar dibungkus satu View yang selalu dipasang, walau isinya
-  // kosong. Pembungkus ini memberitahu kalau isi tab baru sudah tertata, jadi
-  // pudar masuk tidak jalan sebelum isi baru benar-benar siap tampil. Kuncinya
-  // diganti tiap tab berganti, jadi pembungkus dipasang ulang dan event layout
-  // datang lagi.
-  const kepalaDaftar = (
-    <View key={tabTampil} testID="kepala-daftar" onLayout={saatKepalaTertata}>
-      {tampilTersedia ? renderPoolHeader() : notice}
-    </View>
-  );
+  const tersediaAktif = activeTab === TAB_TERSEDIA;
+  const sayaAktif = activeTab === TAB_SAYA;
 
   return (
     <View style={gayaLayar.layar}>
@@ -1219,31 +1190,68 @@ export function OrdersScreenBase({
         <View style={gayaLayar.wadahTab}>
           <Tabs tabs={tabs} activeKey={activeTab} onChange={onTabChange} />
         </View>
-        {/* Isi daftar dibungkus lapisan sendiri, jadi isinya bisa pudar
-            saat ganti tab tanpa ikut menggeser isi layar. */}
-        <Animated.View
-          testID="isi-daftar"
-          style={[gayaLayar.wadahDaftar, gayaOpasitas]}
-        >
-          <Animated.FlatList
-            ref={daftarRef}
-            data={tampilTersedia ? poolUrut : myOrdersUrut}
-            extraData={extraData}
-            initialNumToRender={JUMLAH_AWAL}
-            itemLayoutAnimation={dalamJendela ? undefined : GESER_BARIS}
-            keyExtractor={(row) => row.id}
-            renderItem={tampilTersedia ? renderPoolItem : renderMineItem}
-            ListHeaderComponent={kepalaDaftar}
-            ListEmptyComponent={tampilTersedia ? kosongTersedia : kosongSaya}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing || (fetchBelumSelesai && networkStatus !== 'offline')}
-                onRefresh={onRefresh}
-              />
-            }
-            contentContainerStyle={gayaLayar.daftar}
-          />
-        </Animated.View>
+        {/* Dua daftar dipasang terus, satu per tab, ditumpuk di tempat yang
+            sama. Ganti tab cuma memudarkan isinya, jadi kartu tidak pernah
+            dipasang ulang. Lapisan yang tidak aktif tidak bisa disentuh dan
+            disembunyikan dari pembaca layar. */}
+        <View style={gayaLayar.wadahDaftar}>
+          <Animated.View
+            testID="isi-tersedia"
+            pointerEvents={tersediaAktif ? 'auto' : 'none'}
+            importantForAccessibility={tersediaAktif ? 'auto' : 'no-hide-descendants'}
+            accessibilityElementsHidden={!tersediaAktif}
+            style={[StyleSheet.absoluteFill, gayaOpasitasTersedia]}
+          >
+            <Animated.FlatList
+              testID="daftar-tersedia"
+              ref={daftarTersediaRef}
+              data={poolUrut}
+              extraData={extraData}
+              initialNumToRender={JUMLAH_AWAL}
+              itemLayoutAnimation={dalamJendela ? undefined : GESER_BARIS}
+              keyExtractor={(row) => row.id}
+              renderItem={renderPoolItem}
+              ListHeaderComponent={renderPoolHeader()}
+              ListEmptyComponent={kosongTersedia}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing || (fetchBelumSelesai && networkStatus !== 'offline')}
+                  onRefresh={onRefresh}
+                />
+              }
+              contentContainerStyle={gayaLayar.daftar}
+              scrollsToTop={tersediaAktif}
+            />
+          </Animated.View>
+          <Animated.View
+            testID="isi-saya"
+            pointerEvents={sayaAktif ? 'auto' : 'none'}
+            importantForAccessibility={sayaAktif ? 'auto' : 'no-hide-descendants'}
+            accessibilityElementsHidden={!sayaAktif}
+            style={[StyleSheet.absoluteFill, gayaOpasitasSaya]}
+          >
+            <Animated.FlatList
+              testID="daftar-saya"
+              ref={daftarSayaRef}
+              data={myOrdersUrut}
+              extraData={extraData}
+              initialNumToRender={JUMLAH_AWAL}
+              itemLayoutAnimation={dalamJendela ? undefined : GESER_BARIS}
+              keyExtractor={(row) => row.id}
+              renderItem={renderMineItem}
+              ListHeaderComponent={notice}
+              ListEmptyComponent={kosongSaya}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing || (fetchBelumSelesai && networkStatus !== 'offline')}
+                  onRefresh={onRefresh}
+                />
+              }
+              contentContainerStyle={gayaLayar.daftar}
+              scrollsToTop={sayaAktif}
+            />
+          </Animated.View>
+        </View>
       </Animated.View>
     </View>
   );

@@ -586,6 +586,42 @@ describe('kartu Tersedia tidak membuka detail order', () => {
 
     expect(mockNavigate).toHaveBeenCalledWith('OrderDetail', { orderId: 'order-mine-nav' });
   });
+
+  test('kartu di daftar tersembunyi tidak bisa ditekan', async () => {
+    const myOrders = [makeOrder({ id: 'order-nav-tersembunyi', status: 'DELIVERED' })];
+
+    // Status DELIVERED membuat tab awal tetap Tersedia.
+    const { getByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} onLogout={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(
+        getByText(/^Order #ORDER-NA/, { includeHiddenElements: true }),
+      ).toBeTruthy();
+    });
+
+    // Kartu ada di daftar Order Saya yang sedang disembunyikan, jadi tidak
+    // bisa disentuh.
+    await act(async () => {
+      fireEvent.press(getByText(/^Order #ORDER-NA/, { includeHiddenElements: true }));
+    });
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+
+    // Setelah pindah ke tab Order Saya, kartu yang sama bisa disentuh.
+    await act(async () => {
+      fireEvent.press(getByText('Order Saya'));
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText(/^Order #ORDER-NA/));
+    });
+
+    expect(mockNavigate).toHaveBeenCalledWith('OrderDetail', {
+      orderId: 'order-nav-tersembunyi',
+    });
+  });
 });
 
 // Lencana basi di kartu Order Saya
