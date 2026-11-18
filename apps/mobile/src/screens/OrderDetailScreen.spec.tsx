@@ -7,6 +7,7 @@ import { Alert } from 'react-native';
 import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
 
 import { OrderDetailScreen } from './OrderDetailScreen';
+import { hapticDelivered } from '../haptics';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
 import type { NetworkStatus } from '../map/networkMonitor';
 import type { OrderModel } from '../db/models/OrderModel';
@@ -225,6 +226,11 @@ const mockDatabase: any = {
   },
   batch: (...args: unknown[]) => mockDatabaseBatch(...args),
 };
+
+// Mock getar: layar bergetar saat Selesai diantar.
+jest.mock('../haptics', () => ({
+  hapticDelivered: jest.fn(),
+}));
 
 jest.mock('@nozbe/watermelondb/react', () => ({ withDatabase: (C: any) => C }));
 jest.mock('@nozbe/watermelondb', () => ({
@@ -1538,6 +1544,113 @@ describe('driver status button behavior', () => {
     // Label status kembali ke PREPARING (dari baris).
     expect(queryByText('PREPARING')).toBeTruthy();
     expect(queryByText('Mulai antar')).toBeNull();
+  });
+
+  // Getar Selesai diantar: getarnya tanda aksi sudah diterima HP, jadi
+  // tetap bergetar walau antrean belum sempat terkirim.
+  test('Selesai diantar: getar sekali setelah antre sukses', async () => {
+    jest.clearAllMocks();
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456', serverVersion: 1 });
+    mockPayments.push({ id: 'cod-getar-1', orderId: 'order-123', method: PaymentMethod.CASH, status: PaymentStatus.CAPTURED });
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: true, pendingActionId: 'pa-getar-1' });
+
+    const { getByText } = renderScreen();
+    await act(async () => {
+      paymentsSubscriptionCallback?.([...mockPayments]);
+    });
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+
+    const buttons = (Alert.alert as jest.Mock).mock.calls[0][2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    expect(hapticDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  test('Selesai diantar: getar tetap jalan walau kirim antrean gagal', async () => {
+    jest.clearAllMocks();
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456', serverVersion: 1 });
+    mockPayments.push({ id: 'cod-getar-2', orderId: 'order-123', method: PaymentMethod.CASH, status: PaymentStatus.CAPTURED });
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: true, pendingActionId: 'pa-getar-2' });
+    mockDrainPendingActions.mockRejectedValue(new TypeError('Network request failed'));
+
+    const { getByText } = renderScreen();
+    await act(async () => {
+      paymentsSubscriptionCallback?.([...mockPayments]);
+    });
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+
+    const buttons = (Alert.alert as jest.Mock).mock.calls[0][2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    expect(hapticDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  test('Selesai diantar: tidak bergetar kalau antre gagal', async () => {
+    jest.clearAllMocks();
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456', serverVersion: 1 });
+    mockPayments.push({ id: 'cod-getar-3', orderId: 'order-123', method: PaymentMethod.CASH, status: PaymentStatus.CAPTURED });
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: false, error: 'Not authenticated' });
+
+    const { getByText } = renderScreen();
+    await act(async () => {
+      paymentsSubscriptionCallback?.([...mockPayments]);
+    });
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+
+    const buttons = (Alert.alert as jest.Mock).mock.calls[0][2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    expect(hapticDelivered).not.toHaveBeenCalled();
+  });
+
+  test('Mulai antar: tidak bergetar', async () => {
+    jest.clearAllMocks();
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456', serverVersion: 1 });
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: true, pendingActionId: 'pa-getar-4' });
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Mulai antar'));
+    });
+
+    const buttons = (Alert.alert as jest.Mock).mock.calls[0][2] as Array<{ text: string; onPress?: () => void }>;
+    const yaButton = buttons.find((b) => b.text === 'Ya');
+    await act(async () => {
+      yaButton?.onPress?.();
+    });
+
+    expect(hapticDelivered).not.toHaveBeenCalled();
   });
 });
 

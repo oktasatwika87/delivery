@@ -18,6 +18,7 @@ import { OrderModel } from '../db/models/OrderModel';
 import { PaymentModel } from '../db/models/PaymentModel';
 import { PendingActionModel, readUpdateStatusTarget } from '../db/models/PendingActionModel';
 import { formatCurrency } from '../formatCurrency';
+import { hapticDelivered } from '../haptics';
 import { getCurrentUserId } from '../sync/session';
 import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
@@ -615,6 +616,12 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
             if (!result.success) {
               Alert.alert('Gagal', 'Status gagal dicatat. Coba lagi.');
               return;
+            }
+            // Getarnya tanda aksi sudah diterima HP, jadi tetap bergetar
+            // walau antrean belum sempat terkirim. Mulai antar tidak
+            // bergetar.
+            if (nextStatus === OrderStatus.DELIVERED) {
+              hapticDelivered();
             }
             try {
               await drainPendingActions(database);
