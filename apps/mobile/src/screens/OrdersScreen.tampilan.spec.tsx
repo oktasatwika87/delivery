@@ -268,7 +268,7 @@ interface Instansi {
   type: unknown;
 }
 
-/** Ancestor sebuah elemen, dari yang paling dekat sampai akar pohon. */
+/** Leluhur sebuah elemen, dari yang paling dekat sampai akar pohon. */
 function leluhur(term: Instansi): Instansi[] {
   const hasil: Instansi[] = [];
   let sekarang: Instansi | null = term.parent;
