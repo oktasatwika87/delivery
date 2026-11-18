@@ -2,7 +2,7 @@
  * Pembaca kolom baris order.
  *
  * Kolom dibaca lewat _getRaw, jadi pembaca ini bisa dipakai di mana saja
- * tanpa decoration WatermelonDB aktif.
+ * tanpa dekorator WatermelonDB aktif.
  */
 
 import { OrderStatus } from '@delivery/shared';
