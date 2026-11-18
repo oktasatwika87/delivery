@@ -89,4 +89,98 @@ describe('DaySummary', () => {
     expect(rect.props.width).toBe(328);
     expect(rect.props.height).toBe(64);
   });
+
+  it('panel boleh menurunkan kolom kanan ke baris kedua', () => {
+    const { getByTestId } = render(
+      <DaySummary doneCount={3} cashAmount={120000} currency="IDR" />,
+    );
+
+    const gayaPanel = StyleSheet.flatten(getByTestId('panel-ringkasan').props.style);
+    expect(gayaPanel.flexWrap).toBe('wrap');
+    expect(gayaPanel.columnGap).toBe(16);
+    expect(gayaPanel.rowGap).toBe(12);
+  });
+
+  it('kolom kiri selebar isinya dan kolom kanan mengisi sisa', () => {
+    const { getByTestId } = render(
+      <DaySummary doneCount={3} cashAmount={120000} currency="IDR" />,
+    );
+
+    const gayaKiri = StyleSheet.flatten(getByTestId('kolom-selesai').props.style);
+    expect(gayaKiri.flex).toBeUndefined();
+    expect(gayaKiri.flexShrink).toBe(0);
+    expect(gayaKiri.paddingRight).toBe(16);
+    expect(gayaKiri.borderRightWidth).toBe(1);
+
+    const gayaKanan = StyleSheet.flatten(getByTestId('kolom-tunai').props.style);
+    expect(gayaKanan.flex).toBeUndefined();
+    expect(gayaKanan.flexGrow).toBe(1);
+    expect(gayaKanan.flexShrink).toBe(1);
+    expect(gayaKanan.paddingLeft).toBeUndefined();
+    expect(gayaKanan.borderLeftWidth).toBeUndefined();
+  });
+
+  it('garis pemisah disembunyikan sebelum kolom kanan diukur', () => {
+    const { getByTestId } = render(
+      <DaySummary doneCount={3} cashAmount={120000} currency="IDR" />,
+    );
+
+    const gayaKiri = StyleSheet.flatten(getByTestId('kolom-selesai').props.style);
+    expect(gayaKiri.borderRightColor).toBe('transparent');
+  });
+
+  it('garis pemisah tetap tampil kalau kolom kanan di baris pertama', () => {
+    const { getByTestId } = render(
+      <DaySummary doneCount={3} cashAmount={120000} currency="IDR" />,
+    );
+
+    fireEvent(getByTestId('kolom-tunai'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 14, width: 120, height: 30 } },
+    });
+
+    const gayaKiri = StyleSheet.flatten(getByTestId('kolom-selesai').props.style);
+    expect(gayaKiri.borderRightColor).toBe(themes.gelap.line);
+  });
+
+  it('garis pemisah tetap tampil kalau kolom kanan turun sedikit', () => {
+    const { getByTestId } = render(
+      <DaySummary doneCount={3} cashAmount={120000} currency="IDR" />,
+    );
+
+    fireEvent(getByTestId('kolom-tunai'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 14.4, width: 120, height: 30 } },
+    });
+
+    const gayaKiri = StyleSheet.flatten(getByTestId('kolom-selesai').props.style);
+    expect(gayaKiri.borderRightColor).toBe(themes.gelap.line);
+  });
+
+  it('garis pemisah hilang kalau kolom kanan turun ke baris kedua', () => {
+    const { getByTestId } = render(
+      <DaySummary doneCount={3} cashAmount={120000} currency="IDR" />,
+    );
+
+    fireEvent(getByTestId('kolom-tunai'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 70, width: 120, height: 30 } },
+    });
+
+    const gayaKiri = StyleSheet.flatten(getByTestId('kolom-selesai').props.style);
+    expect(gayaKiri.borderRightColor).toBe('transparent');
+  });
+
+  it('garis pemisah kembali tampil kalau kolom kanan naik lagi', () => {
+    const { getByTestId } = render(
+      <DaySummary doneCount={3} cashAmount={120000} currency="IDR" />,
+    );
+
+    fireEvent(getByTestId('kolom-tunai'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 70, width: 120, height: 30 } },
+    });
+    fireEvent(getByTestId('kolom-tunai'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 14, width: 120, height: 30 } },
+    });
+
+    const gayaKiri = StyleSheet.flatten(getByTestId('kolom-selesai').props.style);
+    expect(gayaKiri.borderRightColor).toBe(themes.gelap.line);
+  });
 });

@@ -43,6 +43,12 @@ const gaya = perTema((c) =>
   StyleSheet.create({
     panel: {
       flexDirection: 'row',
+      // Kolom kiri selebar isinya, kolom kanan mengisi sisa. Kalau angka
+      // tunai tetap tidak muat, kolom kanan turun ke baris kedua selebar
+      // panel dan angkanya tidak pernah dikecilkan.
+      flexWrap: 'wrap',
+      columnGap: space[4],
+      rowGap: space[3],
       borderRadius: radius.xl2,
       borderWidth: stroke.hairline,
       borderColor: c.lineCard,
@@ -55,15 +61,24 @@ const gaya = perTema((c) =>
       backgroundColor: c.surface,
     },
     kolomKiri: {
-      flex: 1,
+      flexShrink: 0,
       gap: 2,
+      paddingRight: space[4],
+      borderRightWidth: stroke.hairline,
     },
     kolomKanan: {
-      flex: 1,
+      flexGrow: 1,
+      flexShrink: 1,
       gap: 2,
-      paddingLeft: space[4],
-      borderLeftWidth: stroke.hairline,
-      borderLeftColor: c.line,
+    },
+    // Garis pemisah ada di sisi kanan kolom kiri. Kalau kolom kanan turun
+    // ke baris kedua, garis disembunyikan dengan mengganti warnanya, jadi
+    // tata letaknya tidak bolak-balik antara satu dan dua baris.
+    pemisahTampil: {
+      borderRightColor: c.line,
+    },
+    pemisahSembunyi: {
+      borderRightColor: 'transparent',
     },
     label: {
       ...type.bodyXs,
@@ -87,6 +102,9 @@ export function DaySummary({
   // Ukuran panel, diisi dari event layout. Gradasi butuh ukuran angka, kalau
   // pakai persen di Android gradasinya berhenti sebelum tepi panel.
   const [ukuran, setUkuran] = useState<{ lebar: number; tinggi: number } | null>(null);
+  // Apakah kolom kanan turun ke baris kedua. Null artinya belum diukur, jadi
+  // garis pemisah masih disembunyikan.
+  const [kananTurun, setKananTurun] = useState<boolean | null>(null);
 
   const saatTerukur = useCallback((event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -97,6 +115,15 @@ export function DaySummary({
         ? sebelumnya
         : { lebar: width, tinggi: height },
     );
+  }, []);
+
+  // Kolom kanan di baris pertama letaknya sama dengan padding atas, kadang
+  // lebih sedikit karena pembulatan piksel. Di baris kedua letaknya jauh di
+  // bawahnya.
+  const saatKananTerukur = useCallback((event: LayoutChangeEvent) => {
+    const { y } = event.nativeEvent.layout;
+    const turun = y > PADDING_ATAS + space[3] / 2;
+    setKananTurun((sebelumnya) => (sebelumnya === turun ? sebelumnya : turun));
   }, []);
 
   const gayaAngka: TextStyle & { lineHeight: number } = {
@@ -121,11 +148,14 @@ export function DaySummary({
           />
         </Svg>
       ) : null}
-      <View style={s.kolomKiri}>
+      <View
+        style={[s.kolomKiri, kananTurun === false ? s.pemisahTampil : s.pemisahSembunyi]}
+        testID="kolom-selesai"
+      >
         <Text style={s.label}>Hari ini</Text>
         <RollingNumber value={doneCount} format={formatSelesai} style={gayaAngka} />
       </View>
-      <View style={s.kolomKanan}>
+      <View style={s.kolomKanan} testID="kolom-tunai" onLayout={saatKananTerukur}>
         <Text style={s.label}>Tunai tercatat</Text>
         <RollingNumber
           value={cashAmount}
