@@ -59,7 +59,7 @@ import {
 } from './ReleasedOrdersNotice';
 import { locationService } from '../map/location';
 import { networkMonitor } from '../map/networkMonitor';
-import type { NetworkStatus } from '../map/networkMonitor';
+import { useNetworkStatus } from '../map/useNetworkStatus';
 import { RouteService } from '../map/routeService';
 import { GraphHopperRoutingProvider } from '../map/routing';
 import { ConnectionBar } from '../components/ConnectionBar';
@@ -317,7 +317,7 @@ export function OrdersScreenBase({
   const gayaLayar = gaya[namaTema];
   const [poolOrders, setPoolOrders] = useState<OrderModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [networkStatus, setNetworkStatus] = useState<NetworkStatus>(networkMonitor.getStatus());
+  const networkStatus = useNetworkStatus();
   // Semua aksi outbox, untuk semua order. Satu langganan untuk seluruh
   // layar, jadi lencana hilang sendiri begitu aksi terkirim dan dihapus.
   const [pendingActions, setPendingActions] = useState<PendingActionModel[]>([]);
@@ -393,14 +393,6 @@ export function OrdersScreenBase({
       cancelled = true;
       unsubscribe?.();
     };
-  }, []);
-
-  // Network monitor subscription
-  useEffect(() => {
-    const unsubscribe = networkMonitor.subscribe((status) => {
-      setNetworkStatus(status);
-    });
-    return unsubscribe;
   }, []);
 
   // Route service instance
