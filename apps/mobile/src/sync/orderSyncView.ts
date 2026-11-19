@@ -16,6 +16,8 @@ import type { SyncState } from '../components/SyncBadge';
 export interface OrderSyncView {
   displayStatus: OrderStatus;
   syncState: SyncState | null;
+  /** Keadaan antrean aksi aktif, tanpa melihat aksi gagal. */
+  antrean: 'pending' | 'stale' | null;
 }
 
 function readText(action: PendingActionModel, column: string): string {
@@ -56,10 +58,15 @@ function readPayload(action: PendingActionModel): unknown {
  *   order setelah antrean selesai terkirim. Kalau tidak ada aksi status, atau
  *   ada aksi 'failed' atau COD yatim, pakai status baris order dari server.
  * - syncState: 'failed' kalau ada aksi berstatus 'failed' atau COD yatim,
- *   'stale' kalau ada aksi aktif yang sudah menunggu lebih dari sejam,
- *   'pending' kalau ada aksi aktif, null kalau tidak ada aksi aktif.
+ *   selain itu sama dengan antrean. null kalau tidak ada aksi aktif.
  *   Aksi aktif tanpa waktu pembuatan tidak dianggap basi, jadi lencana
  *   'pending'.
+ * - antrean: keadaan aksi aktif saja, yaitu 'stale' kalau ada aksi aktif yang
+ *   sudah menunggu lebih dari sejam, 'pending' kalau ada aksi aktif, null
+ *   kalau tidak ada. Bedanya dari syncState: di detail order banner gagal dan
+ *   banner menunggu bisa tampil bersamaan, misalnya Mulai antar ditolak
+ *   server sementara COD masih antre. Lencana di kartu order hanya satu
+ *   keadaan, jadi gagal menutupi keadaan antrean.
  */
 export function deriveOrderSyncView(
   rowStatus: OrderStatus,
@@ -87,20 +94,25 @@ export function deriveOrderSyncView(
   const displayStatus =
     latestTarget && !hasFailed && !hasOrphanedCod ? latestTarget : rowStatus;
 
+  let antrean: 'pending' | 'stale' | null = null;
+  if (active.length > 0) {
+    const now = Date.now();
+    const isStale = active.some(
+      (action) => readActionAgeMs(action, now) > STALE_THRESHOLD_MS,
+    );
+    antrean = isStale ? 'stale' : 'pending';
+  }
+
   let syncState: SyncState | null = null;
   if (hasFailed || hasOrphanedCod) {
     // Aksi yang ditolak server menetap sampai driver mencoba lagi atau
     // membuangnya, jadi lencana tidak berubah jadi centang.
     syncState = 'failed';
-  } else if (active.length > 0) {
-    const now = Date.now();
-    const isStale = active.some(
-      (action) => readActionAgeMs(action, now) > STALE_THRESHOLD_MS,
-    );
-    syncState = isStale ? 'stale' : 'pending';
+  } else {
+    syncState = antrean;
   }
 
-  return { displayStatus, syncState };
+  return { displayStatus, syncState, antrean };
 }
 
 /**

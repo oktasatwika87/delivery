@@ -270,3 +270,90 @@ describe('deriveOrderSyncView', () => {
     expect(view.syncState).toBe('failed');
   });
 });
+
+describe('keadaan antrean di deriveOrderSyncView', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = buatDatabase();
+    jest.spyOn(Date, 'now').mockReturnValue(SEKARANG);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('tanpa aksi: antrean kosong', async () => {
+    const view = deriveOrderSyncView('PREPARING', await ambilAksi(db));
+
+    expect(view.antrean).toBeNull();
+  });
+
+  it('satu aksi pending baru: antrean menunggu', async () => {
+    await seedAksi(db, {
+      id: 'pa-antre-baru',
+      actionType: 'update_status',
+      targetOrderId: 'order-1',
+      status: 'pending',
+      payloadJson: '{"status":"DELIVERED"}',
+      createdAt: SEKARANG,
+    });
+
+    const view = deriveOrderSyncView('PREPARING', await ambilAksi(db));
+
+    expect(view.antrean).toBe('pending');
+  });
+
+  it('satu aksi syncing basi: antrean basi', async () => {
+    await seedAksi(db, {
+      id: 'pa-syncing-basi',
+      actionType: 'update_status',
+      targetOrderId: 'order-1',
+      status: 'syncing',
+      payloadJson: '{"status":"DELIVERED"}',
+      createdAt: SEKARANG - SEJAM - 1000,
+    });
+
+    const view = deriveOrderSyncView('PREPARING', await ambilAksi(db));
+
+    expect(view.antrean).toBe('stale');
+  });
+
+  it('aksi gagal bersama aksi pending: lencana ditolak server, antrean tetap menunggu', async () => {
+    await seedAksi(db, {
+      id: 'pa-gagal-antrean',
+      actionType: 'reject',
+      targetOrderId: 'order-1',
+      status: 'failed',
+      createdAt: SEKARANG,
+    });
+    await seedAksi(db, {
+      id: 'pa-antre-bersama-gagal',
+      actionType: 'update_status',
+      targetOrderId: 'order-1',
+      status: 'pending',
+      payloadJson: '{"status":"DELIVERED"}',
+      createdAt: SEKARANG,
+    });
+
+    const view = deriveOrderSyncView('PREPARING', await ambilAksi(db));
+
+    expect(view.syncState).toBe('failed');
+    expect(view.antrean).toBe('pending');
+  });
+
+  it('COD yatim saja: lencana ditolak server, antrean kosong', async () => {
+    await seedAksi(db, {
+      id: 'pa-cod-yatim-saja',
+      actionType: 'collect_cod',
+      targetOrderId: 'order-1',
+      status: 'orphaned_needs_review',
+      createdAt: SEKARANG,
+    });
+
+    const view = deriveOrderSyncView('PREPARING', await ambilAksi(db));
+
+    expect(view.syncState).toBe('failed');
+    expect(view.antrean).toBeNull();
+  });
+});
