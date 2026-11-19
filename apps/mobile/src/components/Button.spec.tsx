@@ -201,4 +201,12 @@ describe('Button', () => {
 
     expect(UNSAFE_queryByType(ActivityIndicator)).toBeNull();
   });
+
+  it('teks tombol hantu bergaya sedang', () => {
+    const { getByText } = render(
+      <Button title="Abaikan" onPress={() => {}} variant="ghost" />,
+    );
+    const gaya = StyleSheet.flatten(getByText('Abaikan').props.style);
+    expect(gaya.fontSize).toBe(15);
+  });
 });

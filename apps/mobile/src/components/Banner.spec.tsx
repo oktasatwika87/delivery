@@ -1,8 +1,8 @@
 /**
  * Tes komponen Banner.
  *
- * Banner memberi tahu pengguna soal kondisi aplikasi, dengan aksi dan tombol
- * tutup opsional.
+ * Banner memberi tahu pengguna soal kondisi aplikasi, dengan tombol aksi dan
+ * tombol tutup opsional.
  */
 
 import React from 'react';
@@ -10,16 +10,17 @@ import { StyleSheet } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 
 import { Banner } from './Banner';
+import { Button } from './Button';
 import { InitialWindowProvider } from './motion/InitialWindow';
+import { CheckMark } from './motion/CheckMark';
 import { Icon } from '../theme/Icon';
 import { themes } from '../theme/tokens';
 
-const KASUS_IKON: { tone: 'pending' | 'warning' | 'info' | 'danger' | 'success'; ikon: string }[] = [
+const KASUS_IKON: { tone: 'pending' | 'warning' | 'info' | 'danger'; ikon: string }[] = [
   { tone: 'pending', ikon: 'cloud_upload' },
   { tone: 'warning', ikon: 'history' },
   { tone: 'info', ikon: 'sync' },
   { tone: 'danger', ikon: 'sync_problem' },
-  { tone: 'success', ikon: 'payments' },
 ];
 
 describe('Banner', () => {
@@ -45,15 +46,6 @@ describe('Banner', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('tekan aksi memanggil aksi yang diberikan', () => {
-    const onPress = jest.fn();
-    const { getByText } = render(
-      <Banner tone="info" title="Judul" action={{ label: 'Coba lagi', onPress }} />,
-    );
-    fireEvent.press(getByText('Coba lagi'));
-    expect(onPress).toHaveBeenCalledTimes(1);
-  });
-
   it.each(KASUS_IKON)('tone $tone memakai ikon bawaannya', (kasus) => {
     const { UNSAFE_getAllByType } = render(<Banner tone={kasus.tone} title="Judul" />);
     expect(UNSAFE_getAllByType(Icon)[0].props.name).toBe(kasus.ikon);
@@ -73,12 +65,12 @@ describe('Banner', () => {
     expect(gaya.borderColor).toBe(themes.gelap.pendingLine);
   });
 
-  it('tone pending tanpa isi dan isinya rata tengah', () => {
+  it('tone pending isinya rata tengah dan tingginya tetap', () => {
     const { toJSON } = render(<Banner tone="pending" title="Judul" />);
     const gaya = StyleSheet.flatten(toJSON().props.style);
     expect(gaya.backgroundColor).toBeUndefined();
     expect(gaya.minHeight).toBe(52);
-    expect(gaya.justifyContent).toBe('center');
+    expect(gaya.alignItems).toBe('center');
   });
 
   it('warna isi sesuai tone', () => {
@@ -86,10 +78,6 @@ describe('Banner', () => {
       render(<Banner tone="danger" title="Judul" />).toJSON().props.style,
     );
     expect(bahaya.backgroundColor).toBe(themes.gelap.dangerSoft);
-    const sukses = StyleSheet.flatten(
-      render(<Banner tone="success" title="Judul" />).toJSON().props.style,
-    );
-    expect(sukses.backgroundColor).toBe(themes.gelap.infoSoft);
     const informasi = StyleSheet.flatten(
       render(<Banner tone="info" title="Judul" />).toJSON().props.style,
     );
@@ -101,8 +89,6 @@ describe('Banner', () => {
     expect(bahaya.UNSAFE_getAllByType(Icon)[0].props.color).toBe(themes.gelap.danger);
     const informasi = render(<Banner tone="info" title="Judul" />);
     expect(informasi.UNSAFE_getAllByType(Icon)[0].props.color).toBe(themes.gelap.info);
-    const sukses = render(<Banner tone="success" title="Judul" />);
-    expect(sukses.UNSAFE_getAllByType(Icon)[0].props.color).toBe(themes.gelap.info);
   });
 
   it('wadah memakai sudut, padding, dan jarak versi 2', () => {
@@ -138,5 +124,99 @@ describe('Banner', () => {
   it('tanpa penyedia akar punya entering', () => {
     const { toJSON } = render(<Banner tone="info" title="Judul" />);
     expect(toJSON().props.entering).toBeDefined();
+  });
+
+  it('banner tanpa judul isi teksnya bergaya sedang', () => {
+    const { getByText } = render(<Banner tone="info" body="Perubahan tersimpan" />);
+    const gaya = StyleSheet.flatten(getByText('Perubahan tersimpan').props.style);
+    expect(gaya.fontSize).toBe(15);
+    expect(gaya.color).toBe(themes.gelap.text);
+  });
+
+  it('banner dengan judul isinya bergaya kecil', () => {
+    const { getByText } = render(
+      <Banner tone="info" title="Sinkronisasi jalan" body="Data dikirim otomatis" />,
+    );
+    const gaya = StyleSheet.flatten(getByText('Data dikirim otomatis').props.style);
+    expect(gaya.fontSize).toBe(14);
+    expect(gaya.color).toBe(themes.gelap.text);
+  });
+
+  it('satu tombol aksi di tone danger memakai isi bahaya', () => {
+    const onPress = jest.fn();
+    const { UNSAFE_getAllByType, getByText } = render(
+      <Banner
+        tone="danger"
+        title="Gagal"
+        actions={[{ label: 'Hapus', onPress }]}
+      />,
+    );
+    const tombol = UNSAFE_getAllByType(Button);
+    expect(tombol).toHaveLength(1);
+    expect(tombol[0].props.variant).toBe('dangerFill');
+    expect(tombol[0].props.size).toBe('sm');
+    fireEvent.press(getByText('Hapus'));
+    expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('dua tombol aksi, yang kedua tombol hantu', () => {
+    const { UNSAFE_getAllByType } = render(
+      <Banner
+        tone="info"
+        title="Sinkronisasi jalan"
+        actions={[
+          { label: 'Coba lagi', onPress: jest.fn() },
+          { label: 'Abaikan', onPress: jest.fn() },
+        ]}
+      />,
+    );
+    const tombol = UNSAFE_getAllByType(Button);
+    expect(tombol).toHaveLength(2);
+    expect(tombol[1].props.variant).toBe('ghost');
+    expect(tombol[1].props.size).toBe('sm');
+  });
+
+  it('tone info tombol pertamanya isi utama', () => {
+    const { UNSAFE_getAllByType } = render(
+      <Banner tone="info" title="Sinkronisasi jalan" actions={[{ label: 'Coba lagi', onPress: jest.fn() }]} />,
+    );
+    expect(UNSAFE_getAllByType(Button)[0].props.variant).toBe('primary');
+  });
+
+  it('tone pending selesai pakai centang dan tepi utuh', () => {
+    const { UNSAFE_queryByType, UNSAFE_queryAllByType, toJSON } = render(
+      <Banner tone="pending" title="Menunggu" done />,
+    );
+    expect(UNSAFE_queryByType(CheckMark)).toBeTruthy();
+    expect(
+      UNSAFE_queryAllByType(Icon).some((ikon) => ikon.props.name === 'cloud_upload'),
+    ).toBe(false);
+    expect(StyleSheet.flatten(toJSON().props.style).borderStyle).toBe('solid');
+  });
+
+  it('tone pending belum selesai pakai ikon unggah dan tepi putus', () => {
+    const { UNSAFE_queryByType, UNSAFE_queryAllByType, toJSON } = render(
+      <Banner tone="pending" title="Menunggu" />,
+    );
+    expect(UNSAFE_queryByType(CheckMark)).toBeNull();
+    expect(
+      UNSAFE_queryAllByType(Icon).some((ikon) => ikon.props.name === 'cloud_upload'),
+    ).toBe(true);
+    expect(StyleSheet.flatten(toJSON().props.style).borderStyle).toBe('dashed');
+  });
+
+  it('tone danger mengabaikan tanda selesai', () => {
+    const { UNSAFE_queryByType } = render(<Banner tone="danger" title="Gagal" done />);
+    expect(UNSAFE_queryByType(CheckMark)).toBeNull();
+  });
+
+  it('tombol tutup punya margin minus sepuluh', () => {
+    const { getByLabelText } = render(
+      <Banner tone="info" title="Judul" onClose={() => {}} />,
+    );
+    const gaya = StyleSheet.flatten(getByLabelText('Tutup').props.style);
+    expect(gaya.marginTop).toBe(-10);
+    expect(gaya.marginBottom).toBe(-10);
+    expect(gaya.marginRight).toBe(-10);
   });
 });

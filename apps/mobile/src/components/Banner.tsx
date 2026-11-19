@@ -3,32 +3,36 @@
  *
  * Memberi tahu pengguna soal kondisi aplikasi, misalnya perubahan yang belum
  * tersinkron atau koneksi yang bermasalah. Bisa punya tombol tutup dan satu
- * aksi.
+ * atau dua tombol aksi.
  */
 
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 
+import { Button } from './Button';
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
 import { StripeFill } from '../theme/StripeFill';
 import { perTema, useTheme } from '../theme/ThemeProvider';
 import { radius, size, space, stroke, type } from '../theme/tokens';
 import { enterFromAbove, exitUp } from './motion/presets';
+import { CheckMark } from './motion/CheckMark';
 import { useInitialWindow } from './motion/InitialWindow';
 
 const PADDING_ATAS = 12;
 const PADDING_SAMPING = 14;
 const JARAK_ISI = 10;
 const UKURAN_TUTUP = 44;
+/** Margin negatif tombol tutup, supaya banner tidak bertambah tinggi. */
+const MARGEN_TUTUP = -10;
 
 /** Masuk banner dari atas. */
 const MASUK = enterFromAbove();
 /** Keluar banner ke atas. */
 const KELUAR = exitUp();
 
-export type BannerTone = 'pending' | 'warning' | 'info' | 'danger' | 'success';
+export type BannerTone = 'pending' | 'warning' | 'info' | 'danger';
 
 export interface BannerAction {
   label: string;
@@ -37,11 +41,13 @@ export interface BannerAction {
 
 export interface BannerProps {
   tone: BannerTone;
-  title: string;
+  title?: string;
   body?: string;
   icon?: IconName;
   onClose?: () => void;
-  action?: BannerAction;
+  actions?: readonly [BannerAction] | readonly [BannerAction, BannerAction];
+  /** Bentuk selesai banner yang menunggu. Hanya dipakai nada pending. */
+  done?: boolean;
 }
 
 interface GayaTone {
@@ -102,16 +108,6 @@ const GAYA_TONE = perTema(
       stripe: false,
       tengah: false,
     },
-    success: {
-      backgroundColor: c.infoSoft,
-      color: c.info,
-      titleColor: c.text,
-      icon: 'payments',
-      borderWidth: 0,
-      borderStyle: 'solid',
-      stripe: false,
-      tengah: false,
-    },
   }),
 );
 
@@ -126,7 +122,7 @@ const gaya = StyleSheet.create({
   },
   tengah: {
     minHeight: 52,
-    justifyContent: 'center',
+    alignItems: 'center',
   },
   ikon: {
     marginTop: 1,
@@ -139,6 +135,9 @@ const gaya = StyleSheet.create({
     ...type.labelMd,
   },
   isi: {
+    ...type.bodySm,
+  },
+  isiTanpaJudul: {
     ...type.bodyMdMedium,
   },
   barisAksi: {
@@ -146,15 +145,14 @@ const gaya = StyleSheet.create({
     gap: space[2],
     marginTop: JARAK_ISI,
   },
-  aksi: {
-    ...type.bodyMdMedium,
-    textDecorationLine: 'underline',
-  },
   tombolTutup: {
     width: UKURAN_TUTUP,
     height: UKURAN_TUTUP,
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: MARGEN_TUTUP,
+    marginBottom: MARGEN_TUTUP,
+    marginRight: MARGEN_TUTUP,
   },
 });
 
@@ -164,12 +162,17 @@ export function Banner({
   body,
   icon,
   onClose,
-  action,
+  actions,
+  done = false,
 }: BannerProps): React.JSX.Element {
   const { name, colors } = useTheme();
   const gayaTone = GAYA_TONE[name][tone];
   const dalamJendela = useInitialWindow();
   const namaIkon = icon ?? gayaTone.icon;
+  // Bentuk selesai hanya berlaku untuk banner yang menunggu.
+  const selesai = tone === 'pending' && done;
+
+  const gayaIsi = title ? gaya.isi : gaya.isiTanpaJudul;
 
   return (
     <Animated.View
@@ -181,7 +184,7 @@ export function Banner({
         {
           backgroundColor: gayaTone.backgroundColor,
           borderWidth: gayaTone.borderWidth,
-          borderStyle: gayaTone.borderStyle,
+          borderStyle: selesai ? 'solid' : gayaTone.borderStyle,
           borderColor: gayaTone.borderColor,
         },
       ]}
@@ -190,20 +193,33 @@ export function Banner({
         <StripeFill color={colors.warningStripe} colorAlt={colors.warningStripeAlt} />
       ) : null}
       <View style={gaya.ikon}>
-        <Icon name={namaIkon} size={size.iconMd} color={gayaTone.color} />
+        {selesai ? (
+          <CheckMark size={size.iconMd} color={colors.info} />
+        ) : (
+          <Icon name={namaIkon} size={size.iconMd} color={gayaTone.color} />
+        )}
       </View>
       <View style={gaya.kolom}>
-        <Text style={[gaya.judul, { color: gayaTone.titleColor }]}>{title}</Text>
-        {body ? <Text style={[gaya.isi, { color: colors.textMuted }]}>{body}</Text> : null}
-        {action ? (
+        {title ? (
+          <Text style={[gaya.judul, { color: gayaTone.titleColor }]}>{title}</Text>
+        ) : null}
+        {body ? <Text style={[gayaIsi, { color: colors.text }]}>{body}</Text> : null}
+        {actions ? (
           <View style={gaya.barisAksi}>
-            <Pressable
-              onPress={action.onPress}
-              accessibilityRole="button"
-              accessibilityLabel={action.label}
-            >
-              <Text style={[gaya.aksi, { color: gayaTone.color }]}>{action.label}</Text>
-            </Pressable>
+            <Button
+              title={actions[0].label}
+              onPress={actions[0].onPress}
+              size="sm"
+              variant={tone === 'danger' ? 'dangerFill' : 'primary'}
+            />
+            {actions.length === 2 ? (
+              <Button
+                title={actions[1].label}
+                onPress={actions[1].onPress}
+                size="sm"
+                variant="ghost"
+              />
+            ) : null}
           </View>
         ) : null}
       </View>

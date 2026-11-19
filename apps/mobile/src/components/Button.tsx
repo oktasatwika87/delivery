@@ -177,7 +177,7 @@ export function Button({
           : [];
 
   const gayaTeks: TextStyle = {
-    ...(variant === 'secondary'
+    ...(variant === 'secondary' || variant === 'ghost'
       ? type.bodyMdMedium
       : size === 'lg'
         ? type.labelLg
