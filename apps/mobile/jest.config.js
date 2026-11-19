@@ -14,6 +14,8 @@ module.exports = {
     '^@maplibre/maplibre-react-native$': '<rootDir>/src/__mocks__/@maplibre/maplibre-react-native.ts',
     '^react-native-svg$': '<rootDir>/src/__mocks__/react-native-svg.ts',
     '^react-native-reanimated$': '<rootDir>/src/__mocks__/react-native-reanimated.ts',
+    '^react-native-safe-area-context$':
+      '<rootDir>/src/__mocks__/react-native-safe-area-context.ts',
     '^react-native-haptic-feedback$': '<rootDir>/src/__mocks__/react-native-haptic-feedback.ts',
     // Stub minimal react-native - package asli Flow-typed & platform-specific
     // (./Utilities/Platform.android.js, dll) gagal resolve di jest runtime.
