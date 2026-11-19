@@ -809,6 +809,21 @@ export function OrdersScreenBase({
     return () => clearTimeout(timer);
   }, [sorotId]);
 
+  // Tanda gulir hanya berlaku sampai Order Saya baru tampil. Sesudah itu
+  // kartu yang baru ditata tidak boleh menggulir daftar, karena pemakai
+  // sudah melihat daftarnya dan mungkin sedang menggulir sendiri. Berlaku
+  // untuk cabang dengan dan tanpa kurangi gerakan.
+  useEffect(() => {
+    if (activeTab !== TAB_SAYA) {
+      tampilkanRef.current = null;
+      return;
+    }
+    const timer = setTimeout(() => {
+      tampilkanRef.current = null;
+    }, motion.duration.fadeOut + motion.duration.highlight);
+    return () => clearTimeout(timer);
+  }, [activeTab]);
+
   // Accept order
   const handleAccept = useCallback(
     async (order: OrderModel): Promise<void> => {
