@@ -30,6 +30,11 @@ import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
 import { PaymentModel } from '../db/models/PaymentModel';
 import { PendingActionModel } from '../db/models/PendingActionModel';
+import {
+  allActionsQuery,
+  cashPaymentsQuery,
+  driverOrdersQuery,
+} from '../db/driverQueries';
 import { getCurrentUserId } from '../sync/session';
 import { fetchAvailableOrders, UnauthorizedError, acceptOrder, ApiError } from '../sync/client';
 import { hapticAccept, hapticError } from '../haptics';
@@ -632,13 +637,9 @@ export function OrdersScreenBase({
   // saat dilepas, jadi lencana ikut hilang sendiri begitu aksi dihapus
   // dari database tanpa tarik-segarkan.
   useEffect(() => {
-    const subscription = database
-      .get<PendingActionModel>('pending_actions')
-      .query()
-      .observeWithColumns(['status'])
-      .subscribe((actions) => {
-        setPendingActions(actions);
-      });
+    const subscription = allActionsQuery(database).subscribe((actions) => {
+      setPendingActions(actions);
+    });
     return () => {
       subscription.unsubscribe();
     };
@@ -1338,25 +1339,16 @@ const OrdersScreenWithObservables = withDatabase(
     ['currentUserId'],
     ({ database, currentUserId }: { database: Database; currentUserId: string | null }) => ({
       myOrders: currentUserId
-        ? database
-            .get<OrderModel>('orders')
-            .query(
-              Q.where('driver_id', currentUserId),
-              Q.where('deleted_at', null),
-            )
-            .observeWithColumns(['status', 'updated_at'])
+        ? driverOrdersQuery(database, currentUserId)
         : of<OrderModel[]>([]),
       // Baris order dengan driver_id null dan last_conflict_reason 'released'
       // atau 'reassigned', untuk kotak pemberitahuan order yang lepas.
       releasedOrders: currentUserId
         ? releasedOrdersQuery(database)
         : of<OrderModel[]>([]),
-      // Payment tunai milik driver ini, buat ringkasan hari ini.
+      // Payment tunai yang belum dihapus, buat ringkasan hari ini.
       payments: currentUserId
-        ? database
-            .get<PaymentModel>('payments')
-            .query(Q.where('method', 'CASH'), Q.where('deleted_at', null))
-            .observeWithColumns(['status'])
+        ? cashPaymentsQuery(database)
         : of<PaymentModel[]>([]),
     }),
   )(OrdersScreenBase),
