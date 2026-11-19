@@ -41,6 +41,7 @@ import { hapticAccept, hapticError } from '../haptics';
 import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
 import { deriveOrderSyncView } from '../sync/orderSyncView';
+import { hitungAntrean } from '../sync/hitungAntrean';
 import { buildPoolRow, poolAddressJson } from './buildPoolRow';
 import {
   readCurrency,
@@ -637,25 +638,8 @@ export function OrdersScreenBase({
     };
   }, [database]);
 
-  // Jumlah aksi yang masih antre, dipakai ConnectionBar.
-  const pendingActionCount = useMemo(
-    () =>
-      pendingActions.filter((action) => {
-        const status = action._getRaw('status');
-        return status === 'pending' || status === 'syncing';
-      }).length,
-    [pendingActions],
-  );
-
-  // Jumlah aksi yang ditolak server atau COD yatim, dipakai ConnectionBar.
-  const failedActionCount = useMemo(
-    () =>
-      pendingActions.filter((action) => {
-        const status = action._getRaw('status');
-        return status === 'failed' || status === 'orphaned_needs_review';
-      }).length,
-    [pendingActions],
-  );
+  // Hitungan antrean untuk ConnectionBar.
+  const antrean = useMemo(() => hitungAntrean(pendingActions), [pendingActions]);
 
   // Aksi dikelompokkan per order, supaya tiap kartu cuma melihat aksinya
   // sendiri.
@@ -1231,8 +1215,8 @@ export function OrdersScreenBase({
         <ThemeProvider name="gelap">
           <ConnectionBar
             status={networkStatus}
-            pendingCount={pendingActionCount}
-            failedCount={failedActionCount}
+            pendingCount={antrean.pendingCount}
+            failedCount={antrean.failedCount}
           />
         </ThemeProvider>
       </View>
