@@ -3,7 +3,6 @@ import {
   Alert,
   FlatList,
   RefreshControl,
-  StatusBar,
   StyleSheet,
   Text,
   unstable_batchedUpdates,
@@ -63,8 +62,8 @@ import { networkMonitor } from '../map/networkMonitor';
 import { useNetworkStatus } from '../map/useNetworkStatus';
 import { RouteService } from '../map/routeService';
 import { GraphHopperRoutingProvider } from '../map/routing';
-import { ConnectionBar } from '../components/ConnectionBar';
 import { DaySummary } from '../components/DaySummary';
+import { ScreenFrame } from '../components/ScreenFrame';
 import { MainHeader } from '../components/AppBar';
 import { Tabs } from '../components/Tabs';
 import type { TabItem } from '../components/Tabs';
@@ -76,7 +75,7 @@ import { exitEasing, exitRight, shift, standardEasing } from '../components/moti
 import { ListEnterRow, useListEnter } from '../components/motion/listEnter';
 import type { ListEnterTracker } from '../components/motion/listEnter';
 import { useInitialWindow } from '../components/motion/InitialWindow';
-import { perTema, ThemeProvider, useTheme } from '../theme/ThemeProvider';
+import { perTema, useTheme } from '../theme/ThemeProvider';
 import { motion, size, space, type } from '../theme/tokens';
 import { formatCurrency } from '../formatCurrency';
 import { formatOrderNumber } from '../formatOrderNumber';
@@ -96,9 +95,6 @@ const TEKS_BUTUH_KONEKSI = 'Butuh koneksi internet untuk menerima order';
 // Jumlah tunai menggabungkan banyak baris payment, dan server selalu mengisi
 // mata uang IDR.
 const MATA_UANG_TUNAI = 'IDR';
-
-// Geser posisi isi layar, dipakai satu kali jadi konstanta modul.
-const GESER = shift();
 
 // Geser posisi baris daftar, dipakai satu kali jadi konstanta modul.
 const GESER_BARIS = shift();
@@ -1207,103 +1203,92 @@ export function OrdersScreenBase({
   const sayaAktif = activeTab === TAB_SAYA;
 
   return (
-    <View style={gayaLayar.layar}>
-      <StatusBar barStyle="light-content" backgroundColor={warnaTema.header} />
-      {/* Bilah di luar isi layar, supaya layout di isiLayar menggeser
-          isi layar saat bilah muncul atau hilang. */}
-      <View style={gayaLayar.wadahBilah}>
-        <ThemeProvider name="gelap">
-          <ConnectionBar
-            status={networkStatus}
-            pendingCount={antrean.pendingCount}
-            failedCount={antrean.failedCount}
-          />
-        </ThemeProvider>
+    <ScreenFrame
+      header={<MainHeader title="Order" subtitle="Driver" onLogout={onLogout} />}
+      connection={{
+        status: networkStatus,
+        pendingCount: antrean.pendingCount,
+        failedCount: antrean.failedCount,
+      }}
+    >
+      <View style={gayaLayar.wadahRingkasan}>
+        <DaySummary
+          doneCount={ringkasan.doneCount}
+          cashAmount={ringkasan.cashAmount}
+          currency={MATA_UANG_TUNAI}
+        />
       </View>
-      <Animated.View
-        style={gayaLayar.isiLayar}
-        layout={dalamJendela ? undefined : GESER}
+      <View style={gayaLayar.wadahTab}>
+        <Tabs tabs={tabs} activeKey={activeTab} onChange={onTabChange} />
+      </View>
+      {/* Dua daftar dipasang terus, satu per tab, ditumpuk di tempat yang
+          sama. Ganti tab cuma memudarkan isinya, jadi kartu tidak pernah
+          dipasang ulang. Lapisan yang tidak aktif tidak bisa disentuh dan
+          disembunyikan dari pembaca layar. */}
+      <View
+        style={gayaLayar.wadahDaftar}
+        ref={wadahDaftarRef}
+        collapsable={false}
+        onLayout={saatWadahTerukur}
       >
-        <MainHeader title="Order" subtitle="Driver" onLogout={onLogout} />
-        <View style={gayaLayar.wadahRingkasan}>
-          <DaySummary
-            doneCount={ringkasan.doneCount}
-            cashAmount={ringkasan.cashAmount}
-            currency={MATA_UANG_TUNAI}
-          />
-        </View>
-        <View style={gayaLayar.wadahTab}>
-          <Tabs tabs={tabs} activeKey={activeTab} onChange={onTabChange} />
-        </View>
-        {/* Dua daftar dipasang terus, satu per tab, ditumpuk di tempat yang
-            sama. Ganti tab cuma memudarkan isinya, jadi kartu tidak pernah
-            dipasang ulang. Lapisan yang tidak aktif tidak bisa disentuh dan
-            disembunyikan dari pembaca layar. */}
-        <View
-          style={gayaLayar.wadahDaftar}
-          ref={wadahDaftarRef}
-          collapsable={false}
-          onLayout={saatWadahTerukur}
+        <Animated.View
+          testID="isi-tersedia"
+          pointerEvents={tersediaAktif ? 'auto' : 'none'}
+          importantForAccessibility={tersediaAktif ? 'auto' : 'no-hide-descendants'}
+          accessibilityElementsHidden={!tersediaAktif}
+          style={[StyleSheet.absoluteFill, gayaOpasitasTersedia]}
         >
-          <Animated.View
-            testID="isi-tersedia"
-            pointerEvents={tersediaAktif ? 'auto' : 'none'}
-            importantForAccessibility={tersediaAktif ? 'auto' : 'no-hide-descendants'}
-            accessibilityElementsHidden={!tersediaAktif}
-            style={[StyleSheet.absoluteFill, gayaOpasitasTersedia]}
-          >
-            <Animated.FlatList
-              testID="daftar-tersedia"
-              ref={daftarTersediaRef}
-              data={poolUrut}
-              extraData={extraData}
-              initialNumToRender={JUMLAH_AWAL}
-              itemLayoutAnimation={dalamJendela ? undefined : GESER_BARIS}
-              keyExtractor={(row) => row.id}
-              renderItem={renderPoolItem}
-              ListHeaderComponent={renderPoolHeader()}
-              ListEmptyComponent={kosongTersedia}
-              refreshControl={
-                <RefreshControl
-                  refreshing={refreshing || (fetchBelumSelesai && networkStatus !== 'offline')}
-                  onRefresh={onRefresh}
-                />
-              }
-              contentContainerStyle={gayaLayar.daftar}
-              scrollsToTop={tersediaAktif}
-            />
-          </Animated.View>
-          <Animated.View
-            testID="isi-saya"
-            pointerEvents={sayaAktif ? 'auto' : 'none'}
-            importantForAccessibility={sayaAktif ? 'auto' : 'no-hide-descendants'}
-            accessibilityElementsHidden={!sayaAktif}
-            style={[StyleSheet.absoluteFill, gayaOpasitasSaya]}
-          >
-            <Animated.FlatList
-              testID="daftar-saya"
-              ref={daftarSayaRef}
-              data={myOrdersUrut}
-              extraData={extraData}
-              initialNumToRender={JUMLAH_AWAL}
-              itemLayoutAnimation={dalamJendela ? undefined : GESER_BARIS}
-              keyExtractor={(row) => row.id}
-              renderItem={renderMineItem}
-              ListHeaderComponent={notice}
-              ListEmptyComponent={kosongSaya}
-              refreshControl={
-                <RefreshControl
-                  refreshing={refreshing || (fetchBelumSelesai && networkStatus !== 'offline')}
-                  onRefresh={onRefresh}
-                />
-              }
-              contentContainerStyle={gayaLayar.daftar}
-              scrollsToTop={sayaAktif}
-            />
-          </Animated.View>
-        </View>
-      </Animated.View>
-    </View>
+          <Animated.FlatList
+            testID="daftar-tersedia"
+            ref={daftarTersediaRef}
+            data={poolUrut}
+            extraData={extraData}
+            initialNumToRender={JUMLAH_AWAL}
+            itemLayoutAnimation={dalamJendela ? undefined : GESER_BARIS}
+            keyExtractor={(row) => row.id}
+            renderItem={renderPoolItem}
+            ListHeaderComponent={renderPoolHeader()}
+            ListEmptyComponent={kosongTersedia}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing || (fetchBelumSelesai && networkStatus !== 'offline')}
+                onRefresh={onRefresh}
+              />
+            }
+            contentContainerStyle={gayaLayar.daftar}
+            scrollsToTop={tersediaAktif}
+          />
+        </Animated.View>
+        <Animated.View
+          testID="isi-saya"
+          pointerEvents={sayaAktif ? 'auto' : 'none'}
+          importantForAccessibility={sayaAktif ? 'auto' : 'no-hide-descendants'}
+          accessibilityElementsHidden={!sayaAktif}
+          style={[StyleSheet.absoluteFill, gayaOpasitasSaya]}
+        >
+          <Animated.FlatList
+            testID="daftar-saya"
+            ref={daftarSayaRef}
+            data={myOrdersUrut}
+            extraData={extraData}
+            initialNumToRender={JUMLAH_AWAL}
+            itemLayoutAnimation={dalamJendela ? undefined : GESER_BARIS}
+            keyExtractor={(row) => row.id}
+            renderItem={renderMineItem}
+            ListHeaderComponent={notice}
+            ListEmptyComponent={kosongSaya}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing || (fetchBelumSelesai && networkStatus !== 'offline')}
+                onRefresh={onRefresh}
+              />
+            }
+            contentContainerStyle={gayaLayar.daftar}
+            scrollsToTop={sayaAktif}
+          />
+        </Animated.View>
+      </View>
+    </ScreenFrame>
   );
 }
 
@@ -1362,16 +1347,6 @@ export const OrdersScreen = withDatabase(OrdersScreenWrapper);
 
 const gaya = perTema((c) =>
   StyleSheet.create({
-    layar: {
-      flex: 1,
-      backgroundColor: c.bg,
-    },
-    isiLayar: {
-      flex: 1,
-    },
-    wadahBilah: {
-      backgroundColor: c.header,
-    },
     wadahRingkasan: {
       marginTop: 4,
       marginHorizontal: space[4],
