@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { Alert } from 'react-native';
-import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
+import { render, fireEvent, waitFor, act, within } from '@testing-library/react-native';
 
 import { OrderDetailScreen } from './OrderDetailScreen';
 import { hapticDelivered } from '../haptics';
@@ -49,8 +49,13 @@ jest.mock('react-native', () => {
 });
 
 // Navigation mock (pola sama kayak MapScreen.spec.tsx)
+// mockNavigate dan mockGoBack di tingkat modul, jadi tes bisa memeriksa
+// tujuan navigasi dan pemanggilan tombol kembali.
+const mockNavigate = jest.fn();
+const mockGoBack = jest.fn();
+
 jest.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({ navigate: jest.fn() }),
+  useNavigation: () => ({ navigate: mockNavigate, goBack: mockGoBack }),
   useRoute: () => ({ params: { orderId: 'order-123' } }),
 }));
 
@@ -142,11 +147,17 @@ const mockOrder = {
 
 // Callback next dari findAndObserve, supaya tes bisa mengirim ulang objek yang sama.
 let mockFindAndObserveNext: ((record: typeof mockOrder) => void) | null = null;
+// Cara tiruan findAndObserve behave: kirim baris, diam saja, atau laporkan galat.
+let mockFindAndObservePerilaku: 'kirim' | 'diam' | 'galat' = 'kirim';
 
 const mockFindAndObserve = jest.fn(() => ({
-  subscribe: ({ next }: { next: (record: typeof mockOrder) => void }) => {
-    mockFindAndObserveNext = next;
-    next(mockOrder);
+  subscribe: (arg: {
+    next: (record: typeof mockOrder) => void;
+    error: (err: unknown) => void;
+  }) => {
+    mockFindAndObserveNext = arg.next;
+    if (mockFindAndObservePerilaku === 'kirim') arg.next(mockOrder);
+    if (mockFindAndObservePerilaku === 'galat') arg.error(new Error('gagal memuat'));
     return { unsubscribe: jest.fn() };
   },
 }));
@@ -158,7 +169,11 @@ let mockPaymentsQuery: any = null;
 
 // Mock pending_actions for observe
 const mockPendingActions: MockPendingAction[] = [];
-let pendingActionsSubscriptionCallback: ((actions: MockPendingAction[]) => void) | null = null;
+// Pelanggan langganan pending_actions. Layar detail dan bilah koneksi sama-sama
+// berlangganan, jadi semuanya disimpan di satu daftar.
+type PendingActionsListener = (actions: MockPendingAction[]) => void;
+const pendingActionsListeners: PendingActionsListener[] = [];
+let pendingActionsSubscriptionCallback: PendingActionsListener | null = null;
 
 // Tiruan koleksi payments. Hanya observeWithColumns yang disediakan, seperti
 // yang dipakai layar, karena observe() tidak memancarkan saat kolom berubah.
@@ -218,11 +233,26 @@ const mockPendingActionsCollection: { query: jest.Mock } = {
   query: jest.fn().mockImplementation((_query: unknown) => {
     mockPendingActionsQuery = {
       observeWithColumns: jest.fn().mockImplementation((_cols: string[]) => ({
-        subscribe: jest.fn().mockImplementation(({ next }: { next: (actions: MockPendingAction[]) => void }) => {
-          pendingActionsSubscriptionCallback = (actions) => next(actions.map(denganRaw));
-          next([...mockPendingActions].map(denganRaw));
-          return { unsubscribe: jest.fn() };
-        }),
+        // Bentuk langganan bisa fungsi atau objek { next }. Bentuk fungsi dipakai
+        // bilah koneksi, bentuk objek dipakai layar detail.
+        subscribe: jest.fn().mockImplementation(
+          (arg: PendingActionsListener | { next: PendingActionsListener }) => {
+            const listener = typeof arg === 'function' ? arg : arg.next;
+            pendingActionsListeners.push(listener);
+            pendingActionsSubscriptionCallback = (actions) => {
+              const siap = actions.map(denganRaw);
+              pendingActionsListeners.forEach((panggil) => panggil(siap));
+            };
+            // Pelanggan baru langsung dapat emisi awal.
+            listener([...mockPendingActions].map(denganRaw));
+            return {
+              unsubscribe: () => {
+                const index = pendingActionsListeners.indexOf(listener);
+                if (index >= 0) pendingActionsListeners.splice(index, 1);
+              },
+            };
+          },
+        ),
       })),
     };
     return mockPendingActionsQuery;
@@ -283,6 +313,12 @@ function renderScreen() {
     <OrderDetailScreen database={mockDatabase} route={{ params: { orderId: 'order-123' } } as any} />
   );
 }
+
+// Keadaan bersama yang dipakai beberapa describe.
+beforeEach(() => {
+  pendingActionsListeners.length = 0;
+  mockFindAndObservePerilaku = 'kirim';
+});
 
 // Tests: Visibility
 
@@ -1077,8 +1113,8 @@ describe('Chat and Map button visibility', () => {
     Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('Chat dengan Kurir / Customer')).toBeTruthy();
-      expect(getByText('Lihat Rute Pengiriman')).toBeTruthy();
+      expect(getByText('Chat')).toBeTruthy();
+      expect(getByText('Lihat Rute')).toBeTruthy();
     });
   });
 
@@ -1086,8 +1122,8 @@ describe('Chat and Map button visibility', () => {
     Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'other-driver' });
     const { queryByText } = renderScreen();
     await waitFor(() => {
-      expect(queryByText('Chat dengan Kurir / Customer')).toBeNull();
-      expect(queryByText('Lihat Rute Pengiriman')).toBeNull();
+      expect(queryByText('Chat')).toBeNull();
+      expect(queryByText('Lihat Rute')).toBeNull();
     });
   });
 });
@@ -1122,7 +1158,7 @@ describe('Item price display', () => {
     const { getByText, getAllByText } = renderScreen();
 
     await waitFor(() => {
-      expect(getByText('1x Mie Goreng')).toBeTruthy();
+      expect(getByText('Mie Goreng × 1')).toBeTruthy();
     });
 
     // Item price, Rp 23.000 (bukan 230)
@@ -1430,7 +1466,7 @@ describe('driver status button behavior', () => {
     });
     Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
 
-    const { getByText, queryByText, getAllByText } = renderScreen();
+    const { getByText, queryByText, getAllByText, getByTestId } = renderScreen();
     await act(async () => {
       pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
@@ -1438,7 +1474,8 @@ describe('driver status button behavior', () => {
       expect(getByText('Mulai antar ditolak server dan tidak dicoba lagi otomatis.')).toBeTruthy();
     });
     // Label status tetap dari baris order, bukan target yang gagal.
-    expect(queryByText('OUT_FOR_DELIVERY')).toBeNull();
+    expect(within(getByTestId('pil-status')).getByText('Diterima')).toBeTruthy();
+    expect(queryByText('OUT FOR_DELIVERY')).toBeNull();
     // Tombol Coba lagi dan Abaikan tampil.
     fireEvent.press(getAllByText('Coba lagi')[0]);
     expect(mockRetryFailedAction).toHaveBeenCalledWith('us-failed-1');
@@ -1508,7 +1545,7 @@ describe('driver status button behavior', () => {
     });
     Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
 
-    const { getByText, queryByText } = renderScreen();
+    const { getByText, queryByText, getByTestId } = renderScreen();
     await act(async () => {
       pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
@@ -1517,8 +1554,8 @@ describe('driver status button behavior', () => {
     await waitFor(() => {
       expect(getByText('COD gagal dicatat server dan tidak dicoba lagi otomatis. Simpan uangnya, lalu coba lagi atau hubungi support.')).toBeTruthy();
     });
-    expect(getByText('OUT FOR_DELIVERY')).toBeTruthy();
-    expect(queryByText('DELIVERED')).toBeNull();
+    expect(within(getByTestId('pil-status')).getByText('Sedang diantar')).toBeTruthy();
+    expect(within(getByTestId('pil-status')).queryByText('Selesai')).toBeNull();
     // Tombol Selesai diantar dan COD tidak tampil.
     expect(queryByText('Selesai diantar')).toBeNull();
     expect(queryByText('Terima Cash (COD)')).toBeNull();
@@ -1549,14 +1586,14 @@ describe('driver status button behavior', () => {
       payloadJson: { status: 'OUT_FOR_DELIVERY' },
     });
 
-    const { getByText, queryByText } = renderScreen();
+    const { getByText, queryByText, getByTestId } = renderScreen();
     // Awal: label status OUT_FOR_DELIVERY (target aksi status aktif), tombol
     // Mulai antar tidak tampil karena ada aksi pending.
     await act(async () => {
       pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
     await waitFor(() => {
-      expect(getByText('OUT FOR_DELIVERY')).toBeTruthy();
+      expect(getByText('Sedang diantar')).toBeTruthy();
     });
     expect(queryByText('Mulai antar')).toBeNull();
 
@@ -1569,7 +1606,7 @@ describe('driver status button behavior', () => {
       expect(getByText('Mulai antar ditolak server dan tidak dicoba lagi otomatis.')).toBeTruthy();
     });
     // Label status kembali ke PREPARING (dari baris).
-    expect(queryByText('PREPARING')).toBeTruthy();
+    expect(within(getByTestId('pil-status')).getByText('Diterima')).toBeTruthy();
     expect(queryByText('Mulai antar')).toBeNull();
   });
 
@@ -2218,7 +2255,7 @@ describe('displayStatus dan syarat tombol dari aksi status antre', () => {
     });
     // Label status: target aksi aktif yang paling baru = OUT_FOR_DELIVERY.
     await waitFor(() => {
-      expect(getByText('OUT FOR_DELIVERY')).toBeTruthy();
+      expect(getByText('Sedang diantar')).toBeTruthy();
     });
     // COD tampil (displayStatus OUT_FOR_DELIVERY, tidak ada aksi collect_cod
     // yang menghalangi, tidak ada aksi cancel/reject/failed/yatim).
@@ -2294,18 +2331,221 @@ describe('displayStatus dan syarat tombol dari aksi status antre', () => {
       payloadJson: { status: 'DELIVERED' },
     });
 
-    const { getByText, queryByText } = renderScreen();
+    const { queryByText, getByTestId } = renderScreen();
     await act(async () => {
       pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
     // Label status: target aksi paling baru = DELIVERED.
     await waitFor(() => {
-      expect(getByText('DELIVERED')).toBeTruthy();
+      expect(within(getByTestId('pil-status')).getByText('Selesai')).toBeTruthy();
     });
     // Keempat tombol aksi TIDAK tampil.
     expect(queryByText('Mulai antar')).toBeNull();
     expect(queryByText('Selesai diantar')).toBeNull();
     expect(queryByText('Terima Cash (COD)')).toBeNull();
     expect(queryByText('Batalkan Order')).toBeNull();
+  });
+});
+
+// Layar Detail order versi 2: kerangka ScreenFrame dengan kepala dan bilah
+// koneksi, lalu tiga kartu di dalam daftar.
+
+describe('detail order versi 2', () => {
+  const asli = {
+    status: mockOrder.status,
+    driverId: mockOrder.driverId,
+    itemsJson: mockOrder.itemsJson,
+    addressJson: mockOrder.addressJson,
+    notes: mockOrder.notes,
+    totalCents: mockOrder.totalCents,
+    currency: mockOrder.currency,
+    createdAt: mockOrder.createdAt,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    paymentsSubscriptionCallback = null;
+    pendingActionsSubscriptionCallback = null;
+  });
+
+  afterEach(() => {
+    Object.assign(mockOrder, asli);
+  });
+
+  test('kepala: judul dan nomor order tampil, tombol kembali memanggil goBack', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText, getByLabelText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Detail order')).toBeTruthy();
+    });
+    expect(getByText('#ORDER-12')).toBeTruthy();
+    await act(async () => {
+      fireEvent.press(getByLabelText('Kembali'));
+    });
+    expect(mockGoBack).toHaveBeenCalled();
+  });
+
+  test('memuat: isi layar kosong dan teks memuat dibuang', async () => {
+    mockFindAndObservePerilaku = 'diam';
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Detail order')).toBeTruthy();
+    });
+    expect(queryByText('Memuat detail order...')).toBeNull();
+  });
+
+  test('galat: pesan galat tampil di dalam isi layar', async () => {
+    mockFindAndObservePerilaku = 'galat';
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Gagal memuat order')).toBeTruthy();
+    });
+    expect(getByText('Detail order')).toBeTruthy();
+  });
+
+  test('langkah: PREPARING milik driver memberi Langkah 2 dari 4', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Langkah 2 dari 4')).toBeTruthy();
+    });
+  });
+
+  test('langkah: OUT_FOR_DELIVERY tanpa tunai memberi Langkah 3 dari 4', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Langkah 3 dari 4')).toBeTruthy();
+    });
+  });
+
+  test('langkah: OUT_FOR_DELIVERY dengan tunai tercatat memberi Langkah 4 dari 4', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({
+      id: 'cod-langkah',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.CAPTURED,
+    });
+    const { getByText } = renderScreen();
+    await act(async () => {
+      paymentsSubscriptionCallback?.([...mockPayments]);
+    });
+    await waitFor(() => {
+      expect(getByText('Langkah 4 dari 4')).toBeTruthy();
+    });
+  });
+
+  test('langkah: DELIVERED tanpa nomor langkah', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.DELIVERED, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(queryByText(/Langkah/)).toBeNull();
+    });
+  });
+
+  test('langkah: order yang bukan milik driver tanpa rel langkah', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'other-driver' });
+    const { queryByTestId } = renderScreen();
+    await waitFor(() => {
+      expect(queryByTestId('rel-langkah')).toBeNull();
+    });
+  });
+
+  test('antar ke: jalan, kota, dan kode pos tampil', async () => {
+    Object.assign(mockOrder, {
+      status: OrderStatus.PREPARING,
+      driverId: 'driver-456',
+      addressJson: { street: 'Jl. Sunset Road', city: 'Badung', postalCode: '80361' },
+    });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Jl. Sunset Road')).toBeTruthy();
+    });
+    expect(getByText('Badung 80361')).toBeTruthy();
+  });
+
+  test('antar ke: tanpa jalan tampil alamat tidak tersedia', async () => {
+    Object.assign(mockOrder, {
+      status: OrderStatus.PREPARING,
+      driverId: 'driver-456',
+      addressJson: {},
+    });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Alamat tidak tersedia')).toBeTruthy();
+    });
+  });
+
+  test('antar ke: catatan tampil tanpa judul Catatan', async () => {
+    Object.assign(mockOrder, {
+      status: OrderStatus.PREPARING,
+      driverId: 'driver-456',
+      notes: 'Putar kiri di gang kecil',
+    });
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Putar kiri di gang kecil')).toBeTruthy();
+    });
+    expect(queryByText('Catatan')).toBeNull();
+  });
+
+  test('antar ke: tombol Chat dan Lihat Rute memanggil navigasi', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Chat')).toBeTruthy();
+    });
+    await act(async () => {
+      fireEvent.press(getByText('Chat'));
+    });
+    expect(mockNavigate).toHaveBeenCalledWith('Chat', { roomId: 'order-123' });
+
+    await act(async () => {
+      fireEvent.press(getByText('Lihat Rute'));
+    });
+    expect(mockNavigate).toHaveBeenCalledWith('Map', { orderId: 'order-123' });
+  });
+
+  test('rincian: nama barang, harga baris, total, dan waktu dibuat', async () => {
+    Object.assign(mockOrder, {
+      status: OrderStatus.PREPARING,
+      driverId: 'driver-456',
+      itemsJson: [{ name: 'Mie Goreng', quantity: 2, unitPriceCents: 23000 }],
+      totalCents: 50000,
+      currency: 'IDR',
+      createdAt: new Date(),
+    });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mie Goreng × 2')).toBeTruthy();
+    });
+    expect(getByText(/Rp\s46\.000/)).toBeTruthy();
+    expect(getByText('Total')).toBeTruthy();
+    expect(getByText(/^Dibuat \d{2}\.\d{2}$/)).toBeTruthy();
+  });
+
+  test('bilah koneksi: aksi yang antre menampilkan Menyinkronkan', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([
+        {
+          id: 'pending-koneksi',
+          status: 'pending',
+          actionType: 'update_status',
+          createdAt: new Date(),
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+        },
+      ]);
+    });
+    await waitFor(() => {
+      expect(getByText('Menyinkronkan')).toBeTruthy();
+    });
   });
 });

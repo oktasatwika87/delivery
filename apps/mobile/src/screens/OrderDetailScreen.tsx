@@ -12,6 +12,7 @@ import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-n
 import { Q } from '@nozbe/watermelondb';
 import { withDatabase } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
+import Animated from 'react-native-reanimated';
 
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
@@ -19,10 +20,14 @@ import { PaymentModel } from '../db/models/PaymentModel';
 import { PendingActionModel, readUpdateStatusTarget } from '../db/models/PendingActionModel';
 import { formatCurrency } from '../formatCurrency';
 import { hapticDelivered } from '../haptics';
+import { driverStatusLabel } from '../driverStatusLabel';
+import { formatOrderNumber } from '../formatOrderNumber';
+import { formatOrderTime } from '../formatOrderTime';
 import { deriveOrderSyncView } from '../sync/orderSyncView';
 import { getCurrentUserId } from '../sync/session';
 import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
+import { useConnectionBar } from '../sync/useConnectionBar';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
 import {
   enqueueCancel,
@@ -32,6 +37,17 @@ import {
   retryFailedAction,
   discardFailedAction,
 } from '../sync/outbox';
+import { AppBar } from '../components/AppBar';
+import { Button } from '../components/Button';
+import { Card } from '../components/Card';
+import { OrderSteps } from '../components/OrderSteps';
+import { ScreenFrame } from '../components/ScreenFrame';
+import { Icon } from '../theme/Icon';
+import { useTheme } from '../theme/ThemeProvider';
+import { size, space, stroke, type } from '../theme/tokens';
+import { useInitialWindow } from '../components/motion/InitialWindow';
+import { shift } from '../components/motion/presets';
+import { langkahOrder } from './langkahOrder';
 
 // Types
 
@@ -44,12 +60,16 @@ interface ItemRow {
 interface AddressData {
   street?: string;
   city?: string;
+  postalCode?: string;
   notes?: string;
 }
 
 interface Props {
   database: Database;
 }
+
+/** Geser kartu saat tata letaknya berubah, misalnya banner masuk atau keluar. */
+const GESER = shift();
 
 // Failed Payment Banner
 
@@ -270,66 +290,16 @@ function OrphanedCodBanner(): React.JSX.Element | null {
   );
 }
 
-// Status Badge
-
-const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
-  PENDING: { bg: '#fef3c7', text: '#92400e' },
-  CONFIRMED: { bg: '#dbeafe', text: '#1e40af' },
-  PREPARING: { bg: '#ede9fe', text: '#5b21b6' },
-  OUT_FOR_DELIVERY: { bg: '#fed7aa', text: '#c2410c' },
-  DELIVERED: { bg: '#d1fae5', text: '#065f46' },
-  CANCELLED: { bg: '#fee2e2', text: '#991b1b' },
-};
-
-function StatusBadge({ status }: { status: string }): React.JSX.Element {
-  const colors = STATUS_COLORS[status] ?? { bg: '#f3f4f6', text: '#374151' };
-  return (
-    <View style={[styles.badge, { backgroundColor: colors.bg }]}>
-      <Text style={[styles.badgeText, { color: colors.text }]}>
-        {status.replace('_', ' ')}
-      </Text>
-    </View>
-  );
-}
-
-// Item Row
-
-function ItemRow({ item }: { item: ItemRow }): React.JSX.Element {
-  return (
-    <View style={styles.itemRow}>
-      <Text style={styles.itemName}>
-        {item.quantity}x {item.name}
-      </Text>
-      <Text style={styles.itemPrice}>
-        {formatCurrency(item.unitPriceCents * item.quantity, 'IDR')}
-      </Text>
-    </View>
-  );
-}
-
-// Helpers
-
-function formatDate(date: Date): string {
-  const months = [
-    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
-    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
-  ];
-  const d = date;
-  const day = d.getDate();
-  const month = months[d.getMonth()];
-  const year = d.getFullYear();
-  const hours = String(d.getHours()).padStart(2, '0');
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  return `${day} ${month} ${year}, pukul ${hours}:${minutes}`;
-}
-
 // Base Component
 
 function OrderDetailBase({ database }: Props): React.JSX.Element {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'OrderDetail'>>();
   const route = useRoute<NativeStackScreenProps<RootStackParamList, 'OrderDetail'>['route']>();
+  const { colors } = useTheme();
+  const dalamJendela = useInitialWindow();
 
   const { orderId } = route.params;
+  const bilah = useConnectionBar(database);
   const [order, setOrder] = useState<OrderModel | null>(null);
   // findAndObserve mengirim ulang objek model yang sama setiap baris berubah, dan React
   // melewati setState dengan referensi yang sama. Angka ini dinaikkan tiap data datang
@@ -703,184 +673,260 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     );
   };
 
+  const kepala = (
+    <AppBar
+      title="Detail order"
+      subtitle={formatOrderNumber(orderId)}
+      onBack={() => navigation.goBack()}
+    />
+  );
+
   if (isLoading) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.loadingText}>Memuat detail order...</Text>
-      </View>
+      <ScreenFrame header={kepala} connection={bilah}>
+        <View style={styles.kosong} />
+      </ScreenFrame>
     );
   }
 
   if (error || !order) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.errorText}>{error ?? 'Order tidak ditemukan'}</Text>
-      </View>
+      <ScreenFrame header={kepala} connection={bilah}>
+        <View style={styles.kosong}>
+          <Text style={[type.bodyMd, { color: colors.textMuted, textAlign: 'center' }]}>
+            {error ?? 'Order tidak ditemukan'}
+          </Text>
+        </View>
+      </ScreenFrame>
     );
   }
 
   // itemsJson dan addressJson sudah ter-parse oleh @json decorator di OrderModel
   const items = (order.itemsJson as ItemRow[]) ?? [];
   const address = (order.addressJson as AddressData) ?? {};
+  const catatan = order.notes ?? address.notes;
+  const statusTampil = displayStatus ?? order.status;
+  // Tunai sudah tercatat kalau payment-nya CAPTURED atau aksinya masih antre.
+  const tunaiTercatat =
+    codCaptured ||
+    pendingActions.some(
+      (a) =>
+        a.actionType === 'collect_cod' &&
+        (a.status === 'pending' || a.status === 'syncing'),
+    );
+  const driverPemilik = !!currentUserId && order.driverId === currentUserId;
+  const kotaKodePos = [address.city, address.postalCode].filter(Boolean).join(' ');
 
   return (
-    <ScrollView style={styles.container}>
-      {/* Failed Payment Banner */}
-      <FailedPaymentBanner
-        payments={payments}
-        codCaptured={codCaptured}
-        isDismissed={failedBannerDismissed}
-        onDismiss={() => setFailedBannerDismissed(true)}
-      />
-
-      {/* Order Conflict Banner */}
-      <OrderConflictBanner
-        event={conflictEvent}
-        onDismiss={() => setConflictEvent(null)}
-      />
-
-      {/* Banner konflik tersimpan */}
-      <LastConflictBanner
-        order={order}
-        isDismissed={lastConflictDismissed}
-        onDismiss={() => setLastConflictDismissed(true)}
-      />
-
-      {/* Banner aksi gagal, satu per aksi */}
-      {failedActions.map((action) => (
-        <FailedActionBanner
-          key={action.id}
-          action={action}
-          onRetry={(actionId) => { void retryFailedAction(actionId); }}
-          onDiscard={(actionId) => { void discardFailedAction(actionId); }}
+    <ScreenFrame header={kepala} connection={bilah}>
+      <ScrollView
+        testID="isi-detail"
+        style={styles.daftar}
+        contentContainerStyle={styles.daftarIsi}
+      >
+        {/* Failed Payment Banner */}
+        <FailedPaymentBanner
+          payments={payments}
+          codCaptured={codCaptured}
+          isDismissed={failedBannerDismissed}
+          onDismiss={() => setFailedBannerDismissed(true)}
         />
-      ))}
 
-      {/* Banner COD yatim, satu per aksi */}
-      {orphanedCodActions.map((action) => (
-        <OrphanedCodBanner key={action.id} />
-      ))}
+        {/* Order Conflict Banner */}
+        <OrderConflictBanner
+          event={conflictEvent}
+          onDismiss={() => setConflictEvent(null)}
+        />
 
-      {/* Pending Action Indicator */}
-      {antrean === 'pending' && (
-        <View style={styles.pendingBanner}>
-          <Text style={styles.pendingBannerText}>Menunggu sinkronisasi...</Text>
-        </View>
-      )}
+        {/* Banner konflik tersimpan */}
+        <LastConflictBanner
+          order={order}
+          isDismissed={lastConflictDismissed}
+          onDismiss={() => setLastConflictDismissed(true)}
+        />
 
-      {/* Stale Pending Action Warning */}
-      {antrean === 'stale' && (
-        <View style={styles.stalePendingBanner}>
-          <Text style={styles.stalePendingBannerText}>
-            Belum tersinkron dari sejam lalu — cek koneksi internet kamu
-          </Text>
-        </View>
-      )}
+        {/* Banner aksi gagal, satu per aksi */}
+        {failedActions.map((action) => (
+          <FailedActionBanner
+            key={action.id}
+            action={action}
+            onRetry={(actionId) => { void retryFailedAction(actionId); }}
+            onDiscard={(actionId) => { void discardFailedAction(actionId); }}
+          />
+        ))}
 
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.title}>Order #{order.id.slice(0, 8)}</Text>
-        <StatusBadge status={displayStatus ?? order.status} />
-      </View>
+        {/* Banner COD yatim, satu per aksi */}
+        {orphanedCodActions.map((action) => (
+          <OrphanedCodBanner key={action.id} />
+        ))}
 
-      {/* Items */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Item</Text>
-        {items.length === 0 ? (
-          <Text style={styles.mutedText}>Tidak ada item.</Text>
-        ) : (
-          items.map((item, idx) => <ItemRow key={idx} item={item} />)
+        {/* Pending Action Indicator */}
+        {antrean === 'pending' && (
+          <View style={styles.pendingBanner}>
+            <Text style={styles.pendingBannerText}>Menunggu sinkronisasi...</Text>
+          </View>
         )}
-      </View>
 
-      {/* Total */}
-      <View style={styles.section}>
-        <View style={styles.totalRow}>
-          <Text style={styles.totalLabel}>Total</Text>
-          <Text style={styles.totalValue}>
-            {formatCurrency(order.totalCents, order.currency)}
-          </Text>
-        </View>
-      </View>
+        {/* Stale Pending Action Warning */}
+        {antrean === 'stale' && (
+          <View style={styles.stalePendingBanner}>
+            <Text style={styles.stalePendingBannerText}>
+              Belum tersinkron dari sejam lalu — cek koneksi internet kamu
+            </Text>
+          </View>
+        )}
 
-      {/* Address */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Alamat Pengiriman</Text>
-        <Text style={styles.addressText}>
-          {address.street ?? 'Alamat tidak tersedia'}
-        </Text>
-        {address.city && <Text style={styles.addressText}>{address.city}</Text>}
-      </View>
+        {/* Kartu Langkah order */}
+        <Animated.View layout={dalamJendela ? undefined : GESER}>
+          <Card accessibilityLabel="Langkah order">
+            <OrderSteps
+              status={statusTampil}
+              statusText={driverStatusLabel(statusTampil)}
+              selesai={langkahOrder(statusTampil, tunaiTercatat)}
+            />
+          </Card>
+        </Animated.View>
 
-      {/* Notes */}
-      {(order.notes || address.notes) && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Catatan</Text>
-          <Text style={styles.notesText}>{order.notes ?? address.notes}</Text>
-        </View>
-      )}
+        {/* Kartu Antar ke */}
+        <Animated.View layout={dalamJendela ? undefined : GESER}>
+          <Card accessibilityLabel="Antar ke">
+            <Text
+              accessibilityRole="header"
+              style={[styles.judulBagian, { color: colors.textSubtle }]}
+            >
+              Antar ke
+            </Text>
+            <View style={styles.barisAlamat}>
+              <Icon name="location_on" size={size.iconMd} color={colors.info} />
+              <View style={styles.kolomAlamat}>
+                <Text style={[type.titleSm, { color: colors.text }]}>
+                  {address.street ?? 'Alamat tidak tersedia'}
+                </Text>
+                {kotaKodePos ? (
+                  <Text style={[type.bodySm, { color: colors.textMuted, marginTop: 2 }]}>
+                    {kotaKodePos}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+            {catatan ? (
+              <View style={styles.barisCatatan}>
+                <Icon name="edit_note" size={size.iconMd} color={colors.textSubtle} />
+                <Text style={[type.bodySm, { color: colors.textMuted, flex: 1 }]}>
+                  {catatan}
+                </Text>
+              </View>
+            ) : null}
+            {driverPemilik ? (
+              <View style={styles.barisTombol}>
+                <View style={styles.tombolSetengah}>
+                  <Button
+                    title="Chat"
+                    icon="chat"
+                    variant="secondary"
+                    onPress={() => navigation.navigate('Chat', { roomId: order.id })}
+                  />
+                </View>
+                <View style={styles.tombolSetengah}>
+                  <Button
+                    title="Lihat Rute"
+                    icon="directions"
+                    variant="secondary"
+                    onPress={() => navigation.navigate('Map', { orderId: order.id })}
+                  />
+                </View>
+              </View>
+            ) : null}
+          </Card>
+        </Animated.View>
 
-      {/* Timestamp */}
-      <View style={styles.section}>
-        <Text style={styles.timestampText}>
-          Dibuat: {formatDate(new Date(order.createdAt))}
-        </Text>
-      </View>
+        {/* Kartu Rincian */}
+        <Animated.View layout={dalamJendela ? undefined : GESER}>
+          <Card accessibilityLabel="Rincian">
+            <Text
+              accessibilityRole="header"
+              style={[styles.judulBagian, { color: colors.textSubtle }]}
+            >
+              Rincian
+            </Text>
+            {items.length === 0 ? (
+              <Text style={[type.bodyMd, { color: colors.textMuted, marginTop: 10 }]}>
+                Tidak ada item.
+              </Text>
+            ) : (
+              items.map((item, idx) => (
+                <View key={idx} style={styles.barisItem}>
+                  <Text style={[type.bodyMd, { color: colors.text, flex: 1 }]}>
+                    {item.name}{' '}
+                    <Text style={{ color: colors.textSubtle }}>
+                      {'×'} {item.quantity}
+                    </Text>
+                  </Text>
+                  <Text
+                    style={[
+                      type.bodyMd,
+                      { color: colors.text, fontVariant: ['tabular-nums'] },
+                    ]}
+                  >
+                    {formatCurrency(item.unitPriceCents * item.quantity, order.currency)}
+                  </Text>
+                </View>
+              ))
+            )}
+            <View style={[styles.garis, { backgroundColor: colors.line }]} />
+            <View style={styles.barisTotal}>
+              <Text style={[type.bodyMd, { color: colors.textMuted }]}>Total</Text>
+              <Text style={[type.amount, { color: colors.text }]}>
+                {formatCurrency(order.totalCents, order.currency)}
+              </Text>
+            </View>
+            <View style={styles.barisDibuat}>
+              <Icon name="schedule" size={size.iconXs} color={colors.textSubtle} />
+              <Text
+                style={[
+                  type.bodyXs,
+                  { color: colors.textSubtle, fontVariant: ['tabular-nums'] },
+                ]}
+              >
+                Dibuat {formatOrderTime(new Date(order.createdAt).getTime(), Date.now())}
+              </Text>
+            </View>
+          </Card>
+        </Animated.View>
 
-      {/* Chat Button, hanya untuk driver yang ditugaskan ke order ini */}
-      {order && currentUserId && order.driverId === currentUserId && (
-        <TouchableOpacity
-          style={styles.chatButton}
-          onPress={() => navigation.navigate('Chat', { roomId: order.id })}
-        >
-          <Text style={styles.chatButtonText}>Chat dengan Kurir / Customer</Text>
-        </TouchableOpacity>
-      )}
+        {/* Tombol Batalkan, syaratnya di canDriverCancel */}
+        {order && currentUserId && canDriverCancel(order) && (
+          <TouchableOpacity
+            style={styles.cancelButton}
+            onPress={() => handleCancelOrder(order)}
+          >
+            <Text style={styles.cancelButtonText}>Batalkan Order</Text>
+          </TouchableOpacity>
+        )}
 
-      {/* Map Button, hanya untuk driver yang ditugaskan ke order ini */}
-      {order && currentUserId && order.driverId === currentUserId && (
-        <TouchableOpacity
-          style={styles.mapButton}
-          onPress={() => navigation.navigate('Map', { orderId: order.id })}
-        >
-          <Text style={styles.mapButtonText}>Lihat Rute Pengiriman</Text>
-        </TouchableOpacity>
-      )}
+        {/* Tombol COD, syaratnya di canCollectCod */}
+        {order && currentUserId && canCollectCod(order) && (
+          <TouchableOpacity
+            style={styles.codButton}
+            onPress={() => handleCollectCod(order)}
+          >
+            <Text style={styles.codButtonText}>Terima Cash (COD)</Text>
+          </TouchableOpacity>
+        )}
 
-      {/* Tombol Batalkan, syaratnya di canDriverCancel */}
-      {order && currentUserId && canDriverCancel(order) && (
-        <TouchableOpacity
-          style={styles.cancelButton}
-          onPress={() => handleCancelOrder(order)}
-        >
-          <Text style={styles.cancelButtonText}>Batalkan Order</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Tombol COD, syaratnya di canCollectCod */}
-      {order && currentUserId && canCollectCod(order) && (
-        <TouchableOpacity
-          style={styles.codButton}
-          onPress={() => handleCollectCod(order)}
-        >
-          <Text style={styles.codButtonText}>Terima Cash (COD)</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Tombol Mulai antar dan Selesai diantar, syaratnya di canUpdateStatus */}
-      {order && currentUserId && canUpdateStatus(order) && (
-        <TouchableOpacity
-          style={styles.statusButton}
-          onPress={() => handleUpdateStatus(order)}
-        >
-          <Text style={styles.statusButtonText}>
-            {displayStatus === OrderStatus.PREPARING ? 'Mulai antar' : 'Selesai diantar'}
-          </Text>
-        </TouchableOpacity>
-      )}
-
-      <View style={styles.bottomSpacer} />
-    </ScrollView>
+        {/* Tombol Mulai antar dan Selesai diantar, syaratnya di canUpdateStatus */}
+        {order && currentUserId && canUpdateStatus(order) && (
+          <TouchableOpacity
+            style={styles.statusButton}
+            onPress={() => handleUpdateStatus(order)}
+          >
+            <Text style={styles.statusButtonText}>
+              {displayStatus === OrderStatus.PREPARING ? 'Mulai antar' : 'Selesai diantar'}
+            </Text>
+          </TouchableOpacity>
+        )}
+      </ScrollView>
+    </ScreenFrame>
   );
 }
 
@@ -893,119 +939,66 @@ export { enhance as OrderDetailScreen };
 // Styles
 
 const styles = StyleSheet.create({
-  container: {
+  daftar: {
     flex: 1,
-    backgroundColor: '#fff',
   },
-  center: {
+  daftarIsi: {
+    paddingTop: space[2],
+    paddingHorizontal: space[4],
+    paddingBottom: space[4],
+    gap: space[3],
+  },
+  kosong: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
+    padding: space[6],
   },
-  header: {
+  judulBagian: {
+    ...type.labelSm,
+  },
+  barisAlamat: {
+    marginTop: 10,
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+    gap: 10,
   },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  badge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-  },
-  section: {
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6b7280',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  itemRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 6,
-  },
-  itemName: {
-    fontSize: 15,
-    color: '#374151',
+  kolomAlamat: {
     flex: 1,
   },
-  itemPrice: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#374151',
+  barisCatatan: {
+    marginTop: 12,
+    flexDirection: 'row',
+    gap: 10,
   },
-  totalRow: {
+  barisTombol: {
+    marginTop: 16,
+    flexDirection: 'row',
+    gap: space[2],
+  },
+  tombolSetengah: {
+    flex: 1,
+  },
+  barisItem: {
+    marginTop: 10,
     flexDirection: 'row',
     justifyContent: 'space-between',
+    gap: 12,
+  },
+  garis: {
+    height: stroke.hairline,
+    marginVertical: 12,
+  },
+  barisTotal: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    gap: 12,
+  },
+  barisDibuat: {
+    marginTop: 10,
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  totalLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  totalValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  addressText: {
-    fontSize: 15,
-    color: '#374151',
-    lineHeight: 22,
-  },
-  notesText: {
-    fontSize: 15,
-    color: '#6b7280',
-    fontStyle: 'italic',
-  },
-  timestampText: {
-    fontSize: 13,
-    color: '#9ca3af',
-  },
-  chatButton: {
-    margin: 16,
-    backgroundColor: '#2563eb',
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  chatButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  mapButton: {
-    marginHorizontal: 16,
-    marginBottom: 16,
-    backgroundColor: '#059669',
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  mapButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    gap: 6,
   },
   cancelButton: {
     marginHorizontal: 16,
@@ -1045,22 +1038,6 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
-  },
-  bottomSpacer: {
-    height: 24,
-  },
-  loadingText: {
-    fontSize: 16,
-    color: '#6b7280',
-  },
-  errorText: {
-    fontSize: 16,
-    color: '#dc2626',
-    textAlign: 'center',
-  },
-  mutedText: {
-    fontSize: 14,
-    color: '#9ca3af',
   },
   // Failed Payment Banner
   failedBanner: {

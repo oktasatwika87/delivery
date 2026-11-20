@@ -64,6 +64,12 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 // Pembungkus layar dibuat sekali di tingkat modul, jadi jendela awal tiap
 // layar terpasang saat layarnya dipasang, bukan tiap App dirender ulang.
 const OrderDetailDenganJendela = withInitialWindow(OrderDetailScreen);
+// Tema diletakkan di luar jendela awal, sama seperti layar Order.
+const OrderDetailDenganTema = (): React.JSX.Element => (
+  <ThemeProvider name={TEMA_DRIVER}>
+    <OrderDetailDenganJendela />
+  </ThemeProvider>
+);
 const ChatDenganJendela = withInitialWindow(ChatScreen);
 const MapDenganJendela = withInitialWindow(MapScreen);
 const MapSettingsDenganJendela = withInitialWindow(MapSettingsScreen);
@@ -387,7 +393,7 @@ function App(): React.JSX.Element {
                   </ThemeProvider>
                 )}
               </Stack.Screen>
-              <Stack.Screen name="OrderDetail" component={OrderDetailDenganJendela} />
+              <Stack.Screen name="OrderDetail" component={OrderDetailDenganTema} />
               <Stack.Screen name="Chat" component={ChatDenganJendela} />
               <Stack.Screen name="Map" component={MapDenganJendela} />
               <Stack.Screen name="MapSettings" component={MapSettingsDenganJendela} />
