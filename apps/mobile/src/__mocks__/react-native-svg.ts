@@ -4,7 +4,8 @@
  * react-native-svg asli butuh native module, jadi di jest repo ini
  * dipetakan ke file ini lewat moduleNameMapper di jest.config.js.
  * Yang dibutuhkan tes cuma props Svg, Path, Polygon, G, Defs, Pattern, Rect,
- * LinearGradient, dan Stop, jadi komponennya meneruskan props itu apa adanya.
+ * LinearGradient, Stop, Circle, dan Line, jadi komponennya meneruskan props
+ * itu apa adanya.
  *
  * Polanya sama dengan tiruan react-native di src/__mocks__/react-native.ts.
  */
@@ -30,6 +31,8 @@ const Pattern = makeComponent('Pattern');
 const Rect = makeComponent('Rect');
 const LinearGradient = makeComponent('LinearGradient');
 const Stop = makeComponent('Stop');
+const Circle = makeComponent('Circle');
+const Line = makeComponent('Line');
 
 module.exports = {
   __esModule: true,
@@ -43,4 +46,6 @@ module.exports = {
   Rect,
   LinearGradient,
   Stop,
+  Circle,
+  Line,
 };

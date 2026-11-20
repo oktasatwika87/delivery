@@ -19,14 +19,11 @@ import { standardEasing } from './presets';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 
-interface DrawnPathProps {
+export interface DrawnStrokeProps {
   /** Data path SVG. */
   d: string;
   /** Panjang path, dihitung pemanggil. */
   length: number;
-  viewBox: string;
-  width: number;
-  height: number;
   color: string;
   strokeWidth: number;
   /** Kalau false, garis langsung utuh tanpa digambar. */
@@ -35,17 +32,20 @@ interface DrawnPathProps {
   delay?: number;
 }
 
-export function DrawnPath({
+/**
+ * Path yang digambar, tanpa wadah gambar.
+ *
+ * Dipakai kalau garisnya harus berada di dalam gambar yang lebih besar,
+ * misalnya titik-titik pada rel langkah order.
+ */
+export function DrawnStroke({
   d,
   length,
-  viewBox,
-  width,
-  height,
   color,
   strokeWidth,
   animate = true,
   delay = 0,
-}: DrawnPathProps): React.JSX.Element {
+}: DrawnStrokeProps): React.JSX.Element {
   // Panjang dibulatkan ke atas, supaya ujung garis tidak jatuh di celah.
   const panjang = Math.ceil(length);
   const offset = useSharedValue(animate ? panjang : 0);
@@ -66,16 +66,45 @@ export function DrawnPath({
   }));
 
   return (
+    <AnimatedPath
+      d={d}
+      fill="none"
+      stroke={color}
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeDasharray={[panjang, panjang]}
+      animatedProps={animatedProps}
+    />
+  );
+}
+
+interface DrawnPathProps extends DrawnStrokeProps {
+  viewBox: string;
+  width: number;
+  height: number;
+}
+
+export function DrawnPath({
+  d,
+  length,
+  viewBox,
+  width,
+  height,
+  color,
+  strokeWidth,
+  animate = true,
+  delay = 0,
+}: DrawnPathProps): React.JSX.Element {
+  return (
     <Svg width={width} height={height} viewBox={viewBox}>
-      <AnimatedPath
+      <DrawnStroke
         d={d}
-        fill="none"
-        stroke={color}
+        length={length}
+        color={color}
         strokeWidth={strokeWidth}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray={[panjang, panjang]}
-        animatedProps={animatedProps}
+        animate={animate}
+        delay={delay}
       />
     </Svg>
   );
