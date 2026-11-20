@@ -80,6 +80,8 @@ interface MockPendingAction {
   status?: 'pending' | 'syncing' | 'failed' | 'orphaned_needs_review';
   createdAt: Date | number | string;
   payloadJson?: unknown;
+  /** Pembaca kolom mentah, seperti model aslinya. */
+  _getRaw?: (kolom: string) => unknown;
 }
 function computeIsPendingActionStale(action: MockPendingAction | null | undefined): boolean {
   if (!action?.createdAt) return false;
@@ -107,6 +109,7 @@ jest.mock('../sync/outbox', () => ({
   isPendingActionStale: (...args: unknown[]) => mockIsPendingActionStale(...args),
   retryFailedAction: (...args: unknown[]) => mockRetryFailedAction(...args),
   discardFailedAction: (...args: unknown[]) => mockDiscardFailedAction(...args),
+  STALE_THRESHOLD_MS: 60 * 60 * 1000,
 }));
 
 // WatermelonDB mock
@@ -185,6 +188,30 @@ const mockPaymentsCollection: any = {
   }),
 };
 
+// Salinan aksi tiruan yang bisa dibaca lewat _getRaw, seperti model aslinya.
+function denganRaw(aksi: MockPendingAction): MockPendingAction {
+  const createdAt = aksi.createdAt;
+  const waktuMs =
+    createdAt instanceof Date
+      ? createdAt.getTime()
+      : typeof createdAt === 'number'
+        ? createdAt
+        : Date.parse(createdAt);
+
+  return {
+    ...aksi,
+    _getRaw: (kolom: string) => {
+      if (kolom === 'status') return aksi.status;
+      if (kolom === 'action_type') return aksi.actionType;
+      if (kolom === 'created_at') return waktuMs;
+      if (kolom === 'payload_json') {
+        return aksi.payloadJson ? JSON.stringify(aksi.payloadJson) : '';
+      }
+      return undefined;
+    },
+  };
+}
+
 // Tiruan koleksi pending_actions, polanya sama dengan payments.
 let mockPendingActionsQuery: { observeWithColumns: jest.Mock } | null = null;
 const mockPendingActionsCollection: { query: jest.Mock } = {
@@ -192,8 +219,8 @@ const mockPendingActionsCollection: { query: jest.Mock } = {
     mockPendingActionsQuery = {
       observeWithColumns: jest.fn().mockImplementation((_cols: string[]) => ({
         subscribe: jest.fn().mockImplementation(({ next }: { next: (actions: MockPendingAction[]) => void }) => {
-          pendingActionsSubscriptionCallback = next;
-          next([...mockPendingActions]);
+          pendingActionsSubscriptionCallback = (actions) => next(actions.map(denganRaw));
+          next([...mockPendingActions].map(denganRaw));
           return { unsubscribe: jest.fn() };
         }),
       })),

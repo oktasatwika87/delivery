@@ -19,6 +19,7 @@ import { PaymentModel } from '../db/models/PaymentModel';
 import { PendingActionModel, readUpdateStatusTarget } from '../db/models/PendingActionModel';
 import { formatCurrency } from '../formatCurrency';
 import { hapticDelivered } from '../haptics';
+import { deriveOrderSyncView } from '../sync/orderSyncView';
 import { getCurrentUserId } from '../sync/session';
 import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
@@ -28,7 +29,6 @@ import {
   enqueueCollectCod,
   enqueueUpdateStatus,
   drainPendingActions,
-  isPendingActionStale,
   retryFailedAction,
   discardFailedAction,
 } from '../sync/outbox';
@@ -477,21 +477,6 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const codCaptured = payments.some(
     (p) => p.method === PaymentMethod.CASH && p.status === PaymentStatus.CAPTURED,
   );
-  // activeAction: aksi yang masih menunggu terkirim ('pending' atau 'syncing').
-  const activeAction = pendingActions.filter(
-    (a) => a.status === 'pending' || a.status === 'syncing',
-  );
-  // statusActionsActive: aksi update_status yang masih menunggu terkirim,
-  // urut dari createdAt (aksi tertua dulu). Dipakai untuk displayStatus dan
-  // syarat tombol status, sehingga tampilan menunjukkan status yang berlaku
-  // setelah antrean selesai terkirim.
-  const statusActionsActive = activeAction
-    .filter((a) => a.actionType === 'update_status')
-    .sort((a, b) => {
-      const aMs = a.createdAt instanceof Date ? a.createdAt.getTime() : Number(a.createdAt);
-      const bMs = b.createdAt instanceof Date ? b.createdAt.getTime() : Number(b.createdAt);
-      return aMs - bMs;
-    });
   // failedActions: aksi 'failed' jenis apa pun (cancel, reject, update_status, COD).
   const failedActions = pendingActions.filter((a) => a.status === 'failed');
   // hasFailedOrOrphanedAction: ada aksi 'failed' atau yatim untuk order ini.
@@ -503,19 +488,13 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   );
   const hasFailedOrOrphanedAction =
     failedActions.length > 0 || orphanedCodActions.length > 0;
-  // isPendingStale: ada aksi yang menunggu terkirim lebih dari sejam.
-  const isPendingStale = activeAction.some((a) => isPendingActionStale(a));
-  // displayStatus: target aksi status aktif yang paling baru (createdAt
-  // terbesar), yaitu status order setelah antrean selesai terkirim. Kalau
-  // tidak ada aksi status, atau ada aksi 'failed'/yatim jenis apa pun untuk
-  // order ini, pakai status baris order dari server.
-  const latestStatusAction = statusActionsActive[statusActionsActive.length - 1];
-  const latestStatusTarget = latestStatusAction
-    ? readUpdateStatusTarget(latestStatusAction.payloadJson)
+  // Status yang tampil dan keadaan antrean diambil dari aturan yang sama
+  // dengan kartu Order Saya.
+  const tampilanSinkron = order
+    ? deriveOrderSyncView(order.status, pendingActions)
     : null;
-  const displayStatus = (latestStatusTarget && !hasFailedOrOrphanedAction)
-    ? latestStatusTarget
-    : order?.status;
+  const displayStatus = tampilanSinkron?.displayStatus;
+  const antrean = tampilanSinkron?.antrean ?? null;
 
   /**
    * Batalkan: order milik driver ini, status masih bisa dibatalkan, COD belum
@@ -783,14 +762,14 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
       ))}
 
       {/* Pending Action Indicator */}
-      {activeAction.length > 0 && !isPendingStale && (
+      {antrean === 'pending' && (
         <View style={styles.pendingBanner}>
           <Text style={styles.pendingBannerText}>Menunggu sinkronisasi...</Text>
         </View>
       )}
 
       {/* Stale Pending Action Warning */}
-      {isPendingStale && (
+      {antrean === 'stale' && (
         <View style={styles.stalePendingBanner}>
           <Text style={styles.stalePendingBannerText}>
             Belum tersinkron dari sejam lalu — cek koneksi internet kamu
@@ -891,19 +870,10 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
       {/* Tombol Mulai antar dan Selesai diantar, syaratnya di canUpdateStatus */}
       {order && currentUserId && canUpdateStatus(order) && (
         <TouchableOpacity
-          style={[
-            styles.statusButton,
-            inflightStatusRef.current && styles.statusButtonDisabled,
-          ]}
+          style={styles.statusButton}
           onPress={() => handleUpdateStatus(order)}
-          disabled={inflightStatusRef.current}
         >
-          <Text
-            style={[
-              styles.statusButtonText,
-              inflightStatusRef.current && styles.statusButtonTextDisabled,
-            ]}
-          >
+          <Text style={styles.statusButtonText}>
             {displayStatus === OrderStatus.PREPARING ? 'Mulai antar' : 'Selesai diantar'}
           </Text>
         </TouchableOpacity>
@@ -1071,16 +1041,10 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
   },
-  statusButtonDisabled: {
-    backgroundColor: '#a1a1aa',
-  },
   statusButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
-  },
-  statusButtonTextDisabled: {
-    color: '#d4d4d8',
   },
   bottomSpacer: {
     height: 24,
