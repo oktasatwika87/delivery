@@ -7,6 +7,7 @@ import { Alert } from 'react-native';
 import { render, fireEvent, waitFor, act, within } from '@testing-library/react-native';
 
 import { OrderDetailScreen } from './OrderDetailScreen';
+import { InitialWindowProvider } from '../components/motion/InitialWindow';
 import { hapticDelivered } from '../haptics';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
 import type { NetworkStatus } from '../map/networkMonitor';
@@ -308,10 +309,17 @@ jest.mock('@nozbe/watermelondb/decorators', () => ({
   json: () => () => {},
 }));
 
+const elemenLayar = (
+  <OrderDetailScreen database={mockDatabase} route={{ params: { orderId: 'order-123' } } as any} />
+);
+
 function renderScreen() {
-  return render(
-    <OrderDetailScreen database={mockDatabase} route={{ params: { orderId: 'order-123' } } as any} />
-  );
+  return render(elemenLayar);
+}
+
+// Layar yang dipasang di dalam jendela awal, jadi geraknya belum jalan.
+function renderScreenDalamJendela() {
+  return render(<InitialWindowProvider>{elemenLayar}</InitialWindowProvider>);
 }
 
 // Keadaan bersama yang dipakai beberapa describe.
@@ -552,7 +560,7 @@ describe('cancel button behavior (outbox wiring)', () => {
     });
 
     // Should show error alert
-    expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Not authenticated');
+    expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Tidak bisa membatalkan order. Coba lagi.');
   });
 
   test('pressing Tidak does NOT call enqueueCancel', async () => {
@@ -591,7 +599,7 @@ describe('COD button visibility', () => {
     Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     });
   });
 
@@ -599,7 +607,7 @@ describe('COD button visibility', () => {
     Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
     const { queryByText } = renderScreen();
     await waitFor(() => {
-      expect(queryByText('Terima Cash (COD)')).toBeNull();
+      expect(queryByText('Terima Tunai (COD)')).toBeNull();
     });
   });
 
@@ -607,7 +615,7 @@ describe('COD button visibility', () => {
     Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
     const { queryByText } = renderScreen();
     await waitFor(() => {
-      expect(queryByText('Terima Cash (COD)')).toBeNull();
+      expect(queryByText('Terima Tunai (COD)')).toBeNull();
     });
   });
 
@@ -615,7 +623,7 @@ describe('COD button visibility', () => {
     Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'other-driver' });
     const { queryByText } = renderScreen();
     await waitFor(() => {
-      expect(queryByText('Terima Cash (COD)')).toBeNull();
+      expect(queryByText('Terima Tunai (COD)')).toBeNull();
     });
   });
 
@@ -624,7 +632,7 @@ describe('COD button visibility', () => {
     mockPayments.push({ orderId: 'order-123', method: PaymentMethod.CASH });
     const { queryByText } = renderScreen();
     await waitFor(() => {
-      expect(queryByText('Terima Cash (COD)')).toBeNull();
+      expect(queryByText('Terima Tunai (COD)')).toBeNull();
     });
   });
 
@@ -632,7 +640,7 @@ describe('COD button visibility', () => {
     Object.assign(mockOrder, { status: OrderStatus.DELIVERED, driverId: 'driver-456' });
     const { queryByText } = renderScreen();
     await waitFor(() => {
-      expect(queryByText('Terima Cash (COD)')).toBeNull();
+      expect(queryByText('Terima Tunai (COD)')).toBeNull();
     });
   });
 
@@ -640,7 +648,7 @@ describe('COD button visibility', () => {
     Object.assign(mockOrder, { status: OrderStatus.CANCELLED, driverId: 'driver-456' });
     const { queryByText } = renderScreen();
     await waitFor(() => {
-      expect(queryByText('Terima Cash (COD)')).toBeNull();
+      expect(queryByText('Terima Tunai (COD)')).toBeNull();
     });
   });
 });
@@ -668,13 +676,13 @@ describe('COD button behavior (outbox wiring)', () => {
   test('shows confirmation alert with correct text', async () => {
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     });
     await act(async () => {
-      fireEvent.press(getByText('Terima Cash (COD)'));
+      fireEvent.press(getByText('Terima Tunai (COD)'));
     });
     expect(Alert.alert).toHaveBeenCalledWith(
-      'Terima Cash (COD)',
+      'Terima Tunai (COD)',
       expect.stringContaining('Rp'),
       expect.arrayContaining([
         expect.objectContaining({ text: 'Batal' }),
@@ -686,10 +694,10 @@ describe('COD button behavior (outbox wiring)', () => {
   test('calls enqueueCollectCod with order id and amount on confirm', async () => {
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     });
     await act(async () => {
-      fireEvent.press(getByText('Terima Cash (COD)'));
+      fireEvent.press(getByText('Terima Tunai (COD)'));
     });
 
     const alertCalls = (Alert.alert as jest.Mock).mock.calls;
@@ -707,10 +715,10 @@ describe('COD button behavior (outbox wiring)', () => {
   test('drain is called after successful enqueue', async () => {
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     });
     await act(async () => {
-      fireEvent.press(getByText('Terima Cash (COD)'));
+      fireEvent.press(getByText('Terima Tunai (COD)'));
     });
 
     const alertCalls = (Alert.alert as jest.Mock).mock.calls;
@@ -730,10 +738,10 @@ describe('COD button behavior (outbox wiring)', () => {
 
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     });
     await act(async () => {
-      fireEvent.press(getByText('Terima Cash (COD)'));
+      fireEvent.press(getByText('Terima Tunai (COD)'));
     });
 
     const alertCalls = (Alert.alert as jest.Mock).mock.calls;
@@ -745,16 +753,16 @@ describe('COD button behavior (outbox wiring)', () => {
       yaButton?.onPress?.();
     });
 
-    expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Not authenticated');
+    expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Tidak bisa mencatat pembayaran tunai. Coba lagi.');
   });
 
   test('double-tap is prevented by inflight guard', async () => {
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     });
     await act(async () => {
-      fireEvent.press(getByText('Terima Cash (COD)'));
+      fireEvent.press(getByText('Terima Tunai (COD)'));
     });
 
     const alertCalls = (Alert.alert as jest.Mock).mock.calls;
@@ -969,12 +977,12 @@ describe('Double-tap prevention', () => {
   test('handleCollectCod guard prevents concurrent calls from creating duplicate payments', async () => {
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     });
 
     // First tap - opens confirmation dialog
     await act(async () => {
-      fireEvent.press(getByText('Terima Cash (COD)'));
+      fireEvent.press(getByText('Terima Tunai (COD)'));
     });
 
     expect(Alert.alert).toHaveBeenCalledTimes(1);
@@ -1158,7 +1166,7 @@ describe('Item price display', () => {
     const { getByText, getAllByText } = renderScreen();
 
     await waitFor(() => {
-      expect(getByText('Mie Goreng × 1')).toBeTruthy();
+      expect(getByText('Mie Goreng \\u00d7 1')).toBeTruthy();
     });
 
     // Item price, Rp 23.000 (bukan 230)
@@ -1523,7 +1531,7 @@ describe('driver status button behavior', () => {
     await waitFor(() => {
       expect(getByText('Selesai diantar')).toBeTruthy();
     });
-    expect(queryByText('Terima Cash (COD)')).toBeNull();
+    expect(queryByText('Terima Tunai (COD)')).toBeNull();
   });
 
   // Aksi collect_cod 'failed' dan aksi update_status DELIVERED 'pending':
@@ -1558,7 +1566,7 @@ describe('driver status button behavior', () => {
     expect(within(getByTestId('pil-status')).queryByText('Selesai')).toBeNull();
     // Tombol Selesai diantar dan COD tidak tampil.
     expect(queryByText('Selesai diantar')).toBeNull();
-    expect(queryByText('Terima Cash (COD)')).toBeNull();
+    expect(queryByText('Terima Tunai (COD)')).toBeNull();
   });
 
   // Order OUT_FOR_DELIVERY tanpa payment dan tanpa aksi: Selesai diantar
@@ -1568,7 +1576,7 @@ describe('driver status button behavior', () => {
 
     const { getByText, queryByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     });
     expect(queryByText('Selesai diantar')).toBeNull();
   });
@@ -1760,12 +1768,12 @@ describe('OrderDetail re-renders when findAndObserve emits same object reference
       mockFindAndObserveNext?.(mockOrder);
     });
 
-    // Layar harus ikut berubah: tombol Mulai antar hilang, Terima Cash (COD) tampil.
+    // Layar harus ikut berubah: tombol Mulai antar hilang, Terima Tunai (COD) tampil.
     await waitFor(() => {
       expect(queryByText('Mulai antar')).toBeNull();
     });
     await waitFor(() => {
-      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     });
   });
 });
@@ -1798,7 +1806,7 @@ describe('syarat tombol mengikuti payment CAPTURED', () => {
       pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
     await waitFor(() => {
-      expect(queryByText('Terima Cash (COD)')).toBeNull();
+      expect(queryByText('Terima Tunai (COD)')).toBeNull();
     });
   });
 
@@ -1820,7 +1828,7 @@ describe('syarat tombol mengikuti payment CAPTURED', () => {
     await waitFor(() => {
       expect(getByText('Selesai diantar')).toBeTruthy();
     });
-    expect(queryByText('Terima Cash (COD)')).toBeNull();
+    expect(queryByText('Terima Tunai (COD)')).toBeNull();
     expect(queryByText('Batalkan Order')).toBeNull();
   });
 
@@ -1840,7 +1848,7 @@ describe('syarat tombol mengikuti payment CAPTURED', () => {
       paymentsSubscriptionCallback?.([...mockPayments]);
     });
     await waitFor(() => {
-      expect(getByText('Terima Cash (COD)')).toBeTruthy();
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     });
     expect(queryByText('Selesai diantar')).toBeNull();
   });
@@ -2117,7 +2125,7 @@ describe('syarat tombol mengikuti aksi berstatus apa pun', () => {
     });
     await waitFor(() => {
       expect(queryByText('Batalkan Order')).toBeNull();
-      expect(queryByText('Terima Cash (COD)')).toBeNull();
+      expect(queryByText('Terima Tunai (COD)')).toBeNull();
     });
   });
 
@@ -2151,7 +2159,7 @@ describe('syarat tombol mengikuti aksi berstatus apa pun', () => {
       pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
     await waitFor(() => {
-      expect(queryByText('Terima Cash (COD)')).toBeNull();
+      expect(queryByText('Terima Tunai (COD)')).toBeNull();
     });
   });
 });
@@ -2259,7 +2267,7 @@ describe('displayStatus dan syarat tombol dari aksi status antre', () => {
     });
     // COD tampil (displayStatus OUT_FOR_DELIVERY, tidak ada aksi collect_cod
     // yang menghalangi, tidak ada aksi cancel/reject/failed/yatim).
-    expect(getByText('Terima Cash (COD)')).toBeTruthy();
+    expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     // Mulai antar/Selesai diantar/Batalkan TIDAK tampil.
     expect(queryByText('Mulai antar')).toBeNull();
     expect(queryByText('Selesai diantar')).toBeNull();
@@ -2293,7 +2301,7 @@ describe('displayStatus dan syarat tombol dari aksi status antre', () => {
       expect(getByText('Selesai diantar')).toBeTruthy();
     });
     // COD tidak tampil (ada aksi collect_cod yang antre).
-    expect(queryByText('Terima Cash (COD)')).toBeNull();
+    expect(queryByText('Terima Tunai (COD)')).toBeNull();
 
     await act(async () => {
       fireEvent.press(getByText('Selesai diantar'));
@@ -2342,7 +2350,7 @@ describe('displayStatus dan syarat tombol dari aksi status antre', () => {
     // Keempat tombol aksi TIDAK tampil.
     expect(queryByText('Mulai antar')).toBeNull();
     expect(queryByText('Selesai diantar')).toBeNull();
-    expect(queryByText('Terima Cash (COD)')).toBeNull();
+    expect(queryByText('Terima Tunai (COD)')).toBeNull();
     expect(queryByText('Batalkan Order')).toBeNull();
   });
 });
@@ -2523,7 +2531,7 @@ describe('detail order versi 2', () => {
     });
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('Mie Goreng × 2')).toBeTruthy();
+      expect(getByText('Mie Goreng \\u00d7 2')).toBeTruthy();
     });
     expect(getByText(/Rp\s46\.000/)).toBeTruthy();
     expect(getByText('Total')).toBeTruthy();
@@ -2547,5 +2555,165 @@ describe('detail order versi 2', () => {
     await waitFor(() => {
       expect(getByText('Menyinkronkan')).toBeTruthy();
     });
+  });
+});
+
+describe('bilah bawah detail order', () => {
+  const asli = {
+    status: mockOrder.status,
+    driverId: mockOrder.driverId,
+    totalCents: mockOrder.totalCents,
+    currency: mockOrder.currency,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    paymentsSubscriptionCallback = null;
+    pendingActionsSubscriptionCallback = null;
+    mockEnqueueCollectCod.mockResolvedValue({ success: true, pendingActionId: 'cod-pending-123' });
+    mockDrainPendingActions.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    Object.assign(mockOrder, asli);
+  });
+
+  test('PREPARING milik driver tanpa aksi: Mulai antar dan Batalkan Order tampil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText, queryByTestId } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+    expect(getByText('Batalkan Order')).toBeTruthy();
+    expect(queryByTestId('kotak-tunai')).toBeNull();
+  });
+
+  test('OUT_FOR_DELIVERY tanpa tunai: tagih, tombol terima tunai, dan batalkan tampil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { getByText, getByTestId } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Tagih tunai ke customer')).toBeTruthy();
+    });
+    expect(getByText('Terima Tunai (COD)')).toBeTruthy();
+    expect(getByText('Batalkan Order')).toBeTruthy();
+    // Kotak tunai ada di bilah bawah, bukan di dalam daftar.
+    expect(within(getByTestId('isi-detail')).queryByTestId('kotak-tunai')).toBeNull();
+  });
+
+  test('OUT_FOR_DELIVERY dengan aksi collect_cod pending: tunai diterima dan Selesai diantar tampil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPendingActions.push({
+      id: 'cod-pending',
+      actionType: 'collect_cod',
+      status: 'pending',
+      createdAt: new Date(),
+    });
+    const { getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Pembayaran tunai diterima')).toBeTruthy();
+    });
+    expect(getByText('Selesai diantar')).toBeTruthy();
+    expect(queryByText('Batalkan Order')).toBeNull();
+  });
+
+  test('DELIVERED dengan payment CASH CAPTURED: kotak tunai di dalam isi layar', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.DELIVERED, driverId: 'driver-456' });
+    mockPayments.push({
+      id: 'cod-selesai',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.CAPTURED,
+    });
+    const { getByTestId, queryByTestId, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(within(getByTestId('isi-detail')).getByTestId('kotak-tunai')).toBeTruthy();
+    });
+    expect(queryByTestId('aksi-utama')).toBeNull();
+    expect(queryByText('Batalkan Order')).toBeNull();
+  });
+
+  test('OUT_FOR_DELIVERY dengan COD tercatat dan aksi gagal: kotak diterima, tombol utama hilang', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({
+      id: 'cod-gagal',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.CAPTURED,
+    });
+    mockPendingActions.push({
+      id: 'us-delivered-gagal',
+      actionType: 'update_status',
+      status: 'failed',
+      createdAt: new Date(),
+      payloadJson: { status: 'DELIVERED' },
+    });
+    const { getByText, queryByTestId, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Pembayaran tunai diterima')).toBeTruthy();
+    });
+    expect(queryByTestId('aksi-utama')).toBeNull();
+    expect(queryByText('Batalkan Order')).toBeNull();
+  });
+
+  test('status berubah ke antrean: judul tombol utama bergulir di tombol yang sama', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByTestId, getByText, queryByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([
+        {
+          id: 'us-out-for-delivery',
+          actionType: 'update_status',
+          status: 'pending',
+          createdAt: new Date(),
+          payloadJson: { status: 'OUT_FOR_DELIVERY' },
+        },
+      ]);
+    });
+    await waitFor(() => {
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
+    });
+    expect(queryByText('Batalkan Order')).toBeNull();
+    expect(getByText('Tagih tunai ke customer')).toBeTruthy();
+    // Isi tombol yang sama dipakai, jadi judul baru masuk dengan gerak.
+    const isiTombol = within(getByTestId('aksi-utama')).getByTestId('isi-tombol');
+    expect(isiTombol.props.entering).toBeTruthy();
+  });
+
+  test('bungkus batal punya keluar di luar jendela awal', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByTestId } = renderScreen();
+    await waitFor(() => {
+      expect(getByTestId('bungkus-batal')).toBeTruthy();
+    });
+    expect(getByTestId('bungkus-batal').props.exiting).toBeTruthy();
+  });
+
+  test('bungkus batal tidak punya keluar di dalam jendela awal', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByTestId } = renderScreenDalamJendela();
+    await act(async () => {});
+    expect(getByTestId('bungkus-batal').props.exiting).toBeUndefined();
+  });
+
+  test('alert COD: judul dan isi yang baru', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
+    });
+    await act(async () => {
+      fireEvent.press(getByText('Terima Tunai (COD)'));
+    });
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Terima Tunai (COD)',
+      expect.stringContaining('Terima tunai '),
+      expect.anything(),
+    );
   });
 });

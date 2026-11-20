@@ -40,13 +40,16 @@ import {
 import { AppBar } from '../components/AppBar';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
+import { CashBox } from '../components/CashBox';
+import type { CashBoxVariant } from '../components/CashBox';
 import { OrderSteps } from '../components/OrderSteps';
 import { ScreenFrame } from '../components/ScreenFrame';
 import { Icon } from '../theme/Icon';
+import type { IconName } from '../theme/icons';
 import { useTheme } from '../theme/ThemeProvider';
 import { size, space, stroke, type } from '../theme/tokens';
 import { useInitialWindow } from '../components/motion/InitialWindow';
-import { shift } from '../components/motion/presets';
+import { fadeOut, shift } from '../components/motion/presets';
 import { langkahOrder } from './langkahOrder';
 
 // Types
@@ -70,6 +73,19 @@ interface Props {
 
 /** Geser kartu saat tata letaknya berubah, misalnya banner masuk atau keluar. */
 const GESER = shift();
+
+/** Macam aksi utama: mulai antar, terima tunai, atau selesai diantar. */
+type AksiUtama = 'mulai' | 'tunai' | 'selesai';
+
+/** Judul dan ikon tombol utama, satu per macam aksi. */
+const AKSI_UTAMA: Record<AksiUtama, { judul: string; ikon: IconName }> = {
+  mulai: { judul: 'Mulai antar', ikon: 'two_wheeler' },
+  tunai: { judul: 'Terima Tunai (COD)', ikon: 'payments' },
+  selesai: { judul: 'Selesai diantar', ikon: 'check_circle' },
+};
+
+/** Keluar pelan saat tombol Batalkan hilang. */
+const KELUAR_BATAL = fadeOut();
 
 // Failed Payment Banner
 
@@ -591,27 +607,29 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   };
 
   /**
-   * Handle COD collection via outbox.
-   * Enqueues a pending action that will be synced when online.
+   * Terima tunai lewat outbox.
+   * Aksinya diantre dulu, lalu dikirim saat ada koneksi.
    */
   const handleCollectCod = async (orderToCollect: OrderModel) => {
     const amount = formatCurrency(orderToCollect.totalCents, orderToCollect.currency);
     Alert.alert(
-      'Terima Cash (COD)',
-      `Kumpulkan payment cash ${amount} dari customer?`,
+      'Terima Tunai (COD)',
+      `Terima tunai ${amount} dari customer?`,
       [
         { text: 'Batal', style: 'cancel' },
         {
           text: 'Ya, Terima',
           onPress: async () => {
-            // Inflight guard: prevent double-tap / concurrent calls
-            // Use ref for synchronous check (state updates are async, refs are sync)
+            // Penjaga aksi yang sedang jalan: tap ganda tidak boleh membuat
+            // dua pembayaran. Penegasnya pakai ref karena pemeriksaan ref
+            // langsung, sementara state baru berlaku setelah render.
             if (inflightCollectRef.current) return;
             inflightCollectRef.current = true;
             try {
               const result = await enqueueCollectCod(orderToCollect.id, orderToCollect.totalCents);
               if (!result.success) {
-                Alert.alert('Gagal', result.error ?? 'Tidak bisa mencatat payment. Coba lagi.');
+                console.warn('[OrderDetail] enqueue COD gagal:', result.error);
+                Alert.alert('Gagal', 'Tidak bisa mencatat pembayaran tunai. Coba lagi.');
                 return;
               }
               // Tombol COD hilang karena aksinya terlihat lewat pengamatan
@@ -620,12 +638,13 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
               try {
                 await drainPendingActions(database);
               } catch (err) {
-                // If drain fails (offline), that's expected, action stays pending
+                // Kalau kirim antrean gagal (offline), aksi tetap tersimpan
+                // 'pending' dan dikirim di kesempatan berikutnya.
                 console.log('[OrderDetail] drain attempt while offline, action queued');
               }
             } catch (err) {
               console.error('[OrderDetail] failed to enqueue COD:', err);
-              Alert.alert('Gagal', 'Tidak bisa mencatat payment. Coba lagi.');
+              Alert.alert('Gagal', 'Tidak bisa mencatat pembayaran tunai. Coba lagi.');
             } finally {
               inflightCollectRef.current = false;
             }
@@ -636,8 +655,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   };
 
   /**
-   * Handle cancel order action via outbox.
-   * Enqueues a pending action that will be synced when online.
+   * Batalkan order lewat outbox.
+   * Aksinya diantre dulu, lalu dikirim saat ada koneksi.
    */
   const handleCancelOrder = async (orderToCancel: OrderModel) => {
     Alert.alert(
@@ -652,7 +671,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
             try {
               const result = await enqueueCancel(orderToCancel.id, orderToCancel.serverVersion);
               if (!result.success) {
-                Alert.alert('Gagal', result.error ?? 'Tidak bisa membatalkan order. Coba lagi.');
+                console.warn('[OrderDetail] enqueue pembatalan gagal:', result.error);
+                Alert.alert('Gagal', 'Tidak bisa membatalkan order. Coba lagi.');
                 return;
               }
               // Kirim antrean langsung supaya tidak menunggu sinkron berkala
@@ -660,7 +680,8 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
               try {
                 await drainPendingActions(database);
               } catch (err) {
-                // If drain fails (offline), that's expected, action stays pending
+                // Kalau kirim antrean gagal (offline), aksi tetap tersimpan
+                // 'pending' dan dikirim di kesempatan berikutnya.
                 console.log('[OrderDetail] drain attempt while offline, action queued');
               }
             } catch (err) {
@@ -717,8 +738,71 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const driverPemilik = !!currentUserId && order.driverId === currentUserId;
   const kotaKodePos = [address.city, address.postalCode].filter(Boolean).join(' ');
 
+  // Tombol utama satu slot: terima tunai dulu, kalau tidak bisa baru status.
+  const aksiUtama: AksiUtama | null = canCollectCod(order)
+    ? 'tunai'
+    : canUpdateStatus(order)
+      ? statusTampil === OrderStatus.PREPARING
+        ? 'mulai'
+        : 'selesai'
+      : null;
+  // Kotak tunai: bentuk tagih saat uang masih diminta, bentuk diterima
+  // setelah tercatat. COD yatim tidak tercatat dan tidak aktif, jadi
+  // tidak ada kotak.
+  const varianTunai: CashBoxVariant | null =
+    aksiUtama === 'tunai' ? 'tagih' : tunaiTercatat ? 'diterima' : null;
+  const jumlahTunai = formatCurrency(order.totalCents, order.currency);
+  const kotakDiBilah = varianTunai !== null && statusTampil === OrderStatus.OUT_FOR_DELIVERY;
+  const kotakDiDaftar = varianTunai !== null && statusTampil === OrderStatus.DELIVERED;
+  const bisaBatal = !!currentUserId && canDriverCancel(order);
+  const adaBilahBawah = kotakDiBilah || aksiUtama !== null || bisaBatal;
+
+  // Tiga slot dengan urutan tetap. Slot kosong ditulis null, bukan
+  // disaring, supaya tombol utama tidak dipasang ulang saat kotak tunai
+  // muncul atau hilang.
+  const isiBilahBawah = (
+    <>
+      {kotakDiBilah ? (
+        <View style={styles.slotTunai}>
+          <CashBox variant={varianTunai ?? 'tagih'} amountText={jumlahTunai} />
+        </View>
+      ) : null}
+      {aksiUtama ? (
+        <Button
+          testID="aksi-utama"
+          title={AKSI_UTAMA[aksiUtama].judul}
+          icon={AKSI_UTAMA[aksiUtama].ikon}
+          size="lg"
+          onPress={() => {
+            if (aksiUtama === 'tunai') {
+              handleCollectCod(order);
+            } else {
+              handleUpdateStatus(order);
+            }
+          }}
+        />
+      ) : null}
+      {bisaBatal ? (
+        <Animated.View
+          testID="bungkus-batal"
+          exiting={dalamJendela ? undefined : KELUAR_BATAL}
+        >
+          <Button
+            title="Batalkan Order"
+            variant="danger"
+            onPress={() => handleCancelOrder(order)}
+          />
+        </Animated.View>
+      ) : null}
+    </>
+  );
+
   return (
-    <ScreenFrame header={kepala} connection={bilah}>
+    <ScreenFrame
+      header={kepala}
+      connection={bilah}
+      bottomBar={adaBilahBawah ? isiBilahBawah : undefined}
+    >
       <ScrollView
         testID="isi-detail"
         style={styles.daftar}
@@ -859,7 +943,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
                   <Text style={[type.bodyMd, { color: colors.text, flex: 1 }]}>
                     {item.name}{' '}
                     <Text style={{ color: colors.textSubtle }}>
-                      {'×'} {item.quantity}
+                      {'\\u00d7'} {item.quantity}
                     </Text>
                   </Text>
                   <Text
@@ -894,37 +978,12 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
           </Card>
         </Animated.View>
 
-        {/* Tombol Batalkan, syaratnya di canDriverCancel */}
-        {order && currentUserId && canDriverCancel(order) && (
-          <TouchableOpacity
-            style={styles.cancelButton}
-            onPress={() => handleCancelOrder(order)}
-          >
-            <Text style={styles.cancelButtonText}>Batalkan Order</Text>
-          </TouchableOpacity>
-        )}
-
-        {/* Tombol COD, syaratnya di canCollectCod */}
-        {order && currentUserId && canCollectCod(order) && (
-          <TouchableOpacity
-            style={styles.codButton}
-            onPress={() => handleCollectCod(order)}
-          >
-            <Text style={styles.codButtonText}>Terima Cash (COD)</Text>
-          </TouchableOpacity>
-        )}
-
-        {/* Tombol Mulai antar dan Selesai diantar, syaratnya di canUpdateStatus */}
-        {order && currentUserId && canUpdateStatus(order) && (
-          <TouchableOpacity
-            style={styles.statusButton}
-            onPress={() => handleUpdateStatus(order)}
-          >
-            <Text style={styles.statusButtonText}>
-              {displayStatus === OrderStatus.PREPARING ? 'Mulai antar' : 'Selesai diantar'}
-            </Text>
-          </TouchableOpacity>
-        )}
+        {/* Kotak tunai di akhir daftar, dipakai kalau order sudah selesai */}
+        {kotakDiDaftar ? (
+          <Animated.View layout={dalamJendela ? undefined : GESER}>
+            <CashBox variant={varianTunai ?? 'diterima'} amountText={jumlahTunai} />
+          </Animated.View>
+        ) : null}
       </ScrollView>
     </ScreenFrame>
   );
@@ -1000,44 +1059,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  cancelButton: {
-    marginHorizontal: 16,
-    marginBottom: 16,
-    backgroundColor: '#dc2626',
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  cancelButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  codButton: {
-    marginHorizontal: 16,
-    marginBottom: 16,
-    backgroundColor: '#059669',
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  codButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  statusButton: {
-    marginHorizontal: 16,
-    marginBottom: 16,
-    backgroundColor: '#2563eb',
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  statusButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+  slotTunai: {
+    marginBottom: space[1],
   },
   // Failed Payment Banner
   failedBanner: {
