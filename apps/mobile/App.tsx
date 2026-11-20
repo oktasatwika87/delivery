@@ -383,7 +383,7 @@ function App(): React.JSX.Element {
               </InitialWindowProvider>
             )
           ) : role === UserRole.DRIVER ? (
-            <Stack.Navigator screenOptions={{ headerShown: false }}>
+            <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
               <Stack.Screen name="Orders">
                 {() => (
                   <ThemeProvider name={TEMA_DRIVER}>
