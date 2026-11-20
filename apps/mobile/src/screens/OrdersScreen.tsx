@@ -50,7 +50,7 @@ import {
 } from './orderRowRead';
 import { countActiveOrders, sortMyOrders, sortPoolOrders } from './orderListSort';
 import { revealOffset } from './orderListScroll';
-import { deriveDaySummary } from './daySummary';
+import { deriveDaySummary, MATA_UANG_TUNAI } from './daySummary';
 import {
   ReleasedOrdersNotice,
   dismissReleasedOrders,
@@ -91,10 +91,6 @@ type TabKey = typeof TAB_TERSEDIA | typeof TAB_SAYA;
 const JARAK_IKON = 6;
 
 const TEKS_BUTUH_KONEKSI = 'Butuh koneksi internet untuk menerima order';
-
-// Jumlah tunai menggabungkan banyak baris payment, dan server selalu mengisi
-// mata uang IDR.
-const MATA_UANG_TUNAI = 'IDR';
 
 // Geser posisi baris daftar, dipakai satu kali jadi konstanta modul.
 const GESER_BARIS = shift();

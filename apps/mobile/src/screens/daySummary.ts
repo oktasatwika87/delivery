@@ -19,6 +19,10 @@ export interface DaySummaryValues {
   cashAmount: number;
 }
 
+// Jumlah tunai menggabungkan banyak baris payment, dan server selalu mengisi
+// mata uang IDR.
+export const MATA_UANG_TUNAI = 'IDR';
+
 function readText(row: PaymentModel, column: string): string {
   const raw = row._getRaw(column);
   return typeof raw === 'string' ? raw : '';

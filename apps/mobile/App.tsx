@@ -39,6 +39,7 @@ import { RegisterScreen } from './src/screens/RegisterScreen';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { OrdersScreen } from './src/screens/OrdersScreen';
 import { OrderDetailScreen } from './src/screens/OrderDetailScreen';
+import { OrderDoneScreen } from './src/screens/OrderDoneScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
 import { MapScreen } from './src/screens/MapScreen';
 import { MapSettingsScreen } from './src/screens/MapSettingsScreen';
@@ -54,6 +55,7 @@ export type RootStackParamList = {
   Login: undefined;
   Orders: undefined;
   OrderDetail: { orderId: string };
+  OrderDone: { orderId: string };
   Chat: { roomId: string };
   Map: { orderId: string };
   MapSettings: undefined;
@@ -71,6 +73,12 @@ const OrderDetailDenganTema = (): React.JSX.Element => (
   </ThemeProvider>
 );
 const ChatDenganJendela = withInitialWindow(ChatScreen);
+// Layar sukses tidak dibungkus jendela awal, geraknya memang momennya.
+const OrderDoneDenganTema = (): React.JSX.Element => (
+  <ThemeProvider name={TEMA_DRIVER}>
+    <OrderDoneScreen />
+  </ThemeProvider>
+);
 const MapDenganJendela = withInitialWindow(MapScreen);
 const MapSettingsDenganJendela = withInitialWindow(MapSettingsScreen);
 
@@ -394,6 +402,11 @@ function App(): React.JSX.Element {
                 )}
               </Stack.Screen>
               <Stack.Screen name="OrderDetail" component={OrderDetailDenganTema} />
+              <Stack.Screen
+                name="OrderDone"
+                component={OrderDoneDenganTema}
+                options={{ animation: 'fade' }}
+              />
               <Stack.Screen name="Chat" component={ChatDenganJendela} />
               <Stack.Screen name="Map" component={MapDenganJendela} />
               <Stack.Screen name="MapSettings" component={MapSettingsDenganJendela} />
