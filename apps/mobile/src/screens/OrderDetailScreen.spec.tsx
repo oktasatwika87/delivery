@@ -8,6 +8,7 @@ import { render, fireEvent, waitFor, act, within } from '@testing-library/react-
 
 import { OrderDetailScreen } from './OrderDetailScreen';
 import { Banner } from '../components/Banner';
+import { Button } from '../components/Button';
 import { syncEvents } from '../sync/syncEvents';
 import { InitialWindowProvider } from '../components/motion/InitialWindow';
 import { hapticDelivered } from '../haptics';
@@ -55,13 +56,18 @@ jest.mock('react-native', () => {
 });
 
 // Navigation mock (pola sama kayak MapScreen.spec.tsx)
-// mockNavigate dan mockGoBack di tingkat modul, jadi tes bisa memeriksa
-// tujuan navigasi dan pemanggilan tombol kembali.
+// mockNavigate, mockGoBack, dan mockReplace di tingkat modul, jadi tes bisa
+// memeriksa tujuan navigasi dan pemanggilan tombol kembali.
 const mockNavigate = jest.fn();
 const mockGoBack = jest.fn();
+const mockReplace = jest.fn();
 
 jest.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({ navigate: mockNavigate, goBack: mockGoBack }),
+  useNavigation: () => ({
+    navigate: mockNavigate,
+    goBack: mockGoBack,
+    replace: mockReplace,
+  }),
   useRoute: () => ({ params: { orderId: 'order-123' } }),
 }));
 
@@ -3010,5 +3016,388 @@ describe('banner detail order', () => {
     await waitFor(() => {
       expect(queryByText(/OUT_FOR_DELIVERY|OUT FOR_DELIVERY/)).toBeNull();
     });
+  });
+});
+
+// Tes: urutan Selesai diantar
+//
+// Selesai diantar punya tahap: tombol utama ditahan dulu, lalu layar pindah
+// ke layar sukses. Selama ditahan, bilah bawah tidak berubah.
+
+type HasilLayar = ReturnType<typeof renderScreen>;
+
+/** Hasil antre status yang dikembalikan outbox. */
+interface HasilAntre {
+  success: boolean;
+  pendingActionId?: string;
+  error?: string;
+}
+
+/** Tombol utama di bilah bawah, dicari lewat testID. */
+function tombolUtama(hasil: HasilLayar) {
+  return hasil.UNSAFE_getAllByType(Button).find((b) => b.props.testID === 'aksi-utama');
+}
+
+/** Tombol "Ya" dari dialog konfirmasi status. */
+function tombolYa(): { text: string; onPress?: () => void } | undefined {
+  const buttons = (Alert.alert as jest.Mock).mock.calls[0][2] as Array<{
+    text: string;
+    onPress?: () => void;
+  }>;
+  return buttons.find((b) => b.text === 'Ya');
+}
+
+/** Tombol "Ya" dari dialog "Selesai diantar" yang terakhir muncul. */
+function tombolYaTerakhir(): { text: string; onPress?: () => void } | undefined {
+  const calls = (Alert.alert as jest.Mock).mock.calls.filter(
+    (c) => c[0] === 'Selesai diantar',
+  );
+  const buttons = calls[calls.length - 1][2] as Array<{
+    text: string;
+    onPress?: () => void;
+  }>;
+  return buttons.find((b) => b.text === 'Ya');
+}
+
+describe('urutan Selesai diantar', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockEnqueueUpdateStatus.mockReset();
+    mockDrainPendingActions.mockReset();
+    mockDrainPendingActions.mockResolvedValue([]);
+    mockUpdateOrderStatus.mockReset();
+    mockGetOrderById.mockReset();
+    mockOrderPrepareUpdate.mockReset();
+    mockOrderPrepareUpdate.mockImplementation(function(this: OrderModel, fn: (r: OrderModel) => void) {
+      fn(this);
+      return this;
+    });
+    mockDatabaseBatch.mockReset();
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    paymentsSubscriptionCallback = null;
+    pendingActionsSubscriptionCallback = null;
+    mockReplace.mockClear();
+    Object.assign(mockOrder, {
+      status: OrderStatus.OUT_FOR_DELIVERY,
+      driverId: 'driver-456',
+      serverVersion: 1,
+    });
+    mockPayments.push({
+      id: 'cod-urut-1',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.CAPTURED,
+    });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  /** Kirim aksi status DELIVERED lewat langganan pending_actions. */
+  async function kirimAksiDelivered(): Promise<void> {
+    await act(async () => {
+      mockPendingActions.push({
+        id: 'pa-urut-1',
+        actionType: 'update_status',
+        status: 'pending',
+        createdAt: new Date(),
+        payloadJson: { status: 'DELIVERED' },
+      });
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+  }
+
+  test('sukses: tombol ditahan dengan centang, lalu layar pindah ke layar sukses', async () => {
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: true, pendingActionId: 'pa-urut-1' });
+
+    const hasil = renderScreen();
+    const { getByText, getByTestId } = hasil;
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+    const ya = tombolYa();
+    await act(async () => {
+      ya?.onPress?.();
+    });
+
+    // Layar belum pindah, tombol masih ditahan.
+    expect(mockReplace).not.toHaveBeenCalled();
+
+    await kirimAksiDelivered();
+
+    const tombol = tombolUtama(hasil);
+    expect(tombol).toBeTruthy();
+    expect(tombol?.props.title).toBe('Selesai diantar');
+    expect(tombol?.props.success).toBe(true);
+    // Kotak tunai tetap di bilah bawah, bukan di dalam daftar.
+    expect(within(getByTestId('isi-detail')).queryByTestId('kotak-tunai')).toBeNull();
+    expect(getByTestId('kotak-tunai')).toBeTruthy();
+
+    await waitFor(
+      () => {
+        expect(mockReplace).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 2000 },
+    );
+    expect(mockReplace).toHaveBeenCalledWith('OrderDone', { orderId: 'order-123' });
+  });
+
+  test('tahap kirim: tombol ditahan tanpa centang sampai aksi selesai', async () => {
+    let selesaiAntre: (hasil: HasilAntre) => void = () => {};
+    mockEnqueueUpdateStatus.mockImplementation(
+      () => new Promise<HasilAntre>((resolve) => {
+        selesaiAntre = resolve;
+      }),
+    );
+
+    const hasil = renderScreen();
+    const { getByText } = hasil;
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+    const ya = tombolYa();
+    await act(async () => {
+      ya?.onPress?.();
+    });
+
+    await kirimAksiDelivered();
+
+    // Aksi belum selesai, tombol ditahan tanpa centang.
+    const tombol = tombolUtama(hasil);
+    expect(tombol).toBeTruthy();
+    expect(tombol?.props.title).toBe('Selesai diantar');
+    expect(tombol?.props.success).toBe(false);
+
+    await act(async () => {
+      selesaiAntre({ success: true, pendingActionId: 'pa-urut-2' });
+    });
+
+    expect(tombolUtama(hasil)?.props.success).toBe(true);
+  });
+
+  test('kirim antrean tidak ditunggu: layar tetap pindah', async () => {
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: true, pendingActionId: 'pa-urut-3' });
+    mockDrainPendingActions.mockImplementation(() => new Promise(() => {}));
+
+    const hasil = renderScreen();
+    const { getByText } = hasil;
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+    const ya = tombolYa();
+    await act(async () => {
+      ya?.onPress?.();
+    });
+
+    await waitFor(
+      () => {
+        expect(mockReplace).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 2000 },
+    );
+  });
+
+  test('kirim antrean gagal: layar tetap pindah dan tidak ada galat', async () => {
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: true, pendingActionId: 'pa-urut-4' });
+    mockDrainPendingActions.mockRejectedValue(new TypeError('Network request failed'));
+
+    const hasil = renderScreen();
+    const { getByText } = hasil;
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+    const ya = tombolYa();
+    await act(async () => {
+      ya?.onPress?.();
+    });
+
+    await waitFor(
+      () => {
+        expect(mockReplace).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 2000 },
+    );
+    expect(Alert.alert).not.toHaveBeenCalledWith('Gagal', expect.anything());
+  });
+
+  test('kurangi gerakan: layar langsung pindah tanpa centang', async () => {
+    const reanimated = require('react-native-reanimated') as {
+      useReducedMotion: () => boolean;
+    };
+    jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: true, pendingActionId: 'pa-urut-5' });
+
+    const hasil = renderScreen();
+    const { getByText } = hasil;
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+    const ya = tombolYa();
+    await act(async () => {
+      ya?.onPress?.();
+    });
+
+    expect(mockReplace).toHaveBeenCalledTimes(1);
+    expect(mockReplace).toHaveBeenCalledWith('OrderDone', { orderId: 'order-123' });
+    expect(tombolUtama(hasil)?.props.success).toBe(false);
+  });
+
+  test('antre gagal: ada galat, tombol tidak centang, layar tidak pindah', async () => {
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: false, error: 'Not authenticated' });
+
+    const hasil = renderScreen();
+    const { getByText } = hasil;
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+    const ya = tombolYa();
+    await act(async () => {
+      ya?.onPress?.();
+    });
+
+    expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Status gagal dicatat. Coba lagi.');
+    expect(tombolUtama(hasil)?.props.success).toBe(false);
+
+    await new Promise((selesai) => setTimeout(selesai, 500));
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  test('antre gagal: tombol bisa dipakai lagi', async () => {
+    mockEnqueueUpdateStatus
+      .mockResolvedValueOnce({ success: false, error: 'Not authenticated' })
+      .mockResolvedValueOnce({ success: true, pendingActionId: 'pa-urut-8' });
+
+    const hasil = renderScreen();
+    const { getByText } = hasil;
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+    await act(async () => {
+      tombolYa()?.onPress?.();
+    });
+
+    expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Status gagal dicatat. Coba lagi.');
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+
+    const panggilanSelesai = (Alert.alert as jest.Mock).mock.calls.filter(
+      (c) => c[0] === 'Selesai diantar',
+    );
+    expect(panggilanSelesai).toHaveLength(2);
+
+    await act(async () => {
+      tombolYaTerakhir()?.onPress?.();
+    });
+
+    await waitFor(
+      () => {
+        expect(mockReplace).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 2000 },
+    );
+    expect(mockReplace).toHaveBeenCalledWith('OrderDone', { orderId: 'order-123' });
+  });
+
+  test('antre melempar galat: tombol bisa dipakai lagi', async () => {
+    mockEnqueueUpdateStatus
+      .mockRejectedValueOnce(new Error('tulis gagal'))
+      .mockResolvedValueOnce({ success: true, pendingActionId: 'pa-urut-8' });
+
+    const hasil = renderScreen();
+    const { getByText } = hasil;
+    await waitFor(() => {
+      expect(getByText('Selesai diantar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+    await act(async () => {
+      tombolYa()?.onPress?.();
+    });
+
+    expect(Alert.alert).toHaveBeenCalledWith('Gagal', 'Status gagal dicatat. Coba lagi.');
+
+    await act(async () => {
+      fireEvent.press(getByText('Selesai diantar'));
+    });
+
+    const panggilanSelesai = (Alert.alert as jest.Mock).mock.calls.filter(
+      (c) => c[0] === 'Selesai diantar',
+    );
+    expect(panggilanSelesai).toHaveLength(2);
+
+    await act(async () => {
+      tombolYaTerakhir()?.onPress?.();
+    });
+
+    await waitFor(
+      () => {
+        expect(mockReplace).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 2000 },
+    );
+    expect(mockReplace).toHaveBeenCalledWith('OrderDone', { orderId: 'order-123' });
+  });
+
+  test('Mulai antar sukses: layar tidak pindah', async () => {
+    Object.assign(mockOrder, {
+      status: OrderStatus.PREPARING,
+      driverId: 'driver-456',
+      serverVersion: 1,
+    });
+    mockPayments.length = 0;
+    mockEnqueueUpdateStatus.mockResolvedValue({ success: true, pendingActionId: 'pa-urut-7' });
+
+    const hasil = renderScreen();
+    const { getByText } = hasil;
+    await waitFor(() => {
+      expect(getByText('Mulai antar')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Mulai antar'));
+    });
+    const ya = tombolYa();
+    await act(async () => {
+      ya?.onPress?.();
+    });
+
+    await new Promise((selesai) => setTimeout(selesai, 500));
+    expect(mockReplace).not.toHaveBeenCalled();
   });
 });

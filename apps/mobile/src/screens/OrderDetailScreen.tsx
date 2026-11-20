@@ -11,7 +11,7 @@ import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-n
 import { Q } from '@nozbe/watermelondb';
 import { withDatabase } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
-import Animated from 'react-native-reanimated';
+import Animated, { useReducedMotion } from 'react-native-reanimated';
 
 import type { RootStackParamList } from '../../App';
 import { OrderModel } from '../db/models/OrderModel';
@@ -48,7 +48,7 @@ import { ScreenFrame } from '../components/ScreenFrame';
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
 import { useTheme } from '../theme/ThemeProvider';
-import { size, space, stroke, type } from '../theme/tokens';
+import { motion, size, space, stroke, type } from '../theme/tokens';
 import { useInitialWindow } from '../components/motion/InitialWindow';
 import { useHoldDone } from '../components/motion/useHoldDone';
 import { fadeOut, shift } from '../components/motion/presets';
@@ -79,6 +79,9 @@ const GESER = shift();
 
 /** Macam aksi utama: mulai antar, terima tunai, atau selesai diantar. */
 type AksiUtama = 'mulai' | 'tunai' | 'selesai';
+
+/** Tahap tahan tombol Selesai diantar: sedang mengirim, lalu sudah berhasil. */
+type TahapSelesai = 'kirim' | 'berhasil';
 
 /** Judul dan ikon tombol utama, satu per macam aksi. */
 const AKSI_UTAMA: Record<AksiUtama, { judul: string; ikon: IconName }> = {
@@ -230,8 +233,12 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const [failedBannerDismissed, setFailedBannerDismissed] = useState(false);
   const [conflictEvent, setConflictEvent] = useState<OrderConflictEvent | null>(null);
   const [lastConflictDismissed, setLastConflictDismissed] = useState(false);
+  // Tahap tahan tombol Selesai diantar. Selama tombol ditahan, bilah bawah
+  // tidak berubah dan layar belum pindah ke layar sukses.
+  const [tahapSelesai, setTahapSelesai] = useState<TahapSelesai | null>(null);
   const inflightCollectRef = useRef(false);
   const inflightStatusRef = useRef(false);
+  const kurangiGerak = useReducedMotion();
 
   useEffect(() => {
     getCurrentUserId().then(setCurrentUserId);
@@ -356,6 +363,16 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     };
   }, [database, orderId]);
 
+  // Pindah ke layar sukses setelah tombol Selesai diantar ditahan sebentar
+  // dalam bentuk berhasil.
+  useEffect(() => {
+    if (tahapSelesai !== 'berhasil') return;
+    const timer = setTimeout(() => {
+      navigation.replace('OrderDone', { orderId });
+    }, motion.duration.drawLine);
+    return () => clearTimeout(timer);
+  }, [navigation, orderId, tahapSelesai]);
+
   // Nilai turunan untuk syarat tombol dan banner. codCaptured: COD order ini
   // sudah tercatat di server (payment CASH CAPTURED).
   const codCaptured = payments.some(
@@ -451,10 +468,14 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
 
   /**
    * Mulai antar dan Selesai diantar: aksi update_status diantre lewat
-   * outbox, supaya tetap jalan saat offline. Target dihitung dari
-   * displayStatus (status yang sedang ditampilkan), bukan dari order.status,
-   * supaya Selesai diantar yang diketuk saat Mulai antar masih antre
-   * menghasilkan target DELIVERED.
+   * outbox, supaya tetap jalan saat offline.
+   *
+   * Selesai diantar punya urutan sendiri: tombol utama ditahan dalam bentuk
+   * berhasil supaya bilah bawah tidak berubah, lalu layar pindah ke layar
+   * sukses. Kirim antrean tidak ditunggu, supaya layar tidak tertahan.
+   *
+   * Target dihitung dari status yang sedang ditampilkan, jadi Selesai
+   * diantar yang diketuk saat Mulai antar menghasilkan target DELIVERED.
    */
   const handleUpdateStatus = async (orderToUpdate: OrderModel) => {
     if (displayStatus !== OrderStatus.PREPARING && displayStatus !== OrderStatus.OUT_FOR_DELIVERY) {
@@ -469,6 +490,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     const alertBody = displayStatus === OrderStatus.PREPARING
       ? 'Tandai order ini sedang dalam perjalanan?'
       : 'Tandai order ini sudah selesai diantar?';
+    const selesaiDiantar = nextStatus === OrderStatus.DELIVERED;
 
     Alert.alert(alertTitle, alertBody, [
       { text: 'Batal', style: 'cancel' },
@@ -477,27 +499,38 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         onPress: async () => {
           if (inflightStatusRef.current) return;
           inflightStatusRef.current = true;
+          // Tombol ditahan sebelum aksi tercatat, supaya layar tidak sempat
+          // digambar tanpa tombol utama dan bilah bawah.
+          if (selesaiDiantar) setTahapSelesai('kirim');
           try {
             const result = await enqueueUpdateStatus(orderToUpdate.id, nextStatus);
             if (!result.success) {
+              if (selesaiDiantar) setTahapSelesai(null);
               Alert.alert('Gagal', 'Status gagal dicatat. Coba lagi.');
               return;
             }
             // Getarnya tanda aksi sudah diterima HP, jadi tetap bergetar
             // walau antrean belum sempat terkirim. Mulai antar tidak
             // bergetar.
-            if (nextStatus === OrderStatus.DELIVERED) {
+            if (selesaiDiantar) {
               hapticDelivered();
             }
-            try {
-              await drainPendingActions(database);
-            } catch (err) {
+            // Kirim antrean tidak ditunggu, supaya layar tidak tertahan.
+            void drainPendingActions(database).catch(() => {
               // Kalau kirim antrean gagal (offline), aksi tetap tersimpan
               // 'pending' dan dikirim di kesempatan berikutnya.
               console.log('[OrderDetail] drain attempt while offline, action queued');
+            });
+            if (selesaiDiantar) {
+              if (kurangiGerak) {
+                navigation.replace('OrderDone', { orderId: orderToUpdate.id });
+              } else {
+                setTahapSelesai('berhasil');
+              }
             }
           } catch (err) {
             console.error('[OrderDetail] failed to enqueue update_status:', err);
+            if (selesaiDiantar) setTahapSelesai(null);
             Alert.alert('Gagal', 'Status gagal dicatat. Coba lagi.');
           } finally {
             inflightStatusRef.current = false;
@@ -640,21 +673,32 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const kotaKodePos = [address.city, address.postalCode].filter(Boolean).join(' ');
 
   // Tombol utama satu slot: terima tunai dulu, kalau tidak bisa baru status.
-  const aksiUtama: AksiUtama | null = canCollectCod(order)
-    ? 'tunai'
-    : canUpdateStatus(order)
-      ? statusTampil === OrderStatus.PREPARING
-        ? 'mulai'
-        : 'selesai'
-      : null;
+  // Selama tombol Selesai diantar ditahan, tombolnya tetap Selesai diantar
+  // dan tidak ikut hilang bersama status yang sudah antre.
+  const ditahanSelesai = tahapSelesai !== null;
+  const aksiUtama: AksiUtama | null = ditahanSelesai
+    ? 'selesai'
+    : canCollectCod(order)
+      ? 'tunai'
+      : canUpdateStatus(order)
+        ? statusTampil === OrderStatus.PREPARING
+          ? 'mulai'
+          : 'selesai'
+        : null;
   // Kotak tunai: bentuk tagih saat uang masih diminta, bentuk diterima
   // setelah tercatat. COD yatim tidak tercatat dan tidak aktif, jadi
   // tidak ada kotak.
   const varianTunai: CashBoxVariant | null =
     aksiUtama === 'tunai' ? 'tagih' : tunaiTercatat ? 'diterima' : null;
   const jumlahTunai = formatCurrency(order.totalCents, order.currency);
-  const kotakDiBilah = varianTunai !== null && statusTampil === OrderStatus.OUT_FOR_DELIVERY;
-  const kotakDiDaftar = varianTunai !== null && statusTampil === OrderStatus.DELIVERED;
+  // Selama tombol ditahan, kotak tunai tetap di bilah bawah supaya isi
+  // bilah tidak berubah di tengah layar sukses akan datang.
+  const kotakDiBilah = ditahanSelesai
+    ? varianTunai !== null
+    : varianTunai !== null && statusTampil === OrderStatus.OUT_FOR_DELIVERY;
+  const kotakDiDaftar = ditahanSelesai
+    ? false
+    : varianTunai !== null && statusTampil === OrderStatus.DELIVERED;
   const bisaBatal = !!currentUserId && canDriverCancel(order);
   const adaBilahBawah = kotakDiBilah || aksiUtama !== null || bisaBatal;
 
@@ -707,7 +751,10 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
           title={AKSI_UTAMA[aksiUtama].judul}
           icon={AKSI_UTAMA[aksiUtama].ikon}
           size="lg"
+          success={tahapSelesai === 'berhasil'}
           onPress={() => {
+            // Selama tombol ditahan, ketukan tidak melakukan apa-apa.
+            if (ditahanSelesai) return;
             if (aksiUtama === 'tunai') {
               handleCollectCod(order);
             } else {
