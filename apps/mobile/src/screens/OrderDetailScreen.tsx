@@ -402,7 +402,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   };
 
   /**
-   * Terima Cash (COD): displayStatus OUT_FOR_DELIVERY, order milik driver,
+   * Terima Tunai (COD): displayStatus OUT_FOR_DELIVERY, order milik driver,
    * COD belum tercatat, tidak ada aksi collect_cod, cancel, atau reject
    * yang antre, dan tidak ada aksi 'failed' atau yatim. Mulai antar yang
    * masih antre tidak menghalangi, karena displayStatus sudah
@@ -523,9 +523,9 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         {
           text: 'Ya, Terima',
           onPress: async () => {
-            // Penjaga aksi yang sedang jalan: tap ganda tidak boleh membuat
-            // dua pembayaran. Penegasnya pakai ref karena pemeriksaan ref
-            // langsung, sementara state baru berlaku setelah render.
+            // Penjaga ketukan ganda: dua ketukan tidak boleh membuat dua
+            // pembayaran. Ref dipakai karena nilainya langsung terbaca,
+            // sedangkan nilai `useState` baru berubah di render berikutnya.
             if (inflightCollectRef.current) return;
             inflightCollectRef.current = true;
             try {
