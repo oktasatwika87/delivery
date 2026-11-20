@@ -137,9 +137,7 @@ function teksKonflikTersimpan(reason: string): string {
 
 const CONFLICT_BANNER_TTL_MS = 24 * 60 * 60 * 1000;
 
-// Teks banner aksi gagal, satu per jenis aksi. Cancel, reject, dan
-// update_status punya tombol Coba lagi dan Abaikan; COD hanya Coba lagi
-// karena tidak bisa dibuang.
+// Teks banner aksi gagal, satu per jenis aksi.
 
 function teksAksiGagal(action: PendingActionModel): string | null {
   if (action.actionType === 'cancel') {
@@ -813,7 +811,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
           <Banner
             key="basi"
             tone="warning"
-            title="Belum tersinkron dari seam lalu"
+            title="Belum tersinkron dari sejam lalu"
             body="Cek koneksi internet Anda"
           />
         ) : null}

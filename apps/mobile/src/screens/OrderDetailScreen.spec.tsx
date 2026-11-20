@@ -1042,7 +1042,7 @@ describe('Stale Pending Action Banner', () => {
       expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
     });
     await waitFor(() => {
-      expect(queryByText('Belum tersinkron dari seam lalu')).toBeNull();
+      expect(queryByText('Belum tersinkron dari sejam lalu')).toBeNull();
     });
   });
 
@@ -1054,7 +1054,7 @@ describe('Stale Pending Action Banner', () => {
       pendingActionsSubscriptionCallback?.([{ id: 'pending-stale', status: 'pending', actionType: 'cancel', createdAt: new Date(Date.now() - 61 * 60 * 1000) }]);
     });
     await waitFor(() => {
-      expect(getByText('Belum tersinkron dari seam lalu')).toBeTruthy();
+      expect(getByText('Belum tersinkron dari sejam lalu')).toBeTruthy();
     });
     await waitFor(() => {
       expect(queryByText('Menunggu sinkronisasi')).toBeNull();
@@ -1069,7 +1069,7 @@ describe('Stale Pending Action Banner', () => {
       pendingActionsSubscriptionCallback?.([{ id: 'pending-stale', status: 'pending', actionType: 'cancel', createdAt: new Date(Date.now() - 120 * 60 * 1000) }]);
     });
     await waitFor(() => {
-      expect(getByText('Belum tersinkron dari seam lalu')).toBeTruthy();
+      expect(getByText('Belum tersinkron dari sejam lalu')).toBeTruthy();
     });
     await waitFor(() => {
       expect(queryByText('Batalkan Order')).toBeNull();
@@ -1087,7 +1087,7 @@ describe('Stale Pending Action Banner', () => {
       expect(queryByText('Menunggu sinkronisasi')).toBeNull();
     });
     await waitFor(() => {
-      expect(queryByText('Belum tersinkron dari seam lalu')).toBeNull();
+      expect(queryByText('Belum tersinkron dari sejam lalu')).toBeNull();
     });
   });
 
@@ -2848,7 +2848,7 @@ describe('banner detail order', () => {
     await waitFor(() => {
       const banner = UNSAFE_getAllByType(Banner)[0];
       expect(banner.props.tone).toBe('warning');
-      expect(banner.props.title).toMatch(/Belum tersinkron dari s[e]am lalu/);
+      expect(banner.props.title).toBe('Belum tersinkron dari sejam lalu');
       expect(banner.props.body).toBe('Cek koneksi internet Anda');
     });
   });
