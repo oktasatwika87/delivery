@@ -90,6 +90,9 @@ const AKSI_UTAMA: Record<AksiUtama, { judul: string; ikon: IconName }> = {
 /** Keluar pelan saat tombol Batalkan hilang. */
 const KELUAR_BATAL = fadeOut();
 
+/** Tanda kali di baris barang, ditulis lewat kode karakter supaya sumber tetap ASCII. */
+const TANDA_KALI = String.fromCharCode(0xd7);
+
 // Teks banner
 
 /** Teks banner konflik dari kejadian sinkron. */
@@ -898,7 +901,7 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
                   <Text style={[type.bodyMd, { color: colors.text, flex: 1 }]}>
                     {item.name}{' '}
                     <Text style={{ color: colors.textSubtle }}>
-                      {'\\u00d7'} {item.quantity}
+                      {TANDA_KALI} {item.quantity}
                     </Text>
                   </Text>
                   <Text

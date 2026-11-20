@@ -15,6 +15,9 @@ import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
 import type { NetworkStatus } from '../map/networkMonitor';
 import type { OrderModel } from '../db/models/OrderModel';
 
+// Tanda kali di baris barang, ditulis lewat kode karakter supaya sumber tetap ASCII.
+const TANDA_KALI = String.fromCharCode(0xd7);
+
 // Client mocks
 const mockUpdateOrderStatus = jest.fn();
 const mockGetOrderById = jest.fn();
@@ -150,7 +153,7 @@ const mockOrder = {
 
 // Callback next dari findAndObserve, supaya tes bisa mengirim ulang objek yang sama.
 let mockFindAndObserveNext: ((record: typeof mockOrder) => void) | null = null;
-// Cara tiruan findAndObserve behave: kirim baris, diam saja, atau laporkan galat.
+// Perilaku tiruan findAndObserve: kirim baris, diam saja, atau laporkan galat.
 let mockFindAndObservePerilaku: 'kirim' | 'diam' | 'galat' = 'kirim';
 
 const mockFindAndObserve = jest.fn(() => ({
@@ -1178,7 +1181,7 @@ describe('Item price display', () => {
     const { getByText, getAllByText } = renderScreen();
 
     await waitFor(() => {
-      expect(getByText('Mie Goreng \\u00d7 1')).toBeTruthy();
+      expect(getByText(`Mie Goreng ${TANDA_KALI} 1`)).toBeTruthy();
     });
 
     // Item price, Rp 23.000 (bukan 230)
@@ -2543,7 +2546,7 @@ describe('detail order versi 2', () => {
     });
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('Mie Goreng \\u00d7 2')).toBeTruthy();
+      expect(getByText(`Mie Goreng ${TANDA_KALI} 2`)).toBeTruthy();
     });
     expect(getByText(/Rp\s46\.000/)).toBeTruthy();
     expect(getByText('Total')).toBeTruthy();
