@@ -579,6 +579,21 @@ async function processPendingAction(
 }
 
 /**
+ * Batch yang menulis hasil lebih dulu, baru menghapus aksi.
+ *
+ * Pengamat diberi tahu per tabel menurut urutan tabel itu muncul pertama kali
+ * di batch, jadi hasilnya ditulis dulu supaya layar tidak sempat melihat aksi
+ * hilang sebelum hasilnya ada.
+ */
+async function batchWritesThenDeletes(
+  db: Database,
+  writes: Model[],
+  deletes: Model[],
+): Promise<void> {
+  await db.batch(...writes, ...deletes);
+}
+
+/**
  * Kirim aksi reject.
  *
  * Sukses: baris order lokal ditulis dari respons dan aksi dihapus dalam satu
@@ -604,11 +619,11 @@ async function processReject(action: PendingActionModel, db: Database): Promise<
       );
     }
 
-    // Single batch: delete pending_action + (kalau ada) update order row lokal.
+    // Satu batch: baris order lokal ditulis dulu, lalu aksi dihapus.
     await db.write(async () => {
-      const ops: Model[] = [action.prepareDestroyPermanently()];
+      const writes: Model[] = [];
       if (orderRow) {
-        ops.push(orderRow.prepareUpdate((r) => {
+        writes.push(orderRow.prepareUpdate((r) => {
           r._setRaw('status', response.status);
           r._setRaw('driver_id', null);
           r._setRaw('server_version', response.version);
@@ -620,7 +635,8 @@ async function processReject(action: PendingActionModel, db: Database): Promise<
           r._raw._changed = '';
         }));
       }
-      await db.batch(...ops);
+      const deletes: Model[] = [action.prepareDestroyPermanently()];
+      await batchWritesThenDeletes(db, writes, deletes);
     });
 
     // pool-refresh membuat OrdersScreen mengambil ulang daftar Tersedia, karena
@@ -727,7 +743,8 @@ async function writeRejectConflictAndDelete(
   }
 
   await db.write(async () => {
-    const ops: Model[] = [action.prepareDestroyPermanently()];
+    const writes: Model[] = [];
+    const deletes: Model[] = [action.prepareDestroyPermanently()];
     if (reason === 'reassigned') {
       // Untuk 'reassigned', hapus semua update_status/cancel/reject untuk order
       // itu (status aksi apa pun: pending, syncing, failed). Aksi collect_cod
@@ -746,12 +763,12 @@ async function writeRejectConflictAndDelete(
           sibling.actionType === 'cancel' ||
           sibling.actionType === 'reject'
         ) {
-          ops.push(sibling.prepareDestroyPermanently());
+          deletes.push(sibling.prepareDestroyPermanently());
         }
       }
     }
     if (orderRow) {
-      ops.push(orderRow.prepareUpdate((r) => {
+      writes.push(orderRow.prepareUpdate((r) => {
         r._setRaw('last_conflict_reason', reason);
         r._setRaw('last_conflict_at', Date.now());
         if (reason === 'reassigned') {
@@ -763,7 +780,7 @@ async function writeRejectConflictAndDelete(
         r._raw._changed = '';
       }));
     }
-    await db.batch(...ops);
+    await batchWritesThenDeletes(db, writes, deletes);
   });
 
   // Untuk 'reassigned', minta OrdersScreen mengambil ulang daftar Tersedia,
@@ -798,9 +815,9 @@ async function processCancel(action: PendingActionModel, db: Database): Promise<
     }
 
     await db.write(async () => {
-      const ops: Model[] = [action.prepareDestroyPermanently()];
+      const writes: Model[] = [];
       if (orderRow) {
-        ops.push(orderRow.prepareUpdate((r) => {
+        writes.push(orderRow.prepareUpdate((r) => {
           r._setRaw('status', response.status);
           r._setRaw('driver_id', null);
           r._setRaw('server_version', response.version);
@@ -814,7 +831,8 @@ async function processCancel(action: PendingActionModel, db: Database): Promise<
           r._raw._changed = '';
         }));
       }
-      await db.batch(...ops);
+      const deletes: Model[] = [action.prepareDestroyPermanently()];
+      await batchWritesThenDeletes(db, writes, deletes);
     });
 
     // Sama seperti processReject: pool-refresh dipancarkan, orderConflict tidak.
@@ -929,9 +947,10 @@ async function classifyAndHandleCodError(
       // ditulis kalau bentuknya benar; aksi dihapus dan alasannya ditulis ke order.
       const payment = extractPaymentFromBody(err.body);
       await db.write(async () => {
-        const ops: Model[] = [action.prepareDestroyPermanently()];
+        const writes: Model[] = [];
+        const deletes: Model[] = [action.prepareDestroyPermanently()];
         if (payment) {
-          ops.push(await prepareUpsertPaymentOp(db, payment));
+          writes.push(await prepareUpsertPaymentOp(db, payment));
         }
         let orderRow: OrderModel | null = null;
         try {
@@ -940,14 +959,14 @@ async function classifyAndHandleCodError(
           console.warn(`[outbox] Order ${action.targetOrderId} not found locally for cod-already-captured:`, lookupErr);
         }
         if (orderRow) {
-          ops.push(orderRow.prepareUpdate((r) => {
+          writes.push(orderRow.prepareUpdate((r) => {
             r._setRaw('last_conflict_reason', 'cod-already-captured');
             r._setRaw('last_conflict_at', Date.now());
             r._raw._status = 'synced';
             r._raw._changed = '';
           }));
         }
-        await db.batch(...ops);
+        await batchWritesThenDeletes(db, writes, deletes);
       });
       return { pendingActionId: action.id, status: 'conflict', error: 'cod-already-captured' };
     }
@@ -1033,11 +1052,11 @@ async function processUpdateStatus(
     console.log(`[outbox] update_status succeeded for order ${action.targetOrderId}:`, response.status);
 
     await db.write(async () => {
-      const ops: Model[] = [action.prepareDestroyPermanently()];
+      const writes: Model[] = [];
       const updatedAtRaw = Date.parse(response.updatedAt);
       const updatedAtMs = Number.isFinite(updatedAtRaw) ? updatedAtRaw : Date.now();
       if (orderRow) {
-        ops.push(orderRow.prepareUpdate((r) => {
+        writes.push(orderRow.prepareUpdate((r) => {
           r._setRaw('status', response.status);
           r._setRaw('server_version', response.version);
           r._setRaw('updated_at', updatedAtMs);
@@ -1050,7 +1069,8 @@ async function processUpdateStatus(
           r._raw._changed = '';
         }));
       }
-      await db.batch(...ops);
+      const deletes: Model[] = [action.prepareDestroyPermanently()];
+      await batchWritesThenDeletes(db, writes, deletes);
     });
 
     return { pendingActionId: action.id, status: 'success' };
@@ -1230,11 +1250,12 @@ async function deleteActionAndWritePayment(
   payment: Payment | null,
 ): Promise<void> {
   await db.write(async () => {
-    const ops: Model[] = [action.prepareDestroyPermanently()];
+    const writes: Model[] = [];
     if (payment) {
-      ops.push(await prepareUpsertPaymentOp(db, payment));
+      writes.push(await prepareUpsertPaymentOp(db, payment));
     }
-    await db.batch(...ops);
+    const deletes: Model[] = [action.prepareDestroyPermanently()];
+    await batchWritesThenDeletes(db, writes, deletes);
   });
 }
 
@@ -1286,16 +1307,17 @@ async function handleVersionConflict(action: PendingActionModel, db: Database, r
   }
 
   await db.write(async () => {
-    const ops: Model[] = [action.prepareDestroyPermanently()];
+    const writes: Model[] = [];
     if (cancelOrderRow) {
-      ops.push(cancelOrderRow.prepareUpdate((r) => {
+      writes.push(cancelOrderRow.prepareUpdate((r) => {
         r._setRaw('last_conflict_reason', 'cancelled-by-server');
         r._setRaw('last_conflict_at', Date.now());
         r._raw._status = 'synced';
         r._raw._changed = '';
       }));
     }
-    await db.batch(...ops);
+    const deletes: Model[] = [action.prepareDestroyPermanently()];
+    await batchWritesThenDeletes(db, writes, deletes);
   });
 
   // Pull fresh order data via sync coordinator (transaksi sendiri), tidak

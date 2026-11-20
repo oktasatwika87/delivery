@@ -13,10 +13,12 @@
 import { Database } from '@nozbe/watermelondb';
 import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
 import { Q } from '@nozbe/watermelondb';
+import { OrderStatus } from '@delivery/shared';
 
 import { schema } from '../db/schema';
 import { PendingActionModel } from '../db/models/PendingActionModel';
 import { OrderModel } from '../db/models/OrderModel';
+import { PaymentModel } from '../db/models/PaymentModel';
 
 // Mock session untuk idempotency key.
 jest.mock('./session', () => ({
@@ -33,6 +35,7 @@ jest.mock('./client', () => {
     rejectOrder: jest.fn(),
     cancelOrder: jest.fn(),
     collectCodOrder: jest.fn(),
+    updateOrderStatus: jest.fn(),
     flagOrphanedCod: jest.fn(),
   };
 });
@@ -68,7 +71,7 @@ function buildTestDatabase(): Database {
   });
   return new Database({
     adapter,
-    modelClasses: [PendingActionModel, OrderModel],
+    modelClasses: [PendingActionModel, OrderModel, PaymentModel],
   });
 }
 
@@ -407,5 +410,257 @@ describe('outbox enqueue - regression prepareCreateFromDirtyRaw with real LokiJS
       await seedAction('order-umur-nol-pending', 0, 'pending');
       expect(await hasStalePendingAction('order-umur-nol-pending')).toBe(false);
     });
+  });
+});
+
+/**
+ * Urutan di dalam batch: hasil ditulis dulu, aksi dihapus belakangan.
+ *
+ * Pengamat diberi tahu per tabel menurut urutan tabel itu muncul pertama kali
+ * di batch. Kalau aksi dihapus lebih dulu, layar sempat digambar dengan aksi
+ * sudah hilang tapi hasilnya belum ada: status tampil mundur, atau tombol COD
+ * muncul lagi padahal uangnya sudah diterima.
+ */
+describe('outbox menghapus aksi paling akhir di batch', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    jest.resetModules();
+    db = buildTestDatabase();
+    installDatabase(db);
+  });
+
+  async function seedOrderRow(driverId: string, status: string): Promise<void> {
+    await db.write(async () => {
+      const prepared = db.get<OrderModel>('orders').prepareCreateFromDirtyRaw({
+        id: 'order-123',
+        _status: 'synced',
+        _changed: '',
+        customer_id: 'cust-1',
+        driver_id: driverId,
+        status,
+        items_json: '[]',
+        address_json: '{}',
+        total_cents: 25000,
+        currency: 'IDR',
+        server_version: 3,
+        failed_sync_attempts: 0,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      });
+      await db.batch(prepared);
+    });
+  }
+
+  async function seedCashPayment(): Promise<void> {
+    await db.write(async () => {
+      const prepared = db.get<PaymentModel>('payments').prepareCreateFromDirtyRaw({
+        id: 'pay-1',
+        _status: 'synced',
+        _changed: '',
+        order_id: 'order-123',
+        idempotency_key: 'cod:regression-stable',
+        method: 'CASH',
+        status: 'CAPTURED',
+        amount_cents: 25000,
+        currency: 'IDR',
+        kind: 'PAYMENT',
+        external_ref: null,
+        server_version: 1,
+        failed_sync_attempts: 0,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      });
+      await db.batch(prepared);
+    });
+  }
+
+  async function seedUpdateStatusAction(): Promise<void> {
+    await db.write(async () => {
+      const prepared = db.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
+        id: 'pa-status-1',
+        _status: 'synced',
+        _changed: '',
+        action_type: 'update_status',
+        target_order_id: 'order-123',
+        expected_version: 0,
+        idempotency_key: 'status:order-123:DELIVERED',
+        payload_json: JSON.stringify({ status: 'DELIVERED' }),
+        status: 'pending',
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      });
+      await db.batch(prepared);
+    });
+  }
+
+  async function seedCollectCodAction(): Promise<void> {
+    await db.write(async () => {
+      const prepared = db.get<PendingActionModel>('pending_actions').prepareCreateFromDirtyRaw({
+        id: 'pa-cod-1',
+        _status: 'synced',
+        _changed: '',
+        action_type: 'collect_cod',
+        target_order_id: 'order-123',
+        expected_version: 0,
+        idempotency_key: 'cod:regression-stable',
+        payload_json: JSON.stringify({ amountCents: 25000 }),
+        status: 'pending',
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      });
+      await db.batch(prepared);
+    });
+  }
+
+  it('update_status DELIVERED: status yang tampil tidak pernah mundur ke OUT_FOR_DELIVERY', async () => {
+    const { deriveOrderSyncView } = require('../sync/orderSyncView');
+    const { readOrderStatus } = require('../screens/orderRowRead');
+    const { driverOrdersQuery, allActionsQuery } = require('../db/driverQueries');
+    const { drainPendingActions } = require('./outbox');
+    const client = require('./client');
+
+    await seedOrderRow('driver-regression-test', 'OUT_FOR_DELIVERY');
+    await seedCashPayment();
+    await seedUpdateStatusAction();
+
+    client.updateOrderStatus.mockResolvedValue({
+      id: 'order-123',
+      customerId: 'cust-1',
+      driverId: 'driver-regression-test',
+      status: 'DELIVERED',
+      items: [],
+      deliveryAddress: {},
+      totalCents: 25000,
+      currency: 'IDR',
+      createdAt: '2026-11-20T08:00:00.000Z',
+      updatedAt: '2026-11-20T08:00:00.000Z',
+      version: 4,
+    });
+
+    // Status dan aksi dicatat dari nilai yang benar-benar diterima layar
+    // pada saat itu: status diambil dari baris order yang dipancarkan,
+    // aksi dari daftar aksi yang dipancarkan.
+    const catatanStatus: OrderStatus[] = [];
+    let statusOrder: OrderStatus = OrderStatus.OUT_FOR_DELIVERY;
+    let aksiOrder: PendingActionModel[] = [];
+    let orderSudah = false;
+    let aksiSudah = false;
+
+    const catatStatus = (): void => {
+      if (!orderSudah || !aksiSudah) return;
+      catatanStatus.push(deriveOrderSyncView(statusOrder, aksiOrder).displayStatus);
+    };
+
+    const subOrder = driverOrdersQuery(db, 'driver-regression-test').subscribe((orders: OrderModel[]) => {
+      const order = orders.find((row: OrderModel) => row.id === 'order-123');
+      if (order) {
+        statusOrder = readOrderStatus(order);
+      }
+      orderSudah = true;
+      catatStatus();
+    });
+
+    const subAksi = allActionsQuery(db).subscribe((actions: PendingActionModel[]) => {
+      aksiOrder = actions.filter((row: PendingActionModel) => row._getRaw('target_order_id') === 'order-123');
+      aksiSudah = true;
+      catatStatus();
+    });
+
+    // Tunggu pancaran awal, lalu kosongkan catatan.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    catatanStatus.length = 0;
+
+    await drainPendingActions(db);
+
+    const aksi = await db.get<PendingActionModel>('pending_actions').query().fetch();
+    expect(aksi).toHaveLength(0);
+
+    const orderRow = await db.get<OrderModel>('orders').find('order-123');
+    expect(readOrderStatus(orderRow)).toBe('DELIVERED');
+
+    expect(catatanStatus.length).toBeGreaterThan(0);
+    expect(catatanStatus).not.toContain('OUT_FOR_DELIVERY');
+
+    subOrder.unsubscribe();
+    subAksi.unsubscribe();
+  });
+
+  it('collect_cod: tunai tercatat sudah ada saat aksi collect_cod hilang', async () => {
+    const { cashPaymentsQuery, allActionsQuery } = require('../db/driverQueries');
+    const { drainPendingActions } = require('./outbox');
+    const client = require('./client');
+
+    await seedOrderRow('driver-regression-test', 'OUT_FOR_DELIVERY');
+    await seedCollectCodAction();
+
+    client.collectCodOrder.mockResolvedValue({
+      id: 'pay-2',
+      orderId: 'order-123',
+      idempotencyKey: 'cod:regression-stable',
+      method: 'CASH',
+      status: 'CAPTURED',
+      amountCents: 25000,
+      currency: 'IDR',
+      kind: 'PAYMENT',
+      createdAt: '2026-11-20T08:00:00.000Z',
+      updatedAt: '2026-11-20T08:00:00.000Z',
+      version: 1,
+    });
+
+    // Catatan berisi:true kalau tunai sudah tercatat: ada payment CASH
+    // CAPTURED untuk order itu, atau aksi collect_cod order itu masih antre.
+    const catatanTunai: boolean[] = [];
+    let paymentTerakhir: PaymentModel[] = [];
+    let aksiTerakhir: PendingActionModel[] = [];
+    let paymentSudah = false;
+    let aksiSudah = false;
+
+    const catatTunai = (): void => {
+      if (!paymentSudah || !aksiSudah) return;
+      const adaPayment = paymentTerakhir.some(
+        (row) =>
+          row._getRaw('order_id') === 'order-123' && row._getRaw('status') === 'CAPTURED',
+      );
+      const aksiCod = aksiTerakhir.find(
+        (row) =>
+          row._getRaw('action_type') === 'collect_cod' &&
+          row._getRaw('target_order_id') === 'order-123',
+      );
+      const statusAksi = aksiCod ? aksiCod._getRaw('status') : null;
+      const masihAntre = statusAksi === 'pending' || statusAksi === 'syncing';
+      catatanTunai.push(adaPayment || masihAntre);
+    };
+
+    const subPayment = cashPaymentsQuery(db).subscribe((payments: PaymentModel[]) => {
+      paymentTerakhir = payments;
+      paymentSudah = true;
+      catatTunai();
+    });
+
+    const subAksi = allActionsQuery(db).subscribe((actions: PendingActionModel[]) => {
+      aksiTerakhir = actions.filter((row: PendingActionModel) => row._getRaw('target_order_id') === 'order-123');
+      aksiSudah = true;
+      catatTunai();
+    });
+
+    // Tunggu pancaran awal, lalu kosongkan catatan.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    catatanTunai.length = 0;
+
+    await drainPendingActions(db);
+
+    const aksi = await db.get<PendingActionModel>('pending_actions').query().fetch();
+    expect(aksi).toHaveLength(0);
+
+    const payment = await db.get<PaymentModel>('payments').query().fetch();
+    expect(payment).toHaveLength(1);
+    expect(payment[0]._getRaw('status')).toBe('CAPTURED');
+
+    expect(catatanTunai.length).toBeGreaterThan(0);
+    expect(catatanTunai).not.toContain(false);
+
+    subPayment.unsubscribe();
+    subAksi.unsubscribe();
   });
 });
