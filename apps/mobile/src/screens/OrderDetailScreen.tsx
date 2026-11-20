@@ -4,7 +4,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -38,6 +37,8 @@ import {
   discardFailedAction,
 } from '../sync/outbox';
 import { AppBar } from '../components/AppBar';
+import { Banner } from '../components/Banner';
+import type { BannerAction } from '../components/Banner';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { CashBox } from '../components/CashBox';
@@ -49,8 +50,10 @@ import type { IconName } from '../theme/icons';
 import { useTheme } from '../theme/ThemeProvider';
 import { size, space, stroke, type } from '../theme/tokens';
 import { useInitialWindow } from '../components/motion/InitialWindow';
+import { useHoldDone } from '../components/motion/useHoldDone';
 import { fadeOut, shift } from '../components/motion/presets';
 import { langkahOrder } from './langkahOrder';
+import { isOrderStatus } from './orderRowRead';
 
 // Types
 
@@ -87,223 +90,117 @@ const AKSI_UTAMA: Record<AksiUtama, { judul: string; ikon: IconName }> = {
 /** Keluar pelan saat tombol Batalkan hilang. */
 const KELUAR_BATAL = fadeOut();
 
-// Failed Payment Banner
+// Teks banner
 
-interface FailedPaymentBannerProps {
-  payments: PaymentModel[];
-  codCaptured: boolean;
-  onDismiss: () => void;
-  isDismissed: boolean;
+/** Teks banner konflik dari kejadian sinkron. */
+function teksKonflikKejadian(event: OrderConflictEvent): string {
+  if (event.reason === 'reassigned') {
+    return 'Order ini sudah dipindahkan ke driver lain.';
+  }
+  if (event.reason === 'rejected-oc') {
+    return event.ackReason || 'Order tidak bisa diperbarui karena status di server sudah berubah.';
+  }
+  // Konflik status: kode status mentah tidak pernah tampil, yang dipakai
+  // label driver dengan huruf pertama dikecilkan karena di tengah kalimat.
+  if (isOrderStatus(event.serverStatus)) {
+    const label = driverStatusLabel(event.serverStatus);
+    return `Status order diperbarui server, sekarang ${label.charAt(0).toLowerCase()}${label.slice(1)}.`;
+  }
+  return 'Status order diperbarui server.';
 }
 
-function FailedPaymentBanner({ payments, codCaptured, onDismiss, isDismissed }: FailedPaymentBannerProps): React.JSX.Element | null {
-  const hasFailedPayment = payments.some((p) => p.status === PaymentStatus.FAILED);
-
-  if (!hasFailedPayment || isDismissed || codCaptured) return null;
-
-  return (
-    <View style={styles.failedBanner}>
-      <Text style={styles.failedBannerText}>
-        COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.
-      </Text>
-      <TouchableOpacity onPress={onDismiss} style={styles.failedBannerDismiss}>
-        <Text style={styles.failedBannerDismissText}>✕</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-// Order Conflict Banner
-
-interface OrderConflictBannerProps {
-  event: OrderConflictEvent | null;
-  onDismiss: () => void;
-}
-
-function OrderConflictBanner({ event, onDismiss }: OrderConflictBannerProps): React.JSX.Element | null {
-  if (!event) return null;
-
-  const isActionNeeded = event.reason === 'reassigned' || event.reason === 'rejected-oc';
-  const backgroundColor = isActionNeeded ? '#fef3c7' : '#e5e7eb';
-  const borderColor = isActionNeeded ? '#fcd34d' : '#d1d5db';
-  const textColor = isActionNeeded ? '#92400e' : '#374151';
-
-  const getMessage = () => {
-    if (event.reason === 'reassigned') {
-      return 'Order ini sudah dipindahkan ke driver lain.';
-    }
-    if (event.reason === 'rejected-oc') {
-      return event.ackReason ?? 'Order tidak bisa diperbarui — status di server sudah berubah.';
-    }
-    // order-status-conflict
-    return `Status order diperbarui server — sekarang ${event.serverStatus}.`;
-  };
-
-  return (
-    <View style={[styles.conflictBanner, { backgroundColor, borderColor }]}>
-      <Text style={[styles.conflictBannerText, { color: textColor }]}>
-        {isActionNeeded ? '⚠️ ' : 'ℹ️ '}{getMessage()}
-      </Text>
-      <TouchableOpacity onPress={onDismiss} style={styles.conflictBannerDismiss}>
-        <Text style={[styles.conflictBannerDismissText, { color: textColor }]}>✕</Text>
-      </TouchableOpacity>
-    </View>
-  );
+/** Teks banner konflik tersimpan, satu per alasan. */
+function teksKonflikTersimpan(reason: string): string {
+  switch (reason) {
+    case 'released':
+      return 'Order ini sudah tidak ditugaskan ke Anda, biasanya karena HP Anda lama tidak tersambung. Kalau order ini ada lagi di daftar Tersedia, Anda bisa menerimanya lagi.';
+    case 'reassigned':
+      return 'Order ini sudah dipindahkan ke driver lain, jadi aksi Anda tidak diproses.';
+    case 'cancelled-by-server':
+      return 'Pembatalan tidak diproses karena order sudah berubah di server. Data order sudah diperbarui.';
+    case 'cancel-cod-captured':
+      return 'Order ini tidak bisa dibatalkan karena COD-nya sudah tercatat. Selesaikan pengantarannya.';
+    case 'cod-already-captured':
+      return 'COD order ini sudah tercatat sebelumnya, jadi catatan dari HP ini tidak disimpan. Kalau Anda menerima uang dua kali, hubungi support.';
+    case 'sync-rejected':
+      return 'Perubahan data order ini di HP ditolak server. Kalau data order terlihat salah, hubungi support.';
+    default:
+      return 'Order ini sudah berubah di server.';
+  }
 }
 
 // Banner konflik tersimpan: teks per last_conflict_reason, tampil 24 jam sejak
 // last_conflict_at.
 
-interface LastConflictBannerProps {
-  order: OrderModel;
-  isDismissed: boolean;
-  onDismiss: () => void;
-}
+const CONFLICT_BANNER_TTL_MS = 24 * 60 * 60 * 1000;
 
-const CONFLICT_BANNER_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Teks banner aksi gagal, satu per jenis aksi. Cancel, reject, dan
+// update_status punya tombol Coba lagi dan Abaikan; COD hanya Coba lagi
+// karena tidak bisa dibuang.
 
-function LastConflictBanner({ order, isDismissed, onDismiss }: LastConflictBannerProps): React.JSX.Element | null {
-  // Auto-expire: 24 hours dari last_conflict_at
-  const isExpired = !order.lastConflictAt ||
-    (Date.now() - new Date(order.lastConflictAt).getTime()) > CONFLICT_BANNER_TTL_MS;
-
-  // 'released' dan 'reassigned' hanya relevan kalau baris sudah bukan milik
-  // driver: driver_id kosong (null, undefined, atau ''). Kalau masih
-  // terisi, alasan itu tidak berlaku untuk order ini dan banner disembunyikan.
-  const driverIsEmpty = !order.driverId;
-  const reasonRequiresUnowned =
-    order.lastConflictReason === 'released' || order.lastConflictReason === 'reassigned';
-
-  if (isDismissed || isExpired || !order.lastConflictReason) return null;
-  if (reasonRequiresUnowned && !driverIsEmpty) return null;
-
-  const getMessage = (): string => {
-    switch (order.lastConflictReason) {
-      case 'released':
-        return 'Order ini sudah tidak ditugaskan ke Anda, biasanya karena HP Anda lama tidak tersambung. Kalau order ini ada lagi di daftar Tersedia, Anda bisa menerimanya lagi.';
-      case 'reassigned':
-        return 'Order ini sudah dipindahkan ke driver lain, jadi aksi Anda tidak diproses.';
-      case 'cancelled-by-server':
-        return 'Pembatalan tidak diproses karena order sudah berubah di server. Data order sudah diperbarui.';
-      case 'cancel-cod-captured':
-        return 'Order ini tidak bisa dibatalkan karena COD-nya sudah tercatat. Selesaikan pengantarannya.';
-      case 'cod-already-captured':
-        return 'COD order ini sudah tercatat sebelumnya, jadi catatan dari HP ini tidak disimpan. Kalau Anda menerima uang dua kali, hubungi support.';
-      case 'sync-rejected':
-        return 'Perubahan data order ini di HP ditolak server. Kalau data order terlihat salah, hubungi support.';
-      default:
-        return 'Order ini sudah berubah di server.';
-    }
-  };
-
-  return (
-    <View style={styles.conflictBanner}>
-      <Text style={styles.conflictBannerText}>
-        ⚠️ {getMessage()}
-      </Text>
-      <TouchableOpacity onPress={onDismiss} style={styles.conflictBannerDismiss}>
-        <Text style={styles.conflictBannerDismissText}>✕</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-// Banner aksi gagal, satu per aksi 'failed'. Cancel, reject, dan update_status
-// punya tombol Coba lagi dan Abaikan; COD hanya Coba lagi karena tidak
-// bisa dibuang.
-
-interface FailedActionBannerProps {
-  action: PendingActionModel;
-  onRetry: (actionId: string) => void;
-  onDiscard: (actionId: string) => void;
-}
-
-function FailedActionBanner({ action, onRetry, onDiscard }: FailedActionBannerProps): React.JSX.Element | null {
+function teksAksiGagal(action: PendingActionModel): string | null {
   if (action.actionType === 'cancel') {
-    return (
-      <View style={styles.failedActionBanner}>
-        <Text style={styles.failedActionBannerText}>
-          Pembatalan ditolak server dan tidak dicoba lagi otomatis.
-        </Text>
-        <View style={styles.failedActionButtons}>
-          <TouchableOpacity onPress={() => onRetry(action.id)} style={styles.retryButton}>
-            <Text style={styles.retryButtonText}>Coba lagi</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => onDiscard(action.id)} style={styles.discardButton}>
-            <Text style={styles.discardButtonText}>Abaikan</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
+    return 'Pembatalan ditolak server dan tidak dicoba lagi otomatis.';
   }
   if (action.actionType === 'reject') {
-    return (
-      <View style={styles.failedActionBanner}>
-        <Text style={styles.failedActionBannerText}>
-          Penolakan order ditolak server dan tidak dicoba lagi otomatis.
-        </Text>
-        <View style={styles.failedActionButtons}>
-          <TouchableOpacity onPress={() => onRetry(action.id)} style={styles.retryButton}>
-            <Text style={styles.retryButtonText}>Coba lagi</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => onDiscard(action.id)} style={styles.discardButton}>
-            <Text style={styles.discardButtonText}>Abaikan</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
+    return 'Penolakan order ditolak server dan tidak dicoba lagi otomatis.';
   }
   if (action.actionType === 'update_status') {
     // Teks per target yang dituju aksi. Target yang tidak terbaca
     // (payload korup) memakai pesan bawaan.
     const target = readUpdateStatusTarget(action.payloadJson);
-    const message =
-      target === 'OUT_FOR_DELIVERY'
-        ? 'Mulai antar ditolak server dan tidak dicoba lagi otomatis.'
-        : target === 'DELIVERED'
+    return target === 'OUT_FOR_DELIVERY'
+      ? 'Mulai antar ditolak server dan tidak dicoba lagi otomatis.'
+      : target === 'DELIVERED'
         ? 'Selesai diantar ditolak server dan tidak dicoba lagi otomatis.'
         : 'Perubahan status ditolak server dan tidak dicoba lagi otomatis.';
-    return (
-      <View style={styles.failedActionBanner}>
-        <Text style={styles.failedActionBannerText}>{message}</Text>
-        <View style={styles.failedActionButtons}>
-          <TouchableOpacity onPress={() => onRetry(action.id)} style={styles.retryButton}>
-            <Text style={styles.retryButtonText}>Coba lagi</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => onDiscard(action.id)} style={styles.discardButton}>
-            <Text style={styles.discardButtonText}>Abaikan</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
   }
   if (action.actionType === 'collect_cod') {
-    return (
-      <View style={styles.failedActionBanner}>
-        <Text style={styles.failedActionBannerText}>
-          COD gagal dicatat server dan tidak dicoba lagi otomatis. Simpan uangnya, lalu coba lagi atau hubungi support.
-        </Text>
-        <View style={styles.failedActionButtons}>
-          <TouchableOpacity onPress={() => onRetry(action.id)} style={styles.retryButton}>
-            <Text style={styles.retryButtonText}>Coba lagi</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
+    return 'COD gagal dicatat server dan tidak dicoba lagi otomatis. Simpan uangnya, lalu coba lagi atau hubungi support.';
   }
   return null;
 }
 
-// Banner COD yatim, satu per aksi COD 'orphaned_needs_review'. Tanpa tombol.
+/** Satu tombol banner aksi gagal. */
+function satuAksi(aksi: BannerAction): readonly [BannerAction] {
+  return [aksi];
+}
 
-function OrphanedCodBanner(): React.JSX.Element | null {
-  return (
-    <View style={styles.orphanBanner}>
-      <Text style={styles.orphanBannerText}>
-        Order ini sudah tidak ditugaskan ke Anda saat COD-nya terkirim. Simpan uangnya dan hubungi support.
-      </Text>
-    </View>
-  );
+/** Dua tombol banner aksi gagal. */
+function duaAksi(pertama: BannerAction, kedua: BannerAction): readonly [BannerAction, BannerAction] {
+  return [pertama, kedua];
+}
+
+/**
+ * Tombol banner aksi gagal. Cancel, reject, dan update_status punya tombol
+ * Coba lagi dan Abaikan; COD hanya Coba lagi karena tidak bisa dibuang.
+ * Jenis lain tidak tampil.
+ */
+function tombolAksiGagal(
+  action: PendingActionModel,
+): readonly [BannerAction] | readonly [BannerAction, BannerAction] | null {
+  const cobaLagi: BannerAction = {
+    label: 'Coba lagi',
+    onPress: () => {
+      void retryFailedAction(action.id);
+    },
+  };
+  if (action.actionType === 'collect_cod') {
+    return satuAksi(cobaLagi);
+  }
+  if (
+    action.actionType === 'cancel' ||
+    action.actionType === 'reject' ||
+    action.actionType === 'update_status'
+  ) {
+    return duaAksi(cobaLagi, {
+      label: 'Abaikan',
+      onPress: () => {
+        void discardFailedAction(action.id);
+      },
+    });
+  }
+  return null;
 }
 
 // Base Component
@@ -481,6 +378,9 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     : null;
   const displayStatus = tampilanSinkron?.displayStatus;
   const antrean = tampilanSinkron?.antrean ?? null;
+  // Tahan selesai banner menunggu: antrean yang sudah kosong tetap
+  // menampilkan bentuk selesai sebentar sebelum banner hilang.
+  const faseMenunggu = useHoldDone(antrean === 'pending');
 
   /**
    * Batalkan: order milik driver ini, status masih bisa dibatalkan, COD belum
@@ -757,6 +657,39 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const bisaBatal = !!currentUserId && canDriverCancel(order);
   const adaBilahBawah = kotakDiBilah || aksiUtama !== null || bisaBatal;
 
+  // Banner COD gagal: ada payment yang gagal dan COD belum tercatat.
+  const paymentGagal =
+    payments.some((p) => p.status === PaymentStatus.FAILED) &&
+    !failedBannerDismissed &&
+    !codCaptured;
+  // Konflik dari kejadian sinkron perlu tindakan driver kalau order
+  // dipindahkan atau aksinya ditolak.
+  const konflikButuhTindak =
+    conflictEvent?.reason === 'reassigned' || conflictEvent?.reason === 'rejected-oc';
+  // Konflik tersimpan berlaku selama 24 jam sejak last_conflict_at. Alasan
+  // 'released' dan 'reassigned' hanya relevan kalau baris sudah bukan
+  // milik driver.
+  const alasanKonflik = order.lastConflictReason;
+  const konflikKedaluwarsa =
+    !order.lastConflictAt ||
+    Date.now() - new Date(order.lastConflictAt).getTime() > CONFLICT_BANNER_TTL_MS;
+  const driverKosong = !order.driverId;
+  const alasanButuhDriverKosong =
+    alasanKonflik === 'released' || alasanKonflik === 'reassigned';
+  const konflikTersimpan =
+    alasanKonflik &&
+    !lastConflictDismissed &&
+    !konflikKedaluwarsa &&
+    !(alasanButuhDriverKosong && !driverKosong)
+      ? alasanKonflik
+      : null;
+  // Banner menunggu: antrean yang berjalan, atau antrean yang baru saja
+  // habis dan masih ditahan dalam bentuk selesai. Aksi gagal atau COD
+  // yatim membuat banner langsung hilang.
+  const tampilMenunggu =
+    antrean === 'pending' ||
+    (antrean === null && faseMenunggu === 'done' && !hasFailedOrOrphanedAction);
+
   // Tiga slot dengan urutan tetap. Slot kosong ditulis null, bukan
   // disaring, supaya tombol utama tidak dipasang ulang saat kotak tunai
   // muncul atau hilang.
@@ -808,57 +741,79 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
         style={styles.daftar}
         contentContainerStyle={styles.daftarIsi}
       >
-        {/* Failed Payment Banner */}
-        <FailedPaymentBanner
-          payments={payments}
-          codCaptured={codCaptured}
-          isDismissed={failedBannerDismissed}
-          onDismiss={() => setFailedBannerDismissed(true)}
-        />
+        {/* Banner COD gagal diverifikasi */}
+        {paymentGagal ? (
+          <Banner
+            key="cod-gagal"
+            tone="danger"
+            body="COD gagal diverifikasi. Hubungi support kalau uang tunai sudah di tangan."
+            onClose={() => setFailedBannerDismissed(true)}
+          />
+        ) : null}
 
-        {/* Order Conflict Banner */}
-        <OrderConflictBanner
-          event={conflictEvent}
-          onDismiss={() => setConflictEvent(null)}
-        />
+        {/* Banner konflik dari kejadian sinkron */}
+        {conflictEvent ? (
+          <Banner
+            key="konflik-kejadian"
+            tone={konflikButuhTindak ? 'danger' : 'info'}
+            body={teksKonflikKejadian(conflictEvent)}
+            onClose={() => setConflictEvent(null)}
+          />
+        ) : null}
 
         {/* Banner konflik tersimpan */}
-        <LastConflictBanner
-          order={order}
-          isDismissed={lastConflictDismissed}
-          onDismiss={() => setLastConflictDismissed(true)}
-        />
+        {konflikTersimpan ? (
+          <Banner
+            key="konflik-tersimpan"
+            tone="danger"
+            body={teksKonflikTersimpan(konflikTersimpan)}
+            onClose={() => setLastConflictDismissed(true)}
+          />
+        ) : null}
 
         {/* Banner aksi gagal, satu per aksi */}
-        {failedActions.map((action) => (
-          <FailedActionBanner
-            key={action.id}
-            action={action}
-            onRetry={(actionId) => { void retryFailedAction(actionId); }}
-            onDiscard={(actionId) => { void discardFailedAction(actionId); }}
-          />
-        ))}
+        {failedActions.map((action) => {
+          const isi = teksAksiGagal(action);
+          const tombol = tombolAksiGagal(action);
+          if (!isi || !tombol) return null;
+          return (
+            <Banner
+              key={`gagal-${action.id}`}
+              tone="danger"
+              body={isi}
+              actions={tombol}
+            />
+          );
+        })}
 
         {/* Banner COD yatim, satu per aksi */}
         {orphanedCodActions.map((action) => (
-          <OrphanedCodBanner key={action.id} />
+          <Banner
+            key={`yatim-${action.id}`}
+            tone="danger"
+            body="Order ini sudah tidak ditugaskan ke Anda saat COD-nya terkirim. Simpan uangnya dan hubungi support."
+          />
         ))}
 
-        {/* Pending Action Indicator */}
-        {antrean === 'pending' && (
-          <View style={styles.pendingBanner}>
-            <Text style={styles.pendingBannerText}>Menunggu sinkronisasi...</Text>
-          </View>
-        )}
+        {/* Banner menunggu sinkronisasi */}
+        {tampilMenunggu ? (
+          <Banner
+            key="menunggu"
+            tone="pending"
+            title="Menunggu sinkronisasi"
+            done={antrean !== 'pending'}
+          />
+        ) : null}
 
-        {/* Stale Pending Action Warning */}
-        {antrean === 'stale' && (
-          <View style={styles.stalePendingBanner}>
-            <Text style={styles.stalePendingBannerText}>
-              Belum tersinkron dari sejam lalu — cek koneksi internet kamu
-            </Text>
-          </View>
-        )}
+        {/* Banner antrean basi */}
+        {antrean === 'stale' ? (
+          <Banner
+            key="basi"
+            tone="warning"
+            title="Belum tersinkron dari seam lalu"
+            body="Cek koneksi internet Anda"
+          />
+        ) : null}
 
         {/* Kartu Langkah order */}
         <Animated.View layout={dalamJendela ? undefined : GESER}>
@@ -1061,135 +1016,5 @@ const styles = StyleSheet.create({
   },
   slotTunai: {
     marginBottom: space[1],
-  },
-  // Failed Payment Banner
-  failedBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fef3c7',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#fcd34d',
-  },
-  failedBannerText: {
-    flex: 1,
-    fontSize: 14,
-    color: '#92400e',
-    fontWeight: '500',
-  },
-  failedBannerDismiss: {
-    marginLeft: 12,
-    padding: 4,
-  },
-  failedBannerDismissText: {
-    fontSize: 16,
-    color: '#92400e',
-    fontWeight: '600',
-  },
-  // Order Conflict Banner
-  conflictBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-  },
-  conflictBannerText: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '500',
-    lineHeight: 20,
-  },
-  conflictBannerDismiss: {
-    marginLeft: 12,
-    padding: 4,
-  },
-  conflictBannerDismissText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  // Pending Action Banner
-  pendingBanner: {
-    backgroundColor: '#dbeafe',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#93c5fd',
-  },
-  pendingBannerText: {
-    fontSize: 13,
-    color: '#1e40af',
-    textAlign: 'center',
-  },
-  // Stale Pending Action Banner
-  stalePendingBanner: {
-    backgroundColor: '#fef3c7',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#fcd34d',
-  },
-  stalePendingBannerText: {
-    fontSize: 13,
-    color: '#92400e',
-    textAlign: 'center',
-  },
-  // Banner aksi gagal
-  failedActionBanner: {
-    backgroundColor: '#fee2e2',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#fecaca',
-  },
-  failedActionBannerText: {
-    fontSize: 14,
-    color: '#7f1d1d',
-    fontWeight: '500',
-    lineHeight: 20,
-    marginBottom: 8,
-  },
-  failedActionButtons: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  retryButton: {
-    backgroundColor: '#dc2626',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 6,
-  },
-  retryButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  discardButton: {
-    backgroundColor: '#fff',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#dc2626',
-  },
-  discardButtonText: {
-    color: '#dc2626',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  // Banner COD yatim
-  orphanBanner: {
-    backgroundColor: '#fef3c7',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#fcd34d',
-  },
-  orphanBannerText: {
-    fontSize: 14,
-    color: '#92400e',
-    fontWeight: '500',
-    lineHeight: 20,
   },
 });

@@ -7,6 +7,8 @@ import { Alert } from 'react-native';
 import { render, fireEvent, waitFor, act, within } from '@testing-library/react-native';
 
 import { OrderDetailScreen } from './OrderDetailScreen';
+import { Banner } from '../components/Banner';
+import { syncEvents } from '../sync/syncEvents';
 import { InitialWindowProvider } from '../components/motion/InitialWindow';
 import { hapticDelivered } from '../haptics';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
@@ -535,7 +537,7 @@ describe('cancel button behavior (outbox wiring)', () => {
     });
 
     // Observe TIDAK fire (gagal), hasPending tetap false, banner tidak tampil
-    expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
+    expect(queryByText('Menunggu sinkronisasi')).toBeNull();
     expect(mockEnqueueCancel).toHaveBeenCalledTimes(1);
   });
 
@@ -803,7 +805,7 @@ describe('Failed Payment Banner', () => {
 
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeTruthy();
+      expect(getByText('COD gagal diverifikasi. Hubungi support kalau uang tunai sudah di tangan.')).toBeTruthy();
     });
   });
 
@@ -818,7 +820,7 @@ describe('Failed Payment Banner', () => {
 
     const { queryByText } = renderScreen();
     await waitFor(() => {
-      expect(queryByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeNull();
+      expect(queryByText('COD gagal diverifikasi. Hubungi support kalau uang tunai sudah di tangan.')).toBeNull();
     });
   });
 
@@ -833,7 +835,7 @@ describe('Failed Payment Banner', () => {
 
     const { getByText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeTruthy();
+      expect(getByText('COD gagal diverifikasi. Hubungi support kalau uang tunai sudah di tangan.')).toBeTruthy();
     });
   });
 
@@ -846,18 +848,18 @@ describe('Failed Payment Banner', () => {
       status: PaymentStatus.FAILED,
     });
 
-    const { getByText, queryByText } = renderScreen();
+    const { getByText, queryByText, getByLabelText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeTruthy();
+      expect(getByText('COD gagal diverifikasi. Hubungi support kalau uang tunai sudah di tangan.')).toBeTruthy();
     });
 
     // Press dismiss button
     await act(async () => {
-      fireEvent.press(getByText('✕'));
+      fireEvent.press(getByLabelText('Tutup'));
     });
 
     await waitFor(() => {
-      expect(queryByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeNull();
+      expect(queryByText('COD gagal diverifikasi. Hubungi support kalau uang tunai sudah di tangan.')).toBeNull();
     });
   });
 
@@ -870,24 +872,24 @@ describe('Failed Payment Banner', () => {
       status: PaymentStatus.FAILED,
     });
 
-    const { getByText, queryByText } = renderScreen();
+    const { getByText, queryByText, getByLabelText } = renderScreen();
     await waitFor(() => {
-      expect(getByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeTruthy();
+      expect(getByText('COD gagal diverifikasi. Hubungi support kalau uang tunai sudah di tangan.')).toBeTruthy();
     });
 
     // Dismiss
     await act(async () => {
-      fireEvent.press(getByText('✕'));
+      fireEvent.press(getByLabelText('Tutup'));
     });
 
     await waitFor(() => {
-      expect(queryByText('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeNull();
+      expect(queryByText('COD gagal diverifikasi. Hubungi support kalau uang tunai sudah di tangan.')).toBeNull();
     });
 
     // Simulate re-mount by re-rendering
     const { getByText: getByText2 } = renderScreen();
     await waitFor(() => {
-      expect(getByText2('COD gagal diverifikasi. Hubungi support jika cash sudah di tangan.')).toBeTruthy();
+      expect(getByText2('COD gagal diverifikasi. Hubungi support kalau uang tunai sudah di tangan.')).toBeTruthy();
     });
   });
 });
@@ -1034,10 +1036,10 @@ describe('Stale Pending Action Banner', () => {
       pendingActionsSubscriptionCallback?.([{ id: 'pending-1', status: 'pending', actionType: 'collect_cod', createdAt: new Date() }]);
     });
     await waitFor(() => {
-      expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
+      expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
     });
     await waitFor(() => {
-      expect(queryByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeNull();
+      expect(queryByText('Belum tersinkron dari seam lalu')).toBeNull();
     });
   });
 
@@ -1049,10 +1051,10 @@ describe('Stale Pending Action Banner', () => {
       pendingActionsSubscriptionCallback?.([{ id: 'pending-stale', status: 'pending', actionType: 'cancel', createdAt: new Date(Date.now() - 61 * 60 * 1000) }]);
     });
     await waitFor(() => {
-      expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
+      expect(getByText('Belum tersinkron dari seam lalu')).toBeTruthy();
     });
     await waitFor(() => {
-      expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
+      expect(queryByText('Menunggu sinkronisasi')).toBeNull();
     });
   });
 
@@ -1064,7 +1066,7 @@ describe('Stale Pending Action Banner', () => {
       pendingActionsSubscriptionCallback?.([{ id: 'pending-stale', status: 'pending', actionType: 'cancel', createdAt: new Date(Date.now() - 120 * 60 * 1000) }]);
     });
     await waitFor(() => {
-      expect(getByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeTruthy();
+      expect(getByText('Belum tersinkron dari seam lalu')).toBeTruthy();
     });
     await waitFor(() => {
       expect(queryByText('Batalkan Order')).toBeNull();
@@ -1079,33 +1081,43 @@ describe('Stale Pending Action Banner', () => {
       pendingActionsSubscriptionCallback?.([]);
     });
     await waitFor(() => {
-      expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
+      expect(queryByText('Menunggu sinkronisasi')).toBeNull();
     });
     await waitFor(() => {
-      expect(queryByText('Belum tersinkron dari sejam lalu — cek koneksi internet kamu')).toBeNull();
+      expect(queryByText('Belum tersinkron dari seam lalu')).toBeNull();
     });
   });
 
   // Banner hilang sendiri saat pending action dihapus, observe bikin banner reaktif
   test('banner hilang setelah pending action dihapus tanpa unmount', async () => {
     Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
-    const { getByText, queryByText } = renderScreen();
+    const { getByText, queryByText, UNSAFE_getAllByType } = renderScreen();
 
     // Banner tampil dengan pending action
     await act(async () => {
       pendingActionsSubscriptionCallback?.([{ id: 'pending-1', status: 'pending', actionType: 'collect_cod', createdAt: new Date() }]);
     });
     await waitFor(() => {
-      expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
+      expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
     });
 
     // Pending action dihapus (misal: drain selesai), banner hilang TANPA unmount
     await act(async () => {
       pendingActionsSubscriptionCallback?.([]);
     });
+    // Banner menunggu ditahan dulu dalam bentuk selesai, baru hilang.
     await waitFor(() => {
-      expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
+      const bannerMenunggu = UNSAFE_getAllByType(Banner).find(
+        (b) => b.props.tone === 'pending',
+      );
+      expect(bannerMenunggu?.props.done).toBe(true);
     });
+    await waitFor(
+      () => {
+        expect(queryByText('Menunggu sinkronisasi')).toBeNull();
+      },
+      { timeout: 2000 },
+    );
   });
 });
 
@@ -1887,7 +1899,7 @@ describe('banner aksi gagal dan banner COD yatim', () => {
       pendingActionsSubscriptionCallback?.([...mockPendingActions]);
     });
     await waitFor(() => {
-      expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
+      expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
     });
 
     // Status berubah menjadi 'failed': banner biru hilang, banner gagal tampil.
@@ -1898,7 +1910,7 @@ describe('banner aksi gagal dan banner COD yatim', () => {
     await waitFor(() => {
       expect(getByText('Pembatalan ditolak server dan tidak dicoba lagi otomatis.')).toBeTruthy();
     });
-    expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
+    expect(queryByText('Menunggu sinkronisasi')).toBeNull();
     // Tombol Coba lagi dan Abaikan tampil
     expect(getByText('Coba lagi')).toBeTruthy();
     expect(getByText('Abaikan')).toBeTruthy();
@@ -1963,7 +1975,7 @@ describe('banner aksi gagal dan banner COD yatim', () => {
     expect(queryByText('Coba lagi')).toBeNull();
     expect(queryByText('Abaikan')).toBeNull();
     // Banner biru tidak tampil
-    expect(queryByText('Menunggu sinkronisasi...')).toBeNull();
+    expect(queryByText('Menunggu sinkronisasi')).toBeNull();
   });
 });
 
@@ -2272,8 +2284,8 @@ describe('displayStatus dan syarat tombol dari aksi status antre', () => {
     expect(queryByText('Mulai antar')).toBeNull();
     expect(queryByText('Selesai diantar')).toBeNull();
     expect(queryByText('Batalkan Order')).toBeNull();
-    // Banner 'Menunggu sinkronisasi...' tampil.
-    expect(getByText('Menunggu sinkronisasi...')).toBeTruthy();
+    // Banner 'Menunggu sinkronisasi' tampil.
+    expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
   });
 
   test('ditambah aksi COD pending tanpa payment: Selesai diantar tampil dan mengantre DELIVERED', async () => {
@@ -2715,5 +2727,285 @@ describe('bilah bawah detail order', () => {
       expect.stringContaining('Terima tunai '),
       expect.anything(),
     );
+  });
+});
+
+describe('banner detail order', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    paymentsSubscriptionCallback = null;
+    pendingActionsSubscriptionCallback = null;
+    mockHasPendingAction.mockResolvedValue(false);
+    mockRetryFailedAction.mockReset();
+    mockRetryFailedAction.mockResolvedValue(undefined);
+    mockDiscardFailedAction.mockReset();
+    mockDiscardFailedAction.mockResolvedValue(undefined);
+    Object.assign(mockOrder, { lastConflictReason: undefined, lastConflictAt: undefined });
+  });
+
+  test('payment gagal: banner danger ada tombol tutup', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    mockPayments.push({
+      id: 'payment-gagal',
+      orderId: 'order-123',
+      method: PaymentMethod.CASH,
+      status: PaymentStatus.FAILED,
+    });
+
+    const { UNSAFE_getAllByType } = renderScreen();
+    await waitFor(() => {
+      const banner = UNSAFE_getAllByType(Banner)[0];
+      expect(banner.props.tone).toBe('danger');
+      expect(banner.props.onClose).toBeDefined();
+    });
+  });
+
+  test('COD yatim: banner danger tanpa tombol tutup dan tanpa tombol aksi', async () => {
+    mockPendingActions.push({
+      id: 'cod-yatim',
+      actionType: 'collect_cod',
+      status: 'orphaned_needs_review',
+      createdAt: new Date(),
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    const { UNSAFE_getAllByType } = renderScreen();
+    await waitFor(() => {
+      const banner = UNSAFE_getAllByType(Banner)[0];
+      expect(banner.props.tone).toBe('danger');
+      expect(banner.props.onClose).toBeUndefined();
+      expect(banner.props.actions).toBeUndefined();
+    });
+  });
+
+  test('aksi gagal update_status: banner danger dengan dua tombol aksi', async () => {
+    mockPendingActions.push({
+      id: 'us-gagal',
+      actionType: 'update_status',
+      status: 'failed',
+      createdAt: new Date(),
+      payloadJson: { status: 'DELIVERED' },
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    const { UNSAFE_getAllByType } = renderScreen();
+    await waitFor(() => {
+      const banner = UNSAFE_getAllByType(Banner)[0];
+      expect(banner.props.tone).toBe('danger');
+      expect(banner.props.actions).toHaveLength(2);
+    });
+  });
+
+  test('aksi gagal collect_cod: banner danger dengan satu tombol aksi', async () => {
+    mockPendingActions.push({
+      id: 'cod-gagal',
+      actionType: 'collect_cod',
+      status: 'failed',
+      createdAt: new Date(),
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    const { UNSAFE_getAllByType } = renderScreen();
+    await waitFor(() => {
+      const banner = UNSAFE_getAllByType(Banner)[0];
+      expect(banner.props.tone).toBe('danger');
+      expect(banner.props.actions).toHaveLength(1);
+    });
+  });
+
+  test('konflik tersimpan: banner danger ada tombol tutup', async () => {
+    Object.assign(mockOrder, {
+      status: OrderStatus.ASSIGNED,
+      driverId: 'driver-456',
+      lastConflictReason: 'sync-rejected',
+      lastConflictAt: Date.now(),
+    });
+
+    const { UNSAFE_getAllByType } = renderScreen();
+    await waitFor(() => {
+      const banner = UNSAFE_getAllByType(Banner)[0];
+      expect(banner.props.tone).toBe('danger');
+      expect(banner.props.onClose).toBeDefined();
+    });
+  });
+
+  test('antrean basi: banner warning dengan judul dan isi baru', async () => {
+    mockPendingActions.push({
+      id: 'aksi-basi',
+      actionType: 'cancel',
+      status: 'pending',
+      createdAt: new Date(Date.now() - 61 * 60 * 1000),
+    });
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+
+    const { UNSAFE_getAllByType } = renderScreen();
+    await waitFor(() => {
+      const banner = UNSAFE_getAllByType(Banner)[0];
+      expect(banner.props.tone).toBe('warning');
+      expect(banner.props.title).toMatch(/Belum tersinkron dari s[e]am lalu/);
+      expect(banner.props.body).toBe('Cek koneksi internet Anda');
+    });
+  });
+
+  test('aksi gagal update_status: Coba lagi dan Abaikan memanggil fungsi outbox', async () => {
+    mockPendingActions.push({
+      id: 'us-gagal',
+      actionType: 'update_status',
+      status: 'failed',
+      createdAt: new Date(),
+      payloadJson: { status: 'DELIVERED' },
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    const { getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Coba lagi')).toBeTruthy();
+    });
+    fireEvent.press(getByText('Coba lagi'));
+    expect(mockRetryFailedAction).toHaveBeenCalledWith('us-gagal');
+    fireEvent.press(getByText('Abaikan'));
+    expect(mockDiscardFailedAction).toHaveBeenCalledWith('us-gagal');
+  });
+
+  test('antrean kosong: banner menunggu ditahan dalam bentuk selesai lalu hilang', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { getByText, queryByText, UNSAFE_getAllByType } = renderScreen();
+
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([
+        { id: 'pending-1', status: 'pending', actionType: 'collect_cod', createdAt: new Date() },
+      ]);
+    });
+    await waitFor(() => {
+      expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
+    });
+
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([]);
+    });
+    await waitFor(() => {
+      const banner = UNSAFE_getAllByType(Banner).find((b) => b.props.tone === 'pending');
+      expect(banner?.props.done).toBe(true);
+    });
+    await waitFor(
+      () => {
+        expect(queryByText('Menunggu sinkronisasi')).toBeNull();
+      },
+      { timeout: 2000 },
+    );
+  });
+
+  test('antrean berubah jadi gagal: banner menunggu langsung hilang dan banner gagal tampil', async () => {
+    mockPendingActions.push({
+      id: 'pending-1',
+      actionType: 'collect_cod',
+      status: 'pending',
+      createdAt: new Date(),
+    });
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+
+    const { getByText, queryByText } = renderScreen();
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
+    });
+
+    mockPendingActions[0].status = 'failed';
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([...mockPendingActions]);
+    });
+    await waitFor(() => {
+      expect(
+        getByText(
+          'COD gagal dicatat server dan tidak dicoba lagi otomatis. Simpan uangnya, lalu coba lagi atau hubungi support.',
+        ),
+      ).toBeTruthy();
+    });
+    expect(queryByText('Menunggu sinkronisasi')).toBeNull();
+  });
+
+  test('konflik status dari server: banner info dengan label status driver', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { getByText, UNSAFE_getAllByType } = renderScreen();
+
+    await act(async () => {
+      syncEvents.emit('orderConflict', {
+        orderId: 'order-123',
+        reason: 'order-status-conflict',
+        serverStatus: 'OUT_FOR_DELIVERY',
+        serverChangedAt: new Date().toISOString(),
+      });
+    });
+    await waitFor(() => {
+      expect(getByText('Status order diperbarui server, sekarang sedang diantar.')).toBeTruthy();
+    });
+    const banner = UNSAFE_getAllByType(Banner)[0];
+    expect(banner.props.tone).toBe('info');
+  });
+
+  test('konflik status dari server dengan status tak dikenal: teks umum', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { getByText } = renderScreen();
+
+    await act(async () => {
+      syncEvents.emit('orderConflict', {
+        orderId: 'order-123',
+        reason: 'order-status-conflict',
+        serverStatus: 'entah',
+        serverChangedAt: new Date().toISOString(),
+      });
+    });
+    await waitFor(() => {
+      expect(getByText('Status order diperbarui server.')).toBeTruthy();
+    });
+  });
+
+  test('konflik reassigned: banner danger dan bisa ditutup', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { getByText, queryByText, getByLabelText, UNSAFE_getAllByType } = renderScreen();
+
+    await act(async () => {
+      syncEvents.emit('orderConflict', {
+        orderId: 'order-123',
+        reason: 'reassigned',
+        serverStatus: 'OUT_FOR_DELIVERY',
+        serverChangedAt: new Date().toISOString(),
+      });
+    });
+    await waitFor(() => {
+      expect(getByText('Order ini sudah dipindahkan ke driver lain.')).toBeTruthy();
+    });
+    expect(UNSAFE_getAllByType(Banner)[0].props.tone).toBe('danger');
+
+    await act(async () => {
+      fireEvent.press(getByLabelText('Tutup'));
+    });
+    await waitFor(() => {
+      expect(queryByText('Order ini sudah dipindahkan ke driver lain.')).toBeNull();
+    });
+  });
+
+  test('tidak ada kode status mentah di layar, juga saat ada konflik', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { queryByText } = renderScreen();
+
+    expect(queryByText(/OUT_FOR_DELIVERY|OUT FOR_DELIVERY/)).toBeNull();
+
+    await act(async () => {
+      syncEvents.emit('orderConflict', {
+        orderId: 'order-123',
+        reason: 'order-status-conflict',
+        serverStatus: 'OUT_FOR_DELIVERY',
+        serverChangedAt: new Date().toISOString(),
+      });
+    });
+    await waitFor(() => {
+      expect(queryByText(/OUT_FOR_DELIVERY|OUT FOR_DELIVERY/)).toBeNull();
+    });
   });
 });
