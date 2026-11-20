@@ -10,6 +10,7 @@ import { fireEvent, render } from '@testing-library/react-native';
 
 import { Button } from './Button';
 import { CheckMark } from './motion/CheckMark';
+import { InitialWindowProvider } from './motion/InitialWindow';
 import { Icon } from '../theme/Icon';
 import { size, themes } from '../theme/tokens';
 
@@ -208,5 +209,50 @@ describe('Button', () => {
     );
     const gaya = StyleSheet.flatten(getByText('Abaikan').props.style);
     expect(gaya.fontSize).toBe(15);
+  });
+
+  it('judul yang berganti menyisakan judul baru saja', () => {
+    const pohon = render(<Button title="Lama" onPress={() => {}} />);
+    pohon.rerender(<Button title="Baru" onPress={() => {}} />);
+
+    expect(pohon.queryByText('Lama')).toBeNull();
+    expect(pohon.getByText('Baru')).toBeTruthy();
+    expect(pohon.getByTestId('isi-tombol').props.entering).toBeDefined();
+  });
+
+  it('ikon yang berganti dihitung sebagai judul yang berganti', () => {
+    const pohon = render(
+      <Button title="Simpan" onPress={() => {}} icon="cloud_upload" />,
+    );
+    expect(pohon.getByTestId('isi-tombol').props.entering).toBeUndefined();
+
+    pohon.rerender(<Button title="Simpan" onPress={() => {}} icon="search" />);
+    expect(pohon.getByTestId('isi-tombol').props.entering).toBeDefined();
+  });
+
+  it('di dalam jendela awal judul baru langsung tampil tanpa lapisan lama', () => {
+    const pohon = render(
+      <InitialWindowProvider>
+        <Button title="Lama" onPress={() => {}} />
+      </InitialWindowProvider>,
+    );
+    pohon.rerender(
+      <InitialWindowProvider>
+        <Button title="Baru" onPress={() => {}} />
+      </InitialWindowProvider>,
+    );
+
+    expect(pohon.queryByText('Lama')).toBeNull();
+    expect(pohon.getByText('Baru')).toBeTruthy();
+    expect(pohon.getByTestId('isi-tombol').props.entering).toBeUndefined();
+  });
+
+  it('judul yang berganti saat tombol memuat tetap disembunyikan', () => {
+    const pohon = render(<Button title="Lama" onPress={() => {}} loading />);
+    pohon.rerender(<Button title="Baru" onPress={() => {}} loading />);
+
+    expect(pohon.getByText('Baru')).toBeTruthy();
+    const gaya = StyleSheet.flatten(pohon.getByTestId('judul-tombol').props.style);
+    expect(gaya.opacity).toBe(0);
   });
 });

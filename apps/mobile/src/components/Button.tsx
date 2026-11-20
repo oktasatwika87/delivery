@@ -5,7 +5,7 @@
  * warna, ukuran menentukan tinggi dan padding.
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -15,15 +15,23 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
-import Animated from 'react-native-reanimated';
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { HelpLine } from './HelpLine';
 import { CheckMark } from './motion/CheckMark';
+import { enterFromBelow, exitEasing } from './motion/presets';
+import { useGantiIsi } from './motion/useGantiIsi';
 import { usePressScale } from './motion/usePressScale';
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
 import { perTema, useTheme } from '../theme/ThemeProvider';
 import {
+  motion,
   radius,
   size as ukuranKontrol,
   space,
@@ -38,6 +46,12 @@ const SENTUH_SM = {
   left: (ukuranKontrol.touch - ukuranKontrol.controlSm) / 2,
   right: (ukuranKontrol.touch - ukuranKontrol.controlSm) / 2,
 };
+
+/** Jarak gulir judul, sama dengan jarak yang dipakai preset masuk dan keluar. */
+const JARAK_GULIR = 25;
+
+/** Masuk lapisan judul baru: naik dari bawah sambil pudar masuk. */
+const MASUK_JUDUL = enterFromBelow();
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'dangerFill';
 export type ButtonSize = 'lg' | 'card' | 'md' | 'sm';
@@ -108,6 +122,16 @@ const gaya = perTema((c) =>
       alignItems: 'center',
       gap: space[2],
     },
+    lapisanIsi: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: space[2],
+    },
+    lapisanJudulLama: {
+      ...StyleSheet.absoluteFillObject,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     lapisanStatus: {
       ...StyleSheet.absoluteFillObject,
       alignItems: 'center',
@@ -115,6 +139,60 @@ const gaya = perTema((c) =>
     },
   }),
 );
+
+interface LapisanJudulLamaProps {
+  title: string;
+  icon?: IconName;
+  /** Nomor pergantian yang sedang ditutup. */
+  nomor: number;
+  /** Dipanggil saat judul lama selesai keluar. */
+  selesai: (nomor: number) => void;
+  gayaTeks: TextStyle;
+  warnaIkon: string;
+}
+
+function LapisanJudulLama({
+  title,
+  icon,
+  nomor,
+  selesai,
+  gayaTeks,
+  warnaIkon,
+}: LapisanJudulLamaProps): React.JSX.Element {
+  const { name } = useTheme();
+  const s = gaya[name];
+  const geser = useSharedValue(0);
+  const opasitas = useSharedValue(1);
+
+  useEffect(() => {
+    const konfigurasi = { duration: motion.duration.exit, easing: exitEasing };
+    geser.value = withTiming(-JARAK_GULIR, konfigurasi);
+    opasitas.value = withTiming(0, konfigurasi, (habis) => {
+      if (habis) {
+        runOnJS(selesai)(nomor);
+      }
+    });
+  }, [geser, nomor, opasitas, selesai]);
+
+  const gayaGerak = useAnimatedStyle(() => ({
+    transform: [{ translateY: geser.value }],
+    opacity: opasitas.value,
+  }));
+
+  return (
+    <Animated.View
+      style={[s.lapisanJudulLama, gayaGerak]}
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <View style={s.lapisanIsi}>
+        {icon ? <Icon name={icon} size={ukuranKontrol.iconSm} color={warnaIkon} /> : null}
+        <Text style={gayaTeks}>{title}</Text>
+      </View>
+    </Animated.View>
+  );
+}
 
 export function Button({
   title,
@@ -187,6 +265,8 @@ export function Button({
     color: warnaTeks,
   };
 
+  const ganti = useGantiIsi({ title, icon }, `${icon ?? ''}|${title}`);
+
   return (
     <View>
       <Animated.View style={skala.style}>
@@ -206,17 +286,36 @@ export function Button({
             gayaUkuran,
             ...gayaIsi,
             pressed && !disabled && variant === 'primary' ? s.isiPrimerDitekan : null,
+            { overflow: 'hidden' },
           ]}
         >
           <View
             testID="judul-tombol"
             style={[s.lapisanJudul, { opacity: loading || success ? 0 : 1 }]}
           >
-            {icon ? (
-              <Icon name={icon} size={ukuranKontrol.iconSm} color={warnaIkon} />
-            ) : null}
-            <Text style={gayaTeks}>{title}</Text>
+            <Animated.View
+              key={ganti.nomor}
+              entering={ganti.nomor > 0 ? MASUK_JUDUL : undefined}
+              testID="isi-tombol"
+              style={s.lapisanIsi}
+            >
+              {icon ? (
+                <Icon name={icon} size={ukuranKontrol.iconSm} color={warnaIkon} />
+              ) : null}
+              <Text style={gayaTeks}>{title}</Text>
+            </Animated.View>
           </View>
+          {ganti.lama ? (
+            <LapisanJudulLama
+              key={`lama-${ganti.nomor}`}
+              title={ganti.lama.title}
+              icon={ganti.lama.icon}
+              nomor={ganti.nomor}
+              selesai={ganti.selesai}
+              gayaTeks={gayaTeks}
+              warnaIkon={warnaIkon}
+            />
+          ) : null}
           {loading ? (
             <View style={s.lapisanStatus} pointerEvents="none">
               <ActivityIndicator size="small" color={warnaTeks} />
