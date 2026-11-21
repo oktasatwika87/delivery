@@ -50,6 +50,7 @@ import {
   withInitialWindow,
 } from './src/components/motion/InitialWindow';
 import { TEMA_DRIVER, ThemeProvider } from './src/theme/ThemeProvider';
+import { themes } from './src/theme/tokens';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -391,26 +392,31 @@ function App(): React.JSX.Element {
               </InitialWindowProvider>
             )
           ) : role === UserRole.DRIVER ? (
-            <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
-              <Stack.Screen name="Orders">
-                {() => (
-                  <ThemeProvider name={TEMA_DRIVER}>
-                    <InitialWindowProvider>
-                      <OrdersScreen onLogout={handleLogout} />
-                    </InitialWindowProvider>
-                  </ThemeProvider>
-                )}
-              </Stack.Screen>
-              <Stack.Screen name="OrderDetail" component={OrderDetailDenganTema} />
-              <Stack.Screen
-                name="OrderDone"
-                component={OrderDoneDenganTema}
-                options={{ animation: 'fade' }}
-              />
-              <Stack.Screen name="Chat" component={ChatDenganJendela} />
-              <Stack.Screen name="Map" component={MapDenganJendela} />
-              <Stack.Screen name="MapSettings" component={MapSettingsDenganJendela} />
-            </Stack.Navigator>
+            // Dua layar yang sedang memudar sama-sama setengah tembus, jadi latar
+            // di belakang tumpukan ikut terlihat. Latarnya dibuat sewarna latar
+            // layar driver supaya tidak ada kilatan terang.
+            <View style={styles.latarDriver}>
+              <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
+                <Stack.Screen name="Orders">
+                  {() => (
+                    <ThemeProvider name={TEMA_DRIVER}>
+                      <InitialWindowProvider>
+                        <OrdersScreen onLogout={handleLogout} />
+                      </InitialWindowProvider>
+                    </ThemeProvider>
+                  )}
+                </Stack.Screen>
+                <Stack.Screen name="OrderDetail" component={OrderDetailDenganTema} />
+                <Stack.Screen
+                  name="OrderDone"
+                  component={OrderDoneDenganTema}
+                  options={{ animation: 'fade' }}
+                />
+                <Stack.Screen name="Chat" component={ChatDenganJendela} />
+                <Stack.Screen name="Map" component={MapDenganJendela} />
+                <Stack.Screen name="MapSettings" component={MapSettingsDenganJendela} />
+              </Stack.Navigator>
+            </View>
           ) : role === UserRole.CUSTOMER ? (
             <CustomerStack onLogout={handleLogout} />
           ) : (
@@ -428,6 +434,7 @@ function App(): React.JSX.Element {
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  latarDriver: { flex: 1, backgroundColor: themes[TEMA_DRIVER].bg },
 });
 
 export default App;
