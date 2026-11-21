@@ -6,6 +6,7 @@ import {
   collapseOut,
   enterFromAbove,
   enterFromBelow,
+  exitDown,
   exitEasing,
   exitRight,
   exitUp,
@@ -20,7 +21,11 @@ import {
 import { motion } from '../../theme/tokens';
 import { FadeIn, SlideOutRight } from 'react-native-reanimated';
 import * as reanimated from 'react-native-reanimated';
-import type { EntryAnimationsValues, ExitAnimationsValues } from 'react-native-reanimated';
+import type {
+  EntryAnimationsValues,
+  ExitAnimationsValues,
+  StyleProps,
+} from 'react-native-reanimated';
 
 /** Nilai masuk lengkap: semua kolom target dan ukuran jendela. */
 function nilaiMasuk(): EntryAnimationsValues {
@@ -50,6 +55,21 @@ function nilaiKeluar(): ExitAnimationsValues {
     windowWidth: 360,
     windowHeight: 720,
   };
+}
+
+/**
+ * Sasaran translateY dari gaya yang sedang dijalankan.
+ *
+ * Daftar transform dibaca dari gaya hasil pembangun, jadi nilainya bisa
+ * dibandingkan dengan nilai akhir yang diminta.
+ */
+function sasaranTranslateY(gaya: StyleProps): number | undefined {
+  const transform = gaya.transform;
+  if (typeof transform === 'string' || transform === undefined) return undefined;
+  const pertama = transform[0];
+  if (!pertama) return undefined;
+  const nilai = pertama.translateY;
+  return typeof nilai === 'number' ? nilai : undefined;
 }
 
 describe('pola gerak', () => {
@@ -153,6 +173,29 @@ describe('pola gerak', () => {
       expect(hasil.animations.height).toBe(0);
       expect(hasil.animations.opacity).toBe(0);
       expect(timing).toHaveBeenCalledWith(0, {
+        duration: motion.duration.shift,
+        easing: standardEasing,
+      });
+      expect(timing).toHaveBeenCalledWith(0, {
+        duration: motion.duration.fadeOut,
+        easing: standardEasing,
+      });
+    } finally {
+      timing.mockRestore();
+    }
+  });
+
+  it('keluar turun: tampilan turun setinggi dirinya ditambah jarak lalu pudar', () => {
+    const timing = jest.spyOn(reanimated, 'withTiming');
+
+    try {
+      const hasil = exitDown(8)(nilaiKeluar());
+
+      expect(sasaranTranslateY(hasil.initialValues)).toBe(0);
+      expect(hasil.initialValues.opacity).toBe(1);
+      expect(sasaranTranslateY(hasil.animations)).toBe(88);
+      expect(hasil.animations.opacity).toBe(0);
+      expect(timing).toHaveBeenCalledWith(88, {
         duration: motion.duration.shift,
         easing: standardEasing,
       });

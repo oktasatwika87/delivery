@@ -9,6 +9,7 @@ import { render, fireEvent, waitFor, act, within } from '@testing-library/react-
 import { OrderDetailScreen } from './OrderDetailScreen';
 import { Banner } from '../components/Banner';
 import { Button } from '../components/Button';
+import { JARAK_BILAH_BAWAH } from '../components/ScreenFrame';
 import { syncEvents } from '../sync/syncEvents';
 import { InitialWindowProvider } from '../components/motion/InitialWindow';
 import { hapticDelivered } from '../haptics';
@@ -16,6 +17,11 @@ import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
 import type { NetworkStatus } from '../map/networkMonitor';
 import type { OrderModel } from '../db/models/OrderModel';
 import { DETAK_BASI_MS } from '../sync/useDetakBasi';
+import type {
+  ExitAnimationsValues,
+  LayoutAnimation,
+  StyleProps,
+} from 'react-native-reanimated';
 
 // Tanda kali di baris barang, ditulis lewat kode karakter supaya sumber tetap ASCII.
 const TANDA_KALI = String.fromCharCode(0xd7);
@@ -332,6 +338,34 @@ function renderScreen() {
 // Layar yang dipasang di dalam jendela awal, jadi geraknya belum jalan.
 function renderScreenDalamJendela() {
   return render(<InitialWindowProvider>{elemenLayar}</InitialWindowProvider>);
+}
+
+// Pembangun gerak keluar, seperti yang dipasang ke pembungkus batal.
+type PembangunKeluar = (values: ExitAnimationsValues) => LayoutAnimation;
+
+/** Nilai keluar tiruan, cuma ukuran yang dipakai gerak keluar. */
+function nilaiKeluarTiruan(tinggi: number): ExitAnimationsValues {
+  return {
+    currentOriginX: 0,
+    currentOriginY: 0,
+    currentWidth: 320,
+    currentHeight: tinggi,
+    currentBorderRadius: 14,
+    currentGlobalOriginX: 0,
+    currentGlobalOriginY: 0,
+    windowWidth: 360,
+    windowHeight: 720,
+  };
+}
+
+/** Sasaran translateY dari gaya yang sedang dijalankan. */
+function sasaranTranslateY(gaya: StyleProps): number | undefined {
+  const transform = gaya.transform;
+  if (typeof transform === 'string' || transform === undefined) return undefined;
+  const pertama = transform[0];
+  if (!pertama) return undefined;
+  const nilai = pertama.translateY;
+  return typeof nilai === 'number' ? nilai : undefined;
 }
 
 // Keadaan bersama yang dipakai beberapa describe.
@@ -2713,7 +2747,14 @@ describe('bilah bawah detail order', () => {
     await waitFor(() => {
       expect(getByTestId('bungkus-batal')).toBeTruthy();
     });
-    expect(getByTestId('bungkus-batal').props.exiting).toBeTruthy();
+
+    const keluar = getByTestId('bungkus-batal').props.exiting as PembangunKeluar;
+    expect(keluar).toBeTruthy();
+
+    // Batalkan keluar turun setinggi dirinya ditambah jarak bilah bawah,
+    // supaya tidak menimpa tombol utama saat kotak tunai masuk bersamaan.
+    const hasil = keluar(nilaiKeluarTiruan(48));
+    expect(sasaranTranslateY(hasil.animations)).toBe(48 + JARAK_BILAH_BAWAH);
   });
 
   test('bungkus batal tidak punya keluar di dalam jendela awal', async () => {

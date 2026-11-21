@@ -148,6 +148,43 @@ export function collapseOut(): (values: ExitAnimationsValues) => LayoutAnimation
 }
 
 /**
+ * Keluar sambil turun: isi yang keluar turun setinggi dirinya ditambah jarak.
+ *
+ * Tampilan yang keluar diam di tempatnya terhadap wadah, dan di Android ia
+ * digambar di atas saudaranya. Kalau wadahnya tumbuh ke atas bersamaan,
+ * saudara di atasnya yang turun bisa berpapasan dengannya. Turun sejauh
+ * tingginya ditambah jarak, dengan durasi dan kurva yang sama dengan geser,
+ * tampilan itu selalu menjauh ke bawah.
+ *
+ * Tingginya tidak diubah, jadi pemakai tidak perlu overflow hidden.
+ */
+export function exitDown(jarak: number): (values: ExitAnimationsValues) => LayoutAnimation {
+  return (values) => {
+    'worklet';
+    return {
+      initialValues: {
+        opacity: 1,
+        transform: [{ translateY: 0 }],
+      },
+      animations: {
+        transform: [
+          {
+            translateY: withTiming(values.currentHeight + jarak, {
+              duration: motion.duration.shift,
+              easing: standardEasing,
+            }),
+          },
+        ],
+        opacity: withTiming(0, {
+          duration: motion.duration.fadeOut,
+          easing: standardEasing,
+        }),
+      },
+    };
+  };
+}
+
+/**
  * Jeda antarbaris saat masuknya daftar.
  *
  * Jeda berhenti bertambah di batas maxDelay, jadi baris paling bawah tidak

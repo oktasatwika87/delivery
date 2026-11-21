@@ -24,6 +24,9 @@ const GESER = shift();
 /** Geser bilah bawah saat isinya berubah. */
 const GESER_BILAH = shift();
 
+/** Jarak antar isi bilah bawah, juga jarak tempuh keluar dari bilah. */
+export const JARAK_BILAH_BAWAH = space[2];
+
 export interface ScreenFrameProps {
   /** Kepala layar, misalnya MainHeader atau AppBar. */
   header: React.ReactNode;
@@ -114,6 +117,6 @@ const styles = StyleSheet.create({
     paddingTop: space[3],
     paddingHorizontal: space[4],
     borderTopWidth: stroke.hairline,
-    gap: space[2],
+    gap: JARAK_BILAH_BAWAH,
   },
 });

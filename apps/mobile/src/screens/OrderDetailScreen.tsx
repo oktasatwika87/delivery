@@ -45,14 +45,14 @@ import { Card } from '../components/Card';
 import { CashBox } from '../components/CashBox';
 import type { CashBoxVariant } from '../components/CashBox';
 import { OrderSteps } from '../components/OrderSteps';
-import { ScreenFrame } from '../components/ScreenFrame';
+import { ScreenFrame, JARAK_BILAH_BAWAH } from '../components/ScreenFrame';
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
 import { useTheme } from '../theme/ThemeProvider';
 import { motion, size, space, stroke, type } from '../theme/tokens';
 import { useInitialWindow } from '../components/motion/InitialWindow';
 import { useHoldDone } from '../components/motion/useHoldDone';
-import { fadeIn, fadeOut, shift } from '../components/motion/presets';
+import { fadeIn, exitDown, shift } from '../components/motion/presets';
 import { langkahOrder } from './langkahOrder';
 import { isOrderStatus } from './orderRowRead';
 
@@ -91,8 +91,11 @@ const AKSI_UTAMA: Record<AksiUtama, { judul: string; ikon: IconName }> = {
   selesai: { judul: 'Selesai diantar', ikon: 'check_circle' },
 };
 
-/** Keluar pelan saat tombol Batalkan hilang. */
-const KELUAR_BATAL = fadeOut();
+/**
+ * Batalkan keluar turun sambil memudar, supaya tidak berpapasan dengan tombol
+ * utama saat kotak tunai masuk bersamaan.
+ */
+const KELUAR_BATAL = exitDown(JARAK_BILAH_BAWAH);
 
 /**
  * Kotak tunai baru terlihat sesudah tombol utama hampir sampai di tempat
