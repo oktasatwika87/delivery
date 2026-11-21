@@ -35,13 +35,13 @@ jest.mock('../sync/client', () => {
 // networkMonitor mock
 // mockGetStatusFn is module-level so the spy (created after jest.mock runs) can
 // still reference it. See ordersSocket.spec.ts pattern.
-var mockGetStatusFn = jest.fn(() => 'online');
+var mockGetStatusFn = jest.fn((): NetworkStatus => 'online');
 
 jest.mock('../map/networkMonitor', () => ({
   networkMonitor: {
     getStatus: () => mockGetStatusFn(),
     subscribe: jest.fn((cb: (s: NetworkStatus) => void) => {
-      cb('online');
+      cb(mockGetStatusFn());
       return () => {};
     }),
   },
@@ -140,7 +140,7 @@ let mockOrderPrepareUpdate = jest.fn();
 const mockOrder = {
   id: 'order-123',
   driverId: 'driver-456',
-  status: OrderStatus.ASSIGNED,
+  status: OrderStatus.ASSIGNED as OrderStatus,
   customerId: 'customer-789',
   itemsJson: [] as MockOrderItem[],
   addressJson: { street: 'Test St' },
@@ -2274,7 +2274,7 @@ describe('displayStatus dan syarat tombol dari aksi status antre', () => {
       id: 'us-ofd-pending',
       actionType: 'update_status',
       status: 'pending',
-      createdAt: new Date(),
+      createdAt: new Date(Date.now() - 5000),
       payloadJson: { status: 'OUT_FOR_DELIVERY' },
     });
 
@@ -2691,7 +2691,7 @@ describe('bilah bawah detail order', () => {
           id: 'us-out-for-delivery',
           actionType: 'update_status',
           status: 'pending',
-          createdAt: new Date(),
+          createdAt: new Date(Date.now() - 5000),
           payloadJson: { status: 'OUT_FOR_DELIVERY' },
         },
       ]);
@@ -2768,6 +2768,139 @@ describe('bilah bawah detail order', () => {
       expect.stringContaining('Terima tunai '),
       expect.anything(),
     );
+  });
+});
+
+describe('tahan tombol batal saat mulai antar dikirim online', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    paymentsSubscriptionCallback = null;
+    pendingActionsSubscriptionCallback = null;
+    mockEnqueueCancel.mockResolvedValue({ success: true, pendingActionId: 'batal-1' });
+    mockDrainPendingActions.mockResolvedValue([]);
+    mockGetStatusFn.mockReturnValue('online');
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+  });
+
+  afterEach(() => {
+    mockGetStatusFn.mockReturnValue('online');
+    jest.useRealTimers();
+  });
+
+  // Aksi Mulai antar yang baru dibuat, jadi masih dalam tahan.
+  function aksiMulaiAntarBaru(): MockPendingAction {
+    return {
+      id: 'us-out-for-delivery',
+      actionType: 'update_status',
+      status: 'pending',
+      createdAt: new Date(),
+      payloadJson: { status: 'OUT_FOR_DELIVERY' },
+    };
+  }
+
+  async function renderSiap() {
+    const hasil = renderScreen();
+    await act(async () => {});
+    return hasil;
+  }
+
+  test('mulai antar antre: Batalkan Order tetap tampil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText } = await renderSiap();
+    expect(getByText('Mulai antar')).toBeTruthy();
+
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([aksiMulaiAntarBaru()]);
+    });
+
+    expect(getByText('Terima Tunai (COD)')).toBeTruthy();
+    expect(getByText('Batalkan Order')).toBeTruthy();
+  });
+
+  test('mulai antar antre: ketukan Batalkan diabaikan', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText } = await renderSiap();
+
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([aksiMulaiAntarBaru()]);
+    });
+
+    await act(async () => {
+      fireEvent.press(getByText('Batalkan Order'));
+    });
+
+    const panggilanBatal = (Alert.alert as jest.Mock).mock.calls.filter(
+      (call) => call[0] === 'Batalkan Order',
+    );
+    expect(panggilanBatal).toHaveLength(0);
+  });
+
+  test('mulai antar antre 2 detik: Batalkan Order masih tampil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText } = await renderSiap();
+
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([aksiMulaiAntarBaru()]);
+    });
+    expect(getByText('Batalkan Order')).toBeTruthy();
+
+    await act(async () => {
+      jest.advanceTimersByTime(2000);
+    });
+
+    expect(getByText('Batalkan Order')).toBeTruthy();
+  });
+
+  test('mulai antar antre lalu tahan habis: Batalkan Order hilang', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText, queryByText } = await renderSiap();
+
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([aksiMulaiAntarBaru()]);
+    });
+    expect(getByText('Batalkan Order')).toBeTruthy();
+
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+    });
+
+    expect(queryByText('Batalkan Order')).toBeNull();
+  });
+
+  test('baris order berubah dan aksi hilang: Batalkan Order tetap tampil', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText } = await renderSiap();
+
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([aksiMulaiAntarBaru()]);
+    });
+    expect(getByText('Batalkan Order')).toBeTruthy();
+
+    await act(async () => {
+      mockFindAndObserveNext?.({ ...mockOrder, status: OrderStatus.OUT_FOR_DELIVERY });
+    });
+    expect(getByText('Batalkan Order')).toBeTruthy();
+
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([]);
+    });
+    expect(getByText('Batalkan Order')).toBeTruthy();
+  });
+
+  test('offline: Batalkan Order tidak tampil', async () => {
+    mockGetStatusFn.mockReturnValue('offline');
+    Object.assign(mockOrder, { status: OrderStatus.PREPARING, driverId: 'driver-456' });
+    const { getByText, queryByText } = await renderSiap();
+
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([aksiMulaiAntarBaru()]);
+    });
+
+    expect(getByText('Terima Tunai (COD)')).toBeTruthy();
+    expect(queryByText('Batalkan Order')).toBeNull();
   });
 });
 

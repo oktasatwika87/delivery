@@ -116,6 +116,28 @@ export function deriveOrderSyncView(
 }
 
 /**
+ * Batas waktu tombol Batalkan ditahan selama kiriman Mulai antar jalan.
+ *
+ * Hasilnya waktu aksi dibuat ditambah lama tahan, atau null kalau tidak ada
+ * kiriman Mulai antar yang sedang jalan. Dipakai detail order supaya
+ * Batalkan tidak hilang sebentar selama kiriman itu dikirim.
+ */
+export function batasTahanMulaiAntar(
+  actions: PendingActionModel[],
+  lamaMs: number,
+): number | null {
+  if (actions.length !== 1) return null;
+  const action = actions[0];
+  if (readText(action, 'action_type') !== 'update_status') return null;
+  const status = readText(action, 'status');
+  if (status !== 'pending' && status !== 'syncing') return null;
+  if (readUpdateStatusTarget(readPayload(action)) !== 'OUT_FOR_DELIVERY') return null;
+  const createdAt = readCreatedAt(action);
+  if (!createdAt) return null;
+  return createdAt + lamaMs;
+}
+
+/**
  * Waktu paling baru dari aksi Selesai diantar yang masih antre.
  *
  * Nilainya null kalau tidak ada aksi seperti itu. Dipakai ringkasan hari ini:

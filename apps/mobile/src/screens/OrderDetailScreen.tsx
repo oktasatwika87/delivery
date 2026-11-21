@@ -22,7 +22,7 @@ import { hapticDelivered } from '../haptics';
 import { driverStatusLabel } from '../driverStatusLabel';
 import { formatOrderNumber } from '../formatOrderNumber';
 import { formatOrderTime } from '../formatOrderTime';
-import { deriveOrderSyncView } from '../sync/orderSyncView';
+import { batasTahanMulaiAntar, deriveOrderSyncView } from '../sync/orderSyncView';
 import { getCurrentUserId } from '../sync/session';
 import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
@@ -101,6 +101,16 @@ const MASUK_TUNAI = fadeIn(motion.duration.fadeOut);
 
 /** Batalkan yang muncul lagi. */
 const MASUK_BATAL = fadeIn();
+
+/**
+ * Lama tahan tombol Batalkan selama Mulai antar dikirim.
+ *
+ * Di HP kelas bawah Mulai antar online bisa makan sekitar 2 detik dari
+ * aksi dibuat sampai antrean selesai. Tanpa tahan ini Batalkan hilang lalu
+ * muncul lagi dan bilah bawah menyusut lalu tumbuh. Kalau kiriman lebih lama
+ * dari itu, Batalkan disembunyikan seperti biasa.
+ */
+const TAHAN_BATAL_MS = 3000;
 
 /** Tanda kali di baris barang, ditulis lewat kode karakter supaya sumber tetap ASCII. */
 const TANDA_KALI = String.fromCharCode(0xd7);
@@ -248,6 +258,25 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const inflightCollectRef = useRef(false);
   const inflightStatusRef = useRef(false);
   const kurangiGerak = useReducedMotion();
+
+  // Tahan tombol Batalkan selama kiriman Mulai antar dikirim online, supaya
+  // Batalkan tidak hilang sebentar lalu muncul lagi.
+  const [, setDetakTahanBatal] = useState(0);
+  const batasTahanBatal =
+    bilah.status === 'online'
+      ? batasTahanMulaiAntar(pendingActions, TAHAN_BATAL_MS)
+      : null;
+
+  useEffect(() => {
+    if (batasTahanBatal === null) return;
+    const sisa = batasTahanBatal - Date.now();
+    if (sisa <= 0) return;
+    // Layar digambar ulang tepat saat tahan habis.
+    const timer = setTimeout(() => setDetakTahanBatal((detak) => detak + 1), sisa);
+    return () => clearTimeout(timer);
+  }, [batasTahanBatal]);
+
+  const tahanBatal = batasTahanBatal !== null && Date.now() < batasTahanBatal;
 
   useEffect(() => {
     getCurrentUserId().then(setCurrentUserId);
@@ -410,10 +439,10 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const faseMenunggu = useHoldDone(antrean === 'pending');
 
   /**
-   * Batalkan: order milik driver ini, status masih bisa dibatalkan, COD belum
-   * tercatat, dan tidak ada aksi outbox apa pun.
+   * Syarat Batalkan: order milik driver ini, status masih bisa dibatalkan,
+   * dan COD belum tercatat.
    */
-  const canDriverCancel = (order: OrderModel): boolean => {
+  const syaratBatal = (order: OrderModel): boolean => {
     if (order.status !== OrderStatus.ASSIGNED &&
         order.status !== OrderStatus.PREPARING &&
         order.status !== OrderStatus.OUT_FOR_DELIVERY) {
@@ -421,8 +450,15 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
     }
     if (!currentUserId || order.driverId !== currentUserId) return false;
     if (codCaptured) return false;
-    if (pendingActions.length > 0) return false;
     return true;
+  };
+
+  /**
+   * Batalkan: syaratnya terpenuhi dan tidak ada aksi outbox apa pun.
+   */
+  const canDriverCancel = (order: OrderModel): boolean => {
+    if (pendingActions.length > 0) return false;
+    return syaratBatal(order);
   };
 
   /**
@@ -708,7 +744,9 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   const kotakDiDaftar = ditahanSelesai
     ? false
     : varianTunai !== null && statusTampil === OrderStatus.DELIVERED;
-  const bisaBatal = !!currentUserId && canDriverCancel(order);
+  const bisaBatal =
+    !!currentUserId &&
+    (canDriverCancel(order) || (tahanBatal && syaratBatal(order)));
   const adaBilahBawah = kotakDiBilah || aksiUtama !== null || bisaBatal;
 
   // Banner COD gagal: ada payment yang gagal dan COD belum tercatat.
@@ -794,7 +832,11 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
           <Button
             title="Batalkan Order"
             variant="danger"
-            onPress={() => handleCancelOrder(order)}
+            onPress={() => {
+              // Selama ditahan, ketukan diabaikan.
+              if (!canDriverCancel(order)) return;
+              handleCancelOrder(order);
+            }}
           />
         </Animated.View>
       ) : null}

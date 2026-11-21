@@ -11,7 +11,7 @@ import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
 
 import { schema } from '../db/schema';
 import { PendingActionModel } from '../db/models/PendingActionModel';
-import { deriveOrderSyncView } from './orderSyncView';
+import { deriveOrderSyncView, batasTahanMulaiAntar } from './orderSyncView';
 
 // outbox mengimpor '../db' (adapter SQLite) yang gagal dimuat di Jest.
 jest.mock('../db', () => ({ database: {} }));
@@ -355,5 +355,121 @@ describe('keadaan antrean di deriveOrderSyncView', () => {
 
     expect(view.syncState).toBe('failed');
     expect(view.antrean).toBeNull();
+  });
+});
+
+describe('batasTahanMulaiAntar', () => {
+  let db: Database;
+
+  beforeEach(() => {
+    db = buatDatabase();
+    jest.spyOn(Date, 'now').mockReturnValue(SEKARANG);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('satu aksi mulai antar pending: batasnya waktu buat ditambah tahan', async () => {
+    await seedAksi(db, {
+      id: 'pa-mulai-antar',
+      actionType: 'update_status',
+      targetOrderId: 'order-1',
+      status: 'pending',
+      payloadJson: '{"status":"OUT_FOR_DELIVERY"}',
+      createdAt: 5000,
+    });
+
+    expect(batasTahanMulaiAntar(await ambilAksi(db), 1000)).toBe(6000);
+  });
+
+  it('satu aksi mulai antar syncing: batasnya sama saja', async () => {
+    await seedAksi(db, {
+      id: 'pa-mulai-antar-syncing',
+      actionType: 'update_status',
+      targetOrderId: 'order-1',
+      status: 'syncing',
+      payloadJson: '{"status":"OUT_FOR_DELIVERY"}',
+      createdAt: 5000,
+    });
+
+    expect(batasTahanMulaiAntar(await ambilAksi(db), 1000)).toBe(6000);
+  });
+
+  it('aksi gagal: tidak ada batas', async () => {
+    await seedAksi(db, {
+      id: 'pa-gagal',
+      actionType: 'update_status',
+      targetOrderId: 'order-1',
+      status: 'failed',
+      payloadJson: '{"status":"OUT_FOR_DELIVERY"}',
+      createdAt: 5000,
+    });
+
+    expect(batasTahanMulaiAntar(await ambilAksi(db), 1000)).toBeNull();
+  });
+
+  it('target selesai diantar: tidak ada batas', async () => {
+    await seedAksi(db, {
+      id: 'pa-selesai-antar',
+      actionType: 'update_status',
+      targetOrderId: 'order-1',
+      status: 'pending',
+      payloadJson: '{"status":"DELIVERED"}',
+      createdAt: 5000,
+    });
+
+    expect(batasTahanMulaiAntar(await ambilAksi(db), 1000)).toBeNull();
+  });
+
+  it('aksi terima tunai: tidak ada batas', async () => {
+    await seedAksi(db, {
+      id: 'pa-cod',
+      actionType: 'collect_cod',
+      targetOrderId: 'order-1',
+      status: 'pending',
+      payloadJson: '{"amountCents":25000}',
+      createdAt: 5000,
+    });
+
+    expect(batasTahanMulaiAntar(await ambilAksi(db), 1000)).toBeNull();
+  });
+
+  it('dua aksi: tidak ada batas', async () => {
+    await seedAksi(db, {
+      id: 'pa-mulai-antar',
+      actionType: 'update_status',
+      targetOrderId: 'order-1',
+      status: 'pending',
+      payloadJson: '{"status":"OUT_FOR_DELIVERY"}',
+      createdAt: 5000,
+    });
+    await seedAksi(db, {
+      id: 'pa-cod',
+      actionType: 'collect_cod',
+      targetOrderId: 'order-1',
+      status: 'pending',
+      payloadJson: '{"amountCents":25000}',
+      createdAt: 5000,
+    });
+
+    expect(batasTahanMulaiAntar(await ambilAksi(db), 1000)).toBeNull();
+  });
+
+  it('aksi tanpa waktu buat: tidak ada batas', async () => {
+    await seedAksi(db, {
+      id: 'pa-tanpa-waktu',
+      actionType: 'update_status',
+      targetOrderId: 'order-1',
+      status: 'pending',
+      payloadJson: '{"status":"OUT_FOR_DELIVERY"}',
+      createdAt: 0,
+    });
+
+    expect(batasTahanMulaiAntar(await ambilAksi(db), 1000)).toBeNull();
+  });
+
+  it('tanpa aksi: tidak ada batas', async () => {
+    expect(batasTahanMulaiAntar(await ambilAksi(db), 1000)).toBeNull();
   });
 });
