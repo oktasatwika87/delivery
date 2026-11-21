@@ -16,7 +16,7 @@ import type { IconName } from '../theme/icons';
 import { StripeFill } from '../theme/StripeFill';
 import { perTema, useTheme } from '../theme/ThemeProvider';
 import { radius, size, space, stroke, type } from '../theme/tokens';
-import { enterFromAbove, exitUp } from './motion/presets';
+import { collapseOut, expandIn, shift } from './motion/presets';
 import { CheckMark } from './motion/CheckMark';
 import { useInitialWindow } from './motion/InitialWindow';
 
@@ -27,10 +27,12 @@ const UKURAN_TUTUP = 44;
 /** Margin negatif tombol tutup, supaya banner tidak bertambah tinggi. */
 const MARGEN_TUTUP = -10;
 
-/** Masuk banner dari atas. */
-const MASUK = enterFromAbove();
-/** Keluar banner ke atas. */
-const KELUAR = exitUp();
+/** Banner masuk: tingginya tumbuh dari nol. */
+const MASUK = expandIn();
+/** Banner keluar: tingginya menyusut ke nol. */
+const KELUAR = collapseOut();
+/** Banner di bawahnya ikut bergeser mulus. */
+const GESER = shift();
 
 export type BannerTone = 'pending' | 'warning' | 'info' | 'danger';
 
@@ -119,6 +121,7 @@ const gaya = StyleSheet.create({
     paddingVertical: PADDING_ATAS,
     paddingHorizontal: PADDING_SAMPING,
     borderRadius: radius.xl,
+    overflow: 'hidden',
   },
   tengah: {
     minHeight: 52,
@@ -178,6 +181,9 @@ export function Banner({
     <Animated.View
       entering={dalamJendela ? undefined : MASUK}
       exiting={dalamJendela ? undefined : KELUAR}
+      // Banner bisa bertumpuk, jadi banner di bawahnya ikut bergeser mulus
+      // saat banner di atasnya masuk atau keluar.
+      layout={dalamJendela ? undefined : GESER}
       style={[
         gaya.wadah,
         gayaTone.tengah ? gaya.tengah : null,

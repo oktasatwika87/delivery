@@ -3,11 +3,13 @@
  */
 
 import {
+  collapseOut,
   enterFromAbove,
   enterFromBelow,
   exitEasing,
   exitRight,
   exitUp,
+  expandIn,
   fadeIn,
   fadeOut,
   shift,
@@ -15,7 +17,40 @@ import {
   staggerDelay,
   standardEasing,
 } from './presets';
+import { motion } from '../../theme/tokens';
 import { SlideOutRight } from 'react-native-reanimated';
+import * as reanimated from 'react-native-reanimated';
+import type { EntryAnimationsValues, ExitAnimationsValues } from 'react-native-reanimated';
+
+/** Nilai masuk lengkap: semua kolom target dan ukuran jendela. */
+function nilaiMasuk(): EntryAnimationsValues {
+  return {
+    targetOriginX: 0,
+    targetOriginY: 0,
+    targetWidth: 320,
+    targetHeight: 60,
+    targetBorderRadius: 14,
+    targetGlobalOriginX: 0,
+    targetGlobalOriginY: 0,
+    windowWidth: 360,
+    windowHeight: 720,
+  };
+}
+
+/** Nilai keluar lengkap: semua kolom current dan ukuran jendela. */
+function nilaiKeluar(): ExitAnimationsValues {
+  return {
+    currentOriginX: 0,
+    currentOriginY: 0,
+    currentWidth: 320,
+    currentHeight: 80,
+    currentBorderRadius: 14,
+    currentGlobalOriginX: 0,
+    currentGlobalOriginY: 0,
+    windowWidth: 360,
+    windowHeight: 720,
+  };
+}
 
 describe('pola gerak', () => {
   it('jeda baris pertama nol', () => {
@@ -63,6 +98,55 @@ describe('pola gerak', () => {
       expect(standardEasing).not.toBe(exitEasing);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('banner masuk: tinggi dari nol ke tinggi akhir, isinya muncul belakangan', () => {
+    const timing = jest.spyOn(reanimated, 'withTiming');
+    const delay = jest.spyOn(reanimated, 'withDelay');
+
+    try {
+      const hasil = expandIn()(nilaiMasuk());
+
+      expect(hasil.initialValues.height).toBe(0);
+      expect(hasil.initialValues.opacity).toBe(0);
+      expect(hasil.animations.height).toBe(60);
+      expect(hasil.animations.opacity).toBe(1);
+      expect(timing).toHaveBeenCalledWith(60, {
+        duration: motion.duration.shift,
+        easing: standardEasing,
+      });
+      expect(timing).toHaveBeenCalledWith(1, {
+        duration: motion.duration.fadeIn,
+        easing: standardEasing,
+      });
+      expect(delay).toHaveBeenCalledWith(motion.duration.fadeOut, expect.anything());
+    } finally {
+      timing.mockRestore();
+      delay.mockRestore();
+    }
+  });
+
+  it('banner keluar: tinggi menyusut ke nol, isinya cepat pudar', () => {
+    const timing = jest.spyOn(reanimated, 'withTiming');
+
+    try {
+      const hasil = collapseOut()(nilaiKeluar());
+
+      expect(hasil.initialValues.height).toBe(80);
+      expect(hasil.initialValues.opacity).toBe(1);
+      expect(hasil.animations.height).toBe(0);
+      expect(hasil.animations.opacity).toBe(0);
+      expect(timing).toHaveBeenCalledWith(0, {
+        duration: motion.duration.shift,
+        easing: standardEasing,
+      });
+      expect(timing).toHaveBeenCalledWith(0, {
+        duration: motion.duration.fadeOut,
+        easing: standardEasing,
+      });
+    } finally {
+      timing.mockRestore();
     }
   });
 });

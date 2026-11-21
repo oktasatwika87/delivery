@@ -15,6 +15,37 @@ import { InitialWindowProvider } from './motion/InitialWindow';
 import { CheckMark } from './motion/CheckMark';
 import { Icon } from '../theme/Icon';
 import { themes } from '../theme/tokens';
+import type { EntryAnimationsValues, ExitAnimationsValues } from 'react-native-reanimated';
+
+/** Nilai masuk lengkap: semua kolom target dan ukuran jendela. */
+function nilaiMasuk(): EntryAnimationsValues {
+  return {
+    targetOriginX: 0,
+    targetOriginY: 0,
+    targetWidth: 320,
+    targetHeight: 60,
+    targetBorderRadius: 14,
+    targetGlobalOriginX: 0,
+    targetGlobalOriginY: 0,
+    windowWidth: 360,
+    windowHeight: 720,
+  };
+}
+
+/** Nilai keluar lengkap: semua kolom current dan ukuran jendela. */
+function nilaiKeluar(): ExitAnimationsValues {
+  return {
+    currentOriginX: 0,
+    currentOriginY: 0,
+    currentWidth: 320,
+    currentHeight: 80,
+    currentBorderRadius: 14,
+    currentGlobalOriginX: 0,
+    currentGlobalOriginY: 0,
+    windowWidth: 360,
+    windowHeight: 720,
+  };
+}
 
 const KASUS_IKON: { tone: 'pending' | 'warning' | 'info' | 'danger'; ikon: string }[] = [
   { tone: 'pending', ikon: 'cloud_upload' },
@@ -218,5 +249,31 @@ describe('Banner', () => {
     expect(gaya.marginTop).toBe(-10);
     expect(gaya.marginBottom).toBe(-10);
     expect(gaya.marginRight).toBe(-10);
+  });
+
+  it('tanpa penyedia akar punya gerak geser dan gerak masuk keluar', () => {
+    const { toJSON } = render(<Banner tone="info" title="Judul" />);
+    const akar = toJSON().props;
+
+    expect(akar.layout).toBeDefined();
+    expect(typeof akar.entering).toBe('function');
+    expect(typeof akar.exiting).toBe('function');
+    expect(akar.entering(nilaiMasuk()).initialValues.height).toBe(0);
+    expect(akar.exiting(nilaiKeluar()).initialValues.height).toBe(80);
+  });
+
+  it('di dalam jendela awal akar tidak punya gerak geser', () => {
+    const { toJSON } = render(
+      <InitialWindowProvider>
+        <Banner tone="info" title="Judul" />
+      </InitialWindowProvider>,
+    );
+    expect(toJSON().props.layout).toBeUndefined();
+  });
+
+  it('wadah memotong isi yang keluar', () => {
+    const { toJSON } = render(<Banner tone="info" title="Judul" />);
+    const gaya = StyleSheet.flatten(toJSON().props.style);
+    expect(gaya.overflow).toBe('hidden');
   });
 });

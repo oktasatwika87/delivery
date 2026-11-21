@@ -14,7 +14,14 @@ import {
   FadeOutUp,
   LinearTransition,
   SlideOutRight,
+  withDelay,
+  withTiming,
   ZoomOut,
+} from 'react-native-reanimated';
+import type {
+  EntryAnimationsValues,
+  ExitAnimationsValues,
+  LayoutAnimation,
 } from 'react-native-reanimated';
 
 import { motion } from '../../theme/tokens';
@@ -69,6 +76,73 @@ export function shift() {
  */
 export function exitRight() {
   return SlideOutRight.duration(motion.duration.exit).easing(standardEasing);
+}
+
+/**
+ * Banner masuk: tinggi dibuka dari nol, isinya muncul belakangan.
+ *
+ * Tingginya bergerak dengan durasi dan kurva yang sama dengan geser, jadi isi
+ * di bawahnya yang ikut bergeser tidak pernah tertimpa. Isi yang keluar
+ * cepat pudar supaya potongannya tidak terlihat, dan isi yang masuk baru
+ * terlihat sesudah sebagian besar tingginya terbuka.
+ *
+ * Pemakai wajib memberi overflow hidden.
+ */
+export function expandIn(): (values: EntryAnimationsValues) => LayoutAnimation {
+  return (values) => {
+    'worklet';
+    return {
+      initialValues: {
+        height: 0,
+        opacity: 0,
+      },
+      animations: {
+        height: withTiming(values.targetHeight, {
+          duration: motion.duration.shift,
+          easing: standardEasing,
+        }),
+        opacity: withDelay(
+          motion.duration.fadeOut,
+          withTiming(1, {
+            duration: motion.duration.fadeIn,
+            easing: standardEasing,
+          }),
+        ),
+      },
+    };
+  };
+}
+
+/**
+ * Banner keluar: tingginya menyusut ke nol.
+ *
+ * Tingginya bergerak dengan durasi dan kurva yang sama dengan geser, jadi isi
+ * di bawahnya yang ikut bergeser tidak pernah tertimpa. Banner tidak bergeser
+ * ke atas atau ke bawah supaya tidak menyapu saudaranya di atasnya, dan isi
+ * yang keluar cepat pudar supaya potongannya tidak terlihat.
+ *
+ * Pemakai wajib memberi overflow hidden.
+ */
+export function collapseOut(): (values: ExitAnimationsValues) => LayoutAnimation {
+  return (values) => {
+    'worklet';
+    return {
+      initialValues: {
+        height: values.currentHeight,
+        opacity: 1,
+      },
+      animations: {
+        height: withTiming(0, {
+          duration: motion.duration.shift,
+          easing: standardEasing,
+        }),
+        opacity: withTiming(0, {
+          duration: motion.duration.fadeOut,
+          easing: standardEasing,
+        }),
+      },
+    };
+  };
 }
 
 /**
