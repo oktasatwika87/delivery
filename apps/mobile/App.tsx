@@ -20,6 +20,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { DatabaseProvider } from '@nozbe/watermelondb/react';
+import { useReducedMotion } from 'react-native-reanimated';
 import { database } from './src/db';
 import { syncCoordinator } from './src/sync';
 import { getToken, clearToken, getRole, getUserId } from './src/sync/token-storage';
@@ -89,6 +90,9 @@ function App(): React.JSX.Element {
   const [role, setRole] = useState<UserRole | null>(null);
   const [logoutReason, setLogoutReason] = useState<'auth-expired' | 'manual' | undefined>(undefined);
   const [showRegister, setShowRegister] = useState(false);
+  // Animasi pindah layar react-native-screens di Android tidak ikut skala
+  // animasi sistem, jadi dimatikan sendiri saat Kurangi gerakan nyala.
+  const kurangiGerak = useReducedMotion();
 
   // Tanda ada sesi sinkron dan socket nyala; dipakai untuk AppState 'active'
   // agar tidak membangun koneksi sebelum login, dan sebaliknya memanggil
@@ -396,7 +400,12 @@ function App(): React.JSX.Element {
             // di belakang tumpukan ikut terlihat. Latarnya dibuat sewarna latar
             // layar driver supaya tidak ada kilatan terang.
             <View style={styles.latarDriver}>
-              <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
+              <Stack.Navigator
+                screenOptions={{
+                  headerShown: false,
+                  animation: kurangiGerak ? 'none' : 'slide_from_right',
+                }}
+              >
                 <Stack.Screen name="Orders">
                   {() => (
                     <ThemeProvider name={TEMA_DRIVER}>
@@ -410,7 +419,7 @@ function App(): React.JSX.Element {
                 <Stack.Screen
                   name="OrderDone"
                   component={OrderDoneDenganTema}
-                  options={{ animation: 'fade' }}
+                  options={{ animation: kurangiGerak ? 'none' : 'fade' }}
                 />
                 <Stack.Screen name="Chat" component={ChatDenganJendela} />
                 <Stack.Screen name="Map" component={MapDenganJendela} />
