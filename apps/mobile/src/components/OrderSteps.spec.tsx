@@ -195,4 +195,36 @@ describe('OrderSteps', () => {
     expect(centang.filter((el) => el.props.animate)).toHaveLength(0);
     expect(ujungProgres(pohon)).toBe(185);
   });
+
+  it('kurangi gerakan: kenaikan langkah tidak beranimasi dan label lama hilang', () => {
+    const reanimated = require('react-native-reanimated') as {
+      useReducedMotion: () => boolean;
+    };
+    const spyGerak = jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+
+    const pohon = render(
+      <OrderSteps status={OrderStatus.OUT_FOR_DELIVERY} statusText="Sedang diantar" selesai={3} />,
+    );
+    ukurRel(pohon);
+    pohon.rerender(
+      <OrderSteps status={OrderStatus.DELIVERED} statusText="Selesai" selesai={4} />,
+    );
+    pohon.rerender(
+      <OrderSteps status={OrderStatus.DELIVERED} statusText="Selesai" selesai={4} />,
+    );
+
+    const pil = within(pohon.getByTestId('pil-status'));
+    expect(pil.getByText('Selesai')).toBeTruthy();
+    expect(
+      pohon.queryByText('Sedang diantar', { includeHiddenElements: true }),
+    ).toBeNull();
+
+    const centang = pohon.UNSAFE_getAllByType(DrawnStroke);
+    expect(centang).toHaveLength(4);
+    centang.forEach((el) => {
+      expect(el.props.animate).toBe(false);
+    });
+
+    spyGerak.mockRestore();
+  });
 });
