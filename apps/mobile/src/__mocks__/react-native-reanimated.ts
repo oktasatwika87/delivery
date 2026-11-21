@@ -16,6 +16,8 @@
 
 declare const module: { exports: unknown };
 
+import type { ReactElement, ReactNode } from 'react';
+
 const React = require('react');
 const ReactNative = require('react-native');
 
@@ -162,6 +164,19 @@ function useReducedMotion(): boolean {
   return false;
 }
 
+/**
+ * Pembungkus konfigurasi gerak tata letak.
+ *
+ * Anak yang dipasang bersamaan dengan pembungkusnya bisa dilewati gerak
+ * masuknya, jadi anak itu tidak masuk dua kali.
+ */
+function LayoutAnimationConfig(props: {
+  children?: ReactNode;
+  skipEntering?: boolean;
+}): ReactElement {
+  return React.createElement(React.Fragment, null, props.children);
+}
+
 /** Komponen Animated: meneruskan ke komponen react-native yang sama. */
 const Animated = {
   View: ReactNative.View,
@@ -180,6 +195,7 @@ const isi = {
   FadeInUp,
   FadeOut,
   FadeOutUp,
+  LayoutAnimationConfig,
   LinearTransition,
   ReduceMotion,
   SlideOutRight,

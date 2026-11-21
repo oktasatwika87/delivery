@@ -8,7 +8,7 @@
 
 import React from 'react';
 import { StatusBar, StyleSheet, View } from 'react-native';
-import Animated from 'react-native-reanimated';
+import Animated, { LayoutAnimationConfig } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ConnectionBar } from './ConnectionBar';
@@ -49,11 +49,17 @@ export function ScreenFrame({
           isi layar saat bilah muncul atau hilang. */}
       <View style={{ backgroundColor: colors.header }}>
         <ThemeProvider name="gelap">
-          <ConnectionBar
-            status={connection.status}
-            pendingCount={connection.pendingCount}
-            failedCount={connection.failedCount ?? 0}
-          />
+          {/* Bilah yang sudah ada saat layar dipasang langsung tampil tanpa
+              gerak masuk, biar tidak masuk dua kali. Bilah yang muncul
+              sesudahnya tetap masuk dengan geraknya. Penting untuk layar
+              tanpa jendela awal, misalnya layar sukses. */}
+          <LayoutAnimationConfig skipEntering>
+            <ConnectionBar
+              status={connection.status}
+              pendingCount={connection.pendingCount}
+              failedCount={connection.failedCount ?? 0}
+            />
+          </LayoutAnimationConfig>
         </ThemeProvider>
       </View>
       <Animated.View style={styles.isiLayar} layout={dalamJendela ? undefined : GESER}>

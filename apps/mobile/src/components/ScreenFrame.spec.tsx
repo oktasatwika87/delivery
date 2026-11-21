@@ -10,6 +10,7 @@ import { StatusBar, StyleSheet, View } from 'react-native';
 import type { ViewStyle } from 'react-native';
 import { render } from '@testing-library/react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LayoutAnimationConfig } from 'react-native-reanimated';
 
 import { ConnectionBar } from './ConnectionBar';
 import type { ConnectionBarProps } from './ConnectionBar';
@@ -137,6 +138,16 @@ describe('kerangka layar', () => {
     });
 
     expect(UNSAFE_getByType(ConnectionBar).props.failedCount).toBe(0);
+  });
+
+  test('bilah koneksi yang sudah ada pas layar dipasang dilewati gerak masuk', () => {
+    const { UNSAFE_getAllByType } = renderKerangka();
+
+    const pembungkus = UNSAFE_getAllByType(LayoutAnimationConfig);
+
+    expect(pembungkus).toHaveLength(1);
+    expect(pembungkus[0].props.skipEntering).toBe(true);
+    expect(pembungkus[0].findByType(ConnectionBar)).toBeTruthy();
   });
 
   test('bilah koneksi bukan turunan isi layar', () => {
