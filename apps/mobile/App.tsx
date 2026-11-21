@@ -406,7 +406,7 @@ function App(): React.JSX.Element {
                   animation: kurangiGerak ? 'none' : 'slide_from_right',
                 }}
               >
-                <Stack.Screen name="Orders">
+                <Stack.Screen name="Orders" options={{ contentStyle: styles.latarLayarDriver }}>
                   {() => (
                     <ThemeProvider name={TEMA_DRIVER}>
                       <InitialWindowProvider>
@@ -415,11 +415,18 @@ function App(): React.JSX.Element {
                     </ThemeProvider>
                   )}
                 </Stack.Screen>
-                <Stack.Screen name="OrderDetail" component={OrderDetailDenganTema} />
+                <Stack.Screen
+                  name="OrderDetail"
+                  component={OrderDetailDenganTema}
+                  options={{ contentStyle: styles.latarLayarDriver }}
+                />
                 <Stack.Screen
                   name="OrderDone"
                   component={OrderDoneDenganTema}
-                  options={{ animation: kurangiGerak ? 'none' : 'fade' }}
+                  options={{
+                    animation: kurangiGerak ? 'none' : 'fade',
+                    contentStyle: styles.latarLayarDriver,
+                  }}
                 />
                 <Stack.Screen name="Chat" component={ChatDenganJendela} />
                 <Stack.Screen name="Map" component={MapDenganJendela} />
@@ -443,6 +450,10 @@ function App(): React.JSX.Element {
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  // native-stack mewarnai wadah setiap layar dengan latar tema navigasi
+  // (abu terang bawaan) dan wadah itu sempat tampil kosong sebelum isi layar
+  // tergambar, jadi layar sukses sempat berkilat terang.
+  latarLayarDriver: { backgroundColor: themes[TEMA_DRIVER].bg },
   latarDriver: { flex: 1, backgroundColor: themes[TEMA_DRIVER].bg },
 });
 
