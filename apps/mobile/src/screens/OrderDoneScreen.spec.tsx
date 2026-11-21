@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { render, fireEvent, waitFor } from '@testing-library/react-native';
+import { render, fireEvent, waitFor, within } from '@testing-library/react-native';
 import { Database } from '@nozbe/watermelondb';
 import LokiJSAdapter from '@nozbe/watermelondb/adapters/lokijs';
 
@@ -324,5 +324,25 @@ describe('layar sukses order selesai diantar', () => {
     mockStatus = 'offline';
     const offline = await renderLayar(db);
     expect(offline.getByText(/^Offline/)).toBeTruthy();
+  });
+
+  test('isi tengah dan kaki punya gerak geser', async () => {
+    await seedOrder(db, { id: 'order-a', status: 'DELIVERED', updatedAt: HARI_INI });
+
+    const { getByTestId } = await renderLayar(db);
+
+    expect(getByTestId('isi-sukses').props.layout).toBeTruthy();
+    expect(getByTestId('kaki-sukses').props.layout).toBeTruthy();
+  });
+
+  test('isi tengah berisi judul dan nomor order, kaki berisi tombol kembali', async () => {
+    await seedOrder(db, { id: 'order-a', status: 'DELIVERED', updatedAt: HARI_INI });
+
+    const { getByTestId } = await renderLayar(db);
+
+    const isiTengah = within(getByTestId('isi-sukses'));
+    expect(isiTengah.getByText('Order selesai diantar')).toBeTruthy();
+    expect(isiTengah.getByText('Order #ORDER-12')).toBeTruthy();
+    expect(within(getByTestId('kaki-sukses')).getByText('Kembali ke daftar order')).toBeTruthy();
   });
 });

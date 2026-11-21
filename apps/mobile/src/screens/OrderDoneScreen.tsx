@@ -15,7 +15,7 @@ import { withDatabase, withObservables } from '@nozbe/watermelondb/react';
 import type { Database } from '@nozbe/watermelondb';
 import { of } from 'rxjs';
 import Svg, { Circle } from 'react-native-svg';
-import { useReducedMotion } from 'react-native-reanimated';
+import Animated, { useReducedMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { RootStackParamList } from '../../App';
@@ -35,6 +35,7 @@ import { Button } from '../components/Button';
 import { DaySummary } from '../components/DaySummary';
 import { ScreenFrame } from '../components/ScreenFrame';
 import { DrawnStroke } from '../components/motion/DrawnPath';
+import { shift } from '../components/motion/presets';
 import { useTheme } from '../theme/ThemeProvider';
 import { motion, space, type } from '../theme/tokens';
 import { formatOrderNumber } from '../formatOrderNumber';
@@ -49,6 +50,15 @@ const PANJANG_CENTANG = Math.hypot(14, 14) + Math.hypot(27, 28);
 const JALUR_CENTANG = 'M32 53 L46 67 L73 39';
 
 const UKURAN_LINGKARAN = 104;
+
+/**
+ * Kerangka menggeser isi layar saat bilah koneksi masuk atau keluar.
+ *
+ * Isi tengah dan kaki posisinya dihitung dari tinggi isi layar, jadi diberi
+ * gerak geser yang sama supaya tidak melompat. Layar ini tanpa jendela awal,
+ * jadi geraknya selalu diisi.
+ */
+const GESER = shift();
 
 interface Props {
   myOrders: OrderModel[];
@@ -105,41 +115,45 @@ export function OrderDoneBase({
       }}
     >
       <View style={styles.isiTengah}>
-        <View
-          style={styles.lingkaran}
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-        >
-          <Svg width={UKURAN_LINGKARAN} height={UKURAN_LINGKARAN} viewBox="0 0 104 104">
-            <Circle cx={52} cy={52} r={52} fill={colors.accent} />
-            <DrawnStroke
-              d={JALUR_CENTANG}
-              length={PANJANG_CENTANG}
-              color={colors.onAccent}
-              strokeWidth={7}
-              animate={!kurangiGerak}
-              delay={JEDA_CENTANG}
+        <Animated.View testID="isi-sukses" style={styles.kelompokTengah} layout={GESER}>
+          <View
+            style={styles.lingkaran}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            <Svg width={UKURAN_LINGKARAN} height={UKURAN_LINGKARAN} viewBox="0 0 104 104">
+              <Circle cx={52} cy={52} r={52} fill={colors.accent} />
+              <DrawnStroke
+                d={JALUR_CENTANG}
+                length={PANJANG_CENTANG}
+                color={colors.onAccent}
+                strokeWidth={7}
+                animate={!kurangiGerak}
+                delay={JEDA_CENTANG}
+              />
+            </Svg>
+          </View>
+          <Text
+            accessibilityRole="header"
+            style={[styles.judul, { color: colors.text }]}
+          >
+            Order selesai diantar
+          </Text>
+          <Text style={[styles.nomorOrder, { color: colors.textSubtle }]}>
+            {`Order ${formatOrderNumber(orderId)}`}
+          </Text>
+          <View style={styles.ringkasan}>
+            <DaySummary
+              doneCount={selesaiTampil}
+              cashAmount={ringkasan.cashAmount}
+              currency={MATA_UANG_TUNAI}
             />
-          </Svg>
-        </View>
-        <Text
-          accessibilityRole="header"
-          style={[styles.judul, { color: colors.text }]}
-        >
-          Order selesai diantar
-        </Text>
-        <Text style={[styles.nomorOrder, { color: colors.textSubtle }]}>
-          {`Order ${formatOrderNumber(orderId)}`}
-        </Text>
-        <View style={styles.ringkasan}>
-          <DaySummary
-            doneCount={selesaiTampil}
-            cashAmount={ringkasan.cashAmount}
-            currency={MATA_UANG_TUNAI}
-          />
-        </View>
+          </View>
+        </Animated.View>
       </View>
-      <View
+      <Animated.View
+        testID="kaki-sukses"
+        layout={GESER}
         style={[
           styles.kaki,
           { paddingBottom: space[6] + insets.bottom },
@@ -150,7 +164,7 @@ export function OrderDoneBase({
           size="lg"
           onPress={() => navigation.goBack()}
         />
-      </View>
+      </Animated.View>
     </ScreenFrame>
   );
 }
@@ -213,6 +227,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: space[6],
+  },
+  kelompokTengah: {
+    alignSelf: 'stretch',
+    alignItems: 'center',
   },
   lingkaran: {
     width: UKURAN_LINGKARAN,
