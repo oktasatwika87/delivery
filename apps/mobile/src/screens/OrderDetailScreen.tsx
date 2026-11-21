@@ -23,6 +23,7 @@ import { driverStatusLabel } from '../driverStatusLabel';
 import { formatOrderNumber } from '../formatOrderNumber';
 import { formatOrderTime } from '../formatOrderTime';
 import { batasTahanMulaiAntar, deriveOrderSyncView } from '../sync/orderSyncView';
+import { useDetakBasi } from '../sync/useDetakBasi';
 import { getCurrentUserId } from '../sync/session';
 import { syncEvents } from '../sync/syncEvents';
 import type { OrderConflictEvent } from '../sync/syncEvents';
@@ -437,6 +438,9 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
   // Tahan selesai banner menunggu: antrean yang sudah kosong tetap
   // menampilkan bentuk selesai sebentar sebelum banner hilang.
   const faseMenunggu = useHoldDone(antrean === 'pending');
+  // Detak basi: nilainya cuma pemicu gambar ulang, jadi banner basi muncul
+  // walau tidak ada data baru yang masuk.
+  useDetakBasi(antrean !== null);
 
   /**
    * Syarat Batalkan: order milik driver ini, status masih bisa dibatalkan,

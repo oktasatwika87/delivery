@@ -41,6 +41,7 @@ import { ordersSocket } from '../sync/ordersSocket';
 import { syncEvents } from '../sync/syncEvents';
 import { deriveOrderSyncView } from '../sync/orderSyncView';
 import { hitungAntrean } from '../sync/hitungAntrean';
+import { useDetakBasi } from '../sync/useDetakBasi';
 import { buildPoolRow, poolAddressJson } from './buildPoolRow';
 import {
   readCurrency,
@@ -632,6 +633,8 @@ export function OrdersScreenBase({
 
   // Hitungan antrean untuk ConnectionBar.
   const antrean = useMemo(() => hitungAntrean(pendingActions), [pendingActions]);
+  // Detak basi: nilainya cuma pemicu gambar ulang, dipakai extraData di bawah.
+  const detakBasi = useDetakBasi(antrean.pendingCount > 0);
 
   // Aksi dikelompokkan per order, supaya tiap kartu cuma melihat aksinya
   // sendiri.
@@ -1067,7 +1070,8 @@ export function OrdersScreenBase({
   const keluarTersedia = !dalamJendela ? KELUAR_KANAN : undefined;
 
   // Nilai di luar data yang dipakai renderItem. FlatList cuma pasti
-  // menggambar ulang sel kalau data atau extraData berubah.
+  // menggambar ulang sel kalau data atau extraData berubah. Detak basi
+  // membuat baris menghitung ulang basi tiap menit selama ada antrean.
   const extraData = useMemo(
     () => ({
       acceptingOrderId,
@@ -1076,8 +1080,9 @@ export function OrdersScreenBase({
       actionsByOrderId,
       terimaBerhasil,
       sorotId,
+      detakBasi,
     }),
-    [acceptingOrderId, online, keluarTersedia, actionsByOrderId, terimaBerhasil, sorotId],
+    [acceptingOrderId, online, keluarTersedia, actionsByOrderId, terimaBerhasil, sorotId, detakBasi],
   );
 
   // Kartu di Tersedia tidak dibuka ke detail: baris pool hanya berisi

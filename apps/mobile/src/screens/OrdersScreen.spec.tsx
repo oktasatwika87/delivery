@@ -247,6 +247,8 @@ const mockDatabase = {
 // Import after mocks
 import { OrdersScreen, OrdersScreenBase, handleAcceptRef } from './OrdersScreen';
 import { fetchAvailableOrders } from '../sync/client';
+import { STALE_THRESHOLD_MS } from '../sync/outbox';
+import { DETAK_BASI_MS } from '../sync/useDetakBasi';
 
 // Plain-object order stand-ins for OrdersScreenBase's myOrders prop, the
 // component only reads plain properties (id/status/totalCents/currency) in
@@ -520,6 +522,50 @@ describe('lencana sinkron kartu Order Saya', () => {
 // Baris pool hanya berisi kota, jadi membuka OrderDetail dari kartu Tersedia
 // menampilkan detail yang terlihat seperti order rusak. Kartu Order Saya
 // tetap boleh membuka detail.
+// Lencana basi dihitung ulang tiap menit selama ada antrean.
+//
+// Detak basi membuat kartu digambar ulang tiap menit, jadi lencana basi
+// muncul tanpa perlu data baru masuk.
+describe('lencana basi kartu Order Saya', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (fetchAvailableOrders as jest.Mock).mockResolvedValue({ items: [], hasMore: false });
+    mockPendingActions = [];
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test('lencana jadi basi setelah satu menit ada antrean', async () => {
+    mockPendingActions = [
+      makeAction({
+        targetOrderId: 'order-pending',
+        status: 'pending',
+        createdAt: Date.now() - (STALE_THRESHOLD_MS - 30 * 1000),
+      }),
+    ];
+    const myOrders = [makeOrder({ id: 'order-pending', status: 'PREPARING' })];
+
+    const { queryAllByText } = render(
+      <OrdersScreenBase database={mockDatabase as never} myOrders={myOrders as never} onLogout={jest.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(1);
+    });
+    expect(queryAllByText('Belum tersinkron dari sejam lalu')).toHaveLength(0);
+
+    act(() => {
+      jest.advanceTimersByTime(DETAK_BASI_MS);
+    });
+
+    expect(queryAllByText('Belum tersinkron dari sejam lalu')).toHaveLength(1);
+    expect(queryAllByText('Menunggu sinkronisasi')).toHaveLength(0);
+  });
+});
+
 describe('kartu Tersedia tidak membuka detail order', () => {
   beforeEach(() => {
     jest.clearAllMocks();

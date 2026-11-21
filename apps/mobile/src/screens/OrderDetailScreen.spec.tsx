@@ -15,6 +15,7 @@ import { hapticDelivered } from '../haptics';
 import { OrderStatus, PaymentMethod, PaymentStatus } from '@delivery/shared';
 import type { NetworkStatus } from '../map/networkMonitor';
 import type { OrderModel } from '../db/models/OrderModel';
+import { DETAK_BASI_MS } from '../sync/useDetakBasi';
 
 // Tanda kali di baris barang, ditulis lewat kode karakter supaya sumber tetap ASCII.
 const TANDA_KALI = String.fromCharCode(0xd7);
@@ -2901,6 +2902,49 @@ describe('tahan tombol batal saat mulai antar dikirim online', () => {
 
     expect(getByText('Terima Tunai (COD)')).toBeTruthy();
     expect(queryByText('Batalkan Order')).toBeNull();
+  });
+});
+
+describe('detak status basi', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetCurrentUserId.mockResolvedValue('driver-456');
+    mockPayments.length = 0;
+    mockPendingActions.length = 0;
+    paymentsSubscriptionCallback = null;
+    pendingActionsSubscriptionCallback = null;
+    jest.useFakeTimers({ doNotFake: ['setImmediate'] });
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test('aksi yang hampir basi jadi basi setelah satu menit', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.ASSIGNED, driverId: 'driver-456' });
+    const { getByText, queryByText } = renderScreen();
+    await act(async () => {});
+
+    await act(async () => {
+      pendingActionsSubscriptionCallback?.([
+        {
+          id: 'pending-hampir-basi',
+          status: 'pending',
+          actionType: 'collect_cod',
+          createdAt: new Date(Date.now() - (STALE_THRESHOLD_MS - 30 * 1000)),
+        },
+      ]);
+    });
+
+    expect(getByText('Menunggu sinkronisasi')).toBeTruthy();
+    expect(queryByText('Belum tersinkron dari sejam lalu')).toBeNull();
+
+    await act(async () => {
+      jest.advanceTimersByTime(DETAK_BASI_MS);
+    });
+
+    expect(getByText('Belum tersinkron dari sejam lalu')).toBeTruthy();
+    expect(queryByText('Menunggu sinkronisasi')).toBeNull();
   });
 });
 
