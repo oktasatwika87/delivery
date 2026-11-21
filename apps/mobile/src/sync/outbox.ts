@@ -401,20 +401,32 @@ export async function hasStalePendingAction(orderId: string): Promise<boolean> {
  */
 let drainQueue: Promise<unknown> = Promise.resolve();
 
+/** Lama tunggu di antrean modul yang dianggap lama, dalam milidetik. */
+const ANTRE_LAMA_MS = 1000;
+
 export async function drainPendingActions(db: Database = database): Promise<ProcessResult[]> {
+  // Dicatat saat dipanggil, jadi selisihnya dengan waktu mulai kirim
+  // menunjukkan berapa lama kiriman ini menunggu giliran.
+  const mulaiPanggil = Date.now();
   console.log('[outbox] Starting drain of pending actions...');
 
   // Sambungkan ke ujung antrean. Kalau pengiriman sebelumnya gagal, antrean
   // tetap jalan untuk panggilan berikutnya.
   const next = drainQueue.then(
-    () => runDrainOnce(db),
-    () => runDrainOnce(db),
+    () => runDrainOnce(db, mulaiPanggil),
+    () => runDrainOnce(db, mulaiPanggil),
   );
   drainQueue = next.catch(() => undefined);
   return next;
 }
 
-async function runDrainOnce(db: Database): Promise<ProcessResult[]> {
+async function runDrainOnce(db: Database, mulaiPanggil: number): Promise<ProcessResult[]> {
+  // Log untuk melacak aksi yang lama tidak terkirim.
+  const lamaMenunggu = Date.now() - mulaiPanggil;
+  if (lamaMenunggu >= ANTRE_LAMA_MS) {
+    console.log(`[outbox] Kiriman menunggu kiriman sebelumnya ${lamaMenunggu} ms`);
+  }
+
   const pendingActions = await db
     .get<PendingActionModel>('pending_actions')
     .query(
@@ -435,6 +447,10 @@ async function runDrainOnce(db: Database): Promise<ProcessResult[]> {
     // atau berubah di putaran ini tidak menahan.
     const skipReason = await shouldSkipAction(action, db);
     if (skipReason !== null) {
+      // Log untuk melacak aksi yang lama tidak terkirim.
+      console.log(
+        `[outbox] Aksi ${action.id} (${action.actionType}) ditunda: ${skipReason}`,
+      );
       results.push({
         pendingActionId: action.id,
         status: 'waiting',

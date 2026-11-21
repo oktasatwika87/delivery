@@ -971,6 +971,60 @@ describe('outbox', () => {
       expect(results[0].status).toBe('success');
       expect(mockRejectOrder).toHaveBeenCalledTimes(1);
     });
+
+    // Log sebab tertunda, buat melacak aksi yang lama tidak terkirim.
+    test('aksi yang ditunda tercatat di log', async () => {
+      const order = {
+        id: 'order-log-skip',
+        _raw: { id: 'order-log-skip', _status: 'synced' },
+        status: 'OUT_FOR_DELIVERY',
+        serverVersion: 4,
+      };
+      mockState.orders.set('order-log-skip', order);
+
+      const action = makeRecord({
+        id: 'aksi-log-skip',
+        actionType: 'update_status',
+        targetOrderId: 'order-log-skip',
+        expectedVersion: 0,
+        idempotencyKey: 'status:order-log-skip:DELIVERED',
+        payloadJson: { status: 'DELIVERED' },
+      });
+      mockState.records.set('aksi-log-skip', action);
+      attachMethods(action);
+
+      const spyLog = jest.spyOn(console, 'log').mockImplementation(() => {});
+      await drainPendingActions();
+      const teks = spyLog.mock.calls.map((call) => String(call[0])).join('\n');
+      spyLog.mockRestore();
+
+      expect(teks).toContain('aksi-log-skip');
+      expect(teks).toContain('ditunda: COD belum tercatat');
+    });
+
+    // Log lama menunggu di antrean modul, buat melacak pengiriman yang
+    // menumpuk di belakang kiriman lain.
+    test('kiriman yang menunggu kiriman sebelumnya tercatat di log', async () => {
+      const spyNow = jest.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(1500);
+      const spyLog = jest.spyOn(console, 'log').mockImplementation(() => {});
+      await drainPendingActions();
+      const teks = spyLog.mock.calls.map((call) => String(call[0])).join('\n');
+      spyNow.mockRestore();
+      spyLog.mockRestore();
+
+      expect(teks).toContain('menunggu kiriman sebelumnya 1500 ms');
+    });
+
+    test('kiriman yang tidak lama menunggu tidak tercatat di log', async () => {
+      const spyNow = jest.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValueOnce(500);
+      const spyLog = jest.spyOn(console, 'log').mockImplementation(() => {});
+      await drainPendingActions();
+      const teks = spyLog.mock.calls.map((call) => String(call[0])).join('\n');
+      spyNow.mockRestore();
+      spyLog.mockRestore();
+
+      expect(teks).not.toContain('menunggu kiriman sebelumnya');
+    });
   });
 
   // Temuan 1 (Skenario A): handleVersionConflict di outbox.ts menulis
