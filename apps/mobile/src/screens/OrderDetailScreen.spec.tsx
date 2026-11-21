@@ -2722,6 +2722,38 @@ describe('bilah bawah detail order', () => {
     expect(getByTestId('bungkus-batal').props.exiting).toBeUndefined();
   });
 
+  test('isi bilah bawah punya gerak geser di luar jendela awal', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { getByTestId, getByText } = renderScreen();
+    await waitFor(() => {
+      expect(getByText('Terima Tunai (COD)')).toBeTruthy();
+    });
+
+    const slotTunai = getByTestId('slot-tunai');
+    expect(slotTunai.props.entering).toBeTruthy();
+    expect(slotTunai.props.layout).toBeTruthy();
+    expect(getByTestId('bungkus-aksi-utama').props.layout).toBeTruthy();
+
+    const bungkusBatal = getByTestId('bungkus-batal');
+    expect(bungkusBatal.props.layout).toBeTruthy();
+    expect(bungkusBatal.props.entering).toBeTruthy();
+  });
+
+  test('isi bilah bawah tanpa gerak di dalam jendela awal', async () => {
+    Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
+    const { getByTestId } = renderScreenDalamJendela();
+    await act(async () => {});
+
+    const slotTunai = getByTestId('slot-tunai');
+    expect(slotTunai.props.entering).toBeUndefined();
+    expect(slotTunai.props.layout).toBeUndefined();
+    expect(getByTestId('bungkus-aksi-utama').props.layout).toBeUndefined();
+
+    const bungkusBatal = getByTestId('bungkus-batal');
+    expect(bungkusBatal.props.layout).toBeUndefined();
+    expect(bungkusBatal.props.entering).toBeUndefined();
+  });
+
   test('alert COD: judul dan isi yang baru', async () => {
     Object.assign(mockOrder, { status: OrderStatus.OUT_FOR_DELIVERY, driverId: 'driver-456' });
     const { getByText } = renderScreen();

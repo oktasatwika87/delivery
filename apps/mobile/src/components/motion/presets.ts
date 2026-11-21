@@ -48,9 +48,11 @@ export function exitUp() {
   return FadeOutUp.duration(motion.duration.exit).easing(exitEasing);
 }
 
-/** Masuk dengan opacity saja. */
-export function fadeIn() {
-  return FadeIn.duration(motion.duration.fadeIn).easing(standardEasing);
+/** Masuk dengan opacity saja. Jedanya dipakai untuk menunda masuknya isi. */
+export function fadeIn(delay = 0) {
+  return FadeIn.duration(motion.duration.fadeIn)
+    .easing(standardEasing)
+    .delay(delay);
 }
 
 /** Keluar dengan opacity saja. */

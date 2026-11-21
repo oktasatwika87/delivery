@@ -18,7 +18,7 @@ import {
   standardEasing,
 } from './presets';
 import { motion } from '../../theme/tokens';
-import { SlideOutRight } from 'react-native-reanimated';
+import { FadeIn, SlideOutRight } from 'react-native-reanimated';
 import * as reanimated from 'react-native-reanimated';
 import type { EntryAnimationsValues, ExitAnimationsValues } from 'react-native-reanimated';
 
@@ -96,6 +96,21 @@ describe('pola gerak', () => {
 
       expect(spy).toHaveBeenCalledWith(standardEasing);
       expect(standardEasing).not.toBe(exitEasing);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('pola masuk dengan pudar bisa diberi jeda', () => {
+    const spy = jest.spyOn(FadeIn, 'delay');
+
+    try {
+      fadeIn(120);
+      expect(spy).toHaveBeenCalledWith(120);
+
+      spy.mockClear();
+      fadeIn();
+      expect(spy).toHaveBeenCalledWith(0);
     } finally {
       spy.mockRestore();
     }

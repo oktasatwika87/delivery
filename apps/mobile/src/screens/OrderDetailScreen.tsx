@@ -51,7 +51,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { motion, size, space, stroke, type } from '../theme/tokens';
 import { useInitialWindow } from '../components/motion/InitialWindow';
 import { useHoldDone } from '../components/motion/useHoldDone';
-import { fadeOut, shift } from '../components/motion/presets';
+import { fadeIn, fadeOut, shift } from '../components/motion/presets';
 import { langkahOrder } from './langkahOrder';
 import { isOrderStatus } from './orderRowRead';
 
@@ -92,6 +92,15 @@ const AKSI_UTAMA: Record<AksiUtama, { judul: string; ikon: IconName }> = {
 
 /** Keluar pelan saat tombol Batalkan hilang. */
 const KELUAR_BATAL = fadeOut();
+
+/**
+ * Kotak tunai baru terlihat sesudah tombol utama hampir sampai di tempat
+ * barunya, jadi kotak tidak tampak menimpa tombol.
+ */
+const MASUK_TUNAI = fadeIn(motion.duration.fadeOut);
+
+/** Batalkan yang muncul lagi. */
+const MASUK_BATAL = fadeIn();
 
 /** Tanda kali di baris barang, ditulis lewat kode karakter supaya sumber tetap ASCII. */
 const TANDA_KALI = String.fromCharCode(0xd7);
@@ -737,36 +746,50 @@ function OrderDetailBase({ database }: Props): React.JSX.Element {
 
   // Tiga slot dengan urutan tetap. Slot kosong ditulis null, bukan
   // disaring, supaya tombol utama tidak dipasang ulang saat kotak tunai
-  // muncul atau hilang.
+  // muncul atau hilang. Bilah bawah bergerak lewat bingkainya, jadi tiap
+  // anak diberi gerak geser yang sama supaya ikut berpindah bersama bilah,
+  // bukan langsung melompat ke posisi akhirnya.
   const isiBilahBawah = (
     <>
       {kotakDiBilah ? (
-        <View style={styles.slotTunai}>
+        <Animated.View
+          testID="slot-tunai"
+          style={styles.slotTunai}
+          entering={dalamJendela ? undefined : MASUK_TUNAI}
+          layout={dalamJendela ? undefined : GESER}
+        >
           <CashBox variant={varianTunai ?? 'tagih'} amountText={jumlahTunai} />
-        </View>
+        </Animated.View>
       ) : null}
       {aksiUtama ? (
-        <Button
-          testID="aksi-utama"
-          title={AKSI_UTAMA[aksiUtama].judul}
-          icon={AKSI_UTAMA[aksiUtama].ikon}
-          size="lg"
-          success={tahapSelesai === 'berhasil'}
-          onPress={() => {
-            // Selama tombol ditahan, ketukan tidak melakukan apa-apa.
-            if (ditahanSelesai) return;
-            if (aksiUtama === 'tunai') {
-              handleCollectCod(order);
-            } else {
-              handleUpdateStatus(order);
-            }
-          }}
-        />
+        <Animated.View
+          testID="bungkus-aksi-utama"
+          layout={dalamJendela ? undefined : GESER}
+        >
+          <Button
+            testID="aksi-utama"
+            title={AKSI_UTAMA[aksiUtama].judul}
+            icon={AKSI_UTAMA[aksiUtama].ikon}
+            size="lg"
+            success={tahapSelesai === 'berhasil'}
+            onPress={() => {
+              // Selama tombol ditahan, ketukan tidak melakukan apa-apa.
+              if (ditahanSelesai) return;
+              if (aksiUtama === 'tunai') {
+                handleCollectCod(order);
+              } else {
+                handleUpdateStatus(order);
+              }
+            }}
+          />
+        </Animated.View>
       ) : null}
       {bisaBatal ? (
         <Animated.View
           testID="bungkus-batal"
           exiting={dalamJendela ? undefined : KELUAR_BATAL}
+          layout={dalamJendela ? undefined : GESER}
+          entering={dalamJendela ? undefined : MASUK_BATAL}
         >
           <Button
             title="Batalkan Order"
