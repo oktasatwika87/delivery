@@ -211,6 +211,22 @@ describe('kerangka layar', () => {
     expect(gayaBilah.paddingBottom).toBe(40);
   });
 
+  test('pembungkus bilah koneksi pakai inset atas', () => {
+    mockInsets.mockReturnValue({ top: 62, bottom: 0, left: 0, right: 0 });
+
+    const { getByTestId } = renderKerangka();
+
+    const gayaPembungkus = gaya(getByTestId('pembungkus-bilah-koneksi'));
+    expect(gayaPembungkus.paddingTop).toBe(62);
+  });
+
+  test('pembungkus bilah koneksi tanpa inset atas tetap rapat', () => {
+    const { getByTestId } = renderKerangka();
+
+    const gayaPembungkus = gaya(getByTestId('pembungkus-bilah-koneksi'));
+    expect(gayaPembungkus.paddingTop).toBe(0);
+  });
+
   test('di dalam jendela awal isi layar dan bilah bawah tidak bergerak', () => {
     const { getByTestId } = render(
       <ThemeProvider name="gelap">

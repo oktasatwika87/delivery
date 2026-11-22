@@ -44,13 +44,19 @@ export function ScreenFrame({
 }: ScreenFrameProps): React.JSX.Element {
   const { colors } = useTheme();
   const dalamJendela = useInitialWindow();
+  const insets = useSafeAreaInsets();
 
   return (
     <View style={[styles.layar, { backgroundColor: colors.bg }]}>
       <StatusBar barStyle="light-content" backgroundColor={colors.header} />
       {/* Bilah di luar isi layar, supaya layout di isiLayar menggeser
-          isi layar saat bilah muncul atau hilang. */}
-      <View style={{ backgroundColor: colors.header }}>
+          isi layar saat bilah muncul atau hilang. Padding atasnya memakai
+          inset, biar kepala layar dan bilah koneksi tidak ketutup status
+          bar dan Dynamic Island di iPhone. */}
+      <View
+        testID="pembungkus-bilah-koneksi"
+        style={{ backgroundColor: colors.header, paddingTop: insets.top }}
+      >
         <ThemeProvider name="gelap">
           {/* Bilah yang sudah ada saat layar dipasang langsung tampil tanpa
               gerak masuk, biar tidak masuk dua kali. Bilah yang muncul
