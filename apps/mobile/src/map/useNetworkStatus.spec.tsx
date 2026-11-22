@@ -2,6 +2,8 @@
  * Tes hook status jaringan.
  *
  * Monitor jaringan dipalsukan supaya statusnya bisa diubah dari luar.
+ * Tiruan punya status sendiri: begitu pendengar dipanggil, status tiruan
+ * ikut berubah, jadi getStatus selalu membaca status terbaru.
  */
 
 import { act, renderHook } from '@testing-library/react-native';
@@ -30,22 +32,37 @@ function monitorTiruan(): MonitorTiruan {
 
 describe('status jaringan jadi hook sendiri', () => {
   let pendengar: Set<Pendengar>;
+  /** Status tiruan saat ini. */
+  let status: NetworkStatus;
+  /** Status yang dipasang tiruan tepat saat subscribe dipanggil. */
+  let statusSaatSubscribe: NetworkStatus | undefined;
 
   beforeEach(() => {
     pendengar = new Set<Pendengar>();
+    status = 'unknown';
+    statusSaatSubscribe = undefined;
     monitorTiruan().getStatus.mockReset();
-    monitorTiruan().getStatus.mockReturnValue('unknown');
+    monitorTiruan().getStatus.mockImplementation(() => status);
     monitorTiruan().subscribe.mockReset();
     monitorTiruan().subscribe.mockImplementation((listener) => {
-      pendengar.add(listener);
+      // Pendengar yang tersimpan mengubah status tiruan dulu, baru panggil
+      // pendengar asli, supaya getStatus selalu baca status terbaru.
+      const bungkus: Pendengar = (baru) => {
+        status = baru;
+        listener(baru);
+      };
+      pendengar.add(bungkus);
+      if (statusSaatSubscribe !== undefined) {
+        status = statusSaatSubscribe;
+      }
       return () => {
-        pendengar.delete(listener);
+        pendengar.delete(bungkus);
       };
     });
   });
 
   it('nilai awal diambil dari monitor', () => {
-    monitorTiruan().getStatus.mockReturnValue('offline');
+    status = 'offline';
 
     const { result } = renderHook(() => useNetworkStatus());
 
@@ -60,6 +77,16 @@ describe('status jaringan jadi hook sendiri', () => {
     });
 
     expect(result.current).toBe('offline');
+  });
+
+  it('status yang berubah tepat saat subscribe dipanggil tetap terbaca', () => {
+    // Di iOS monitor bisa berubah dari 'unknown' ke 'online' di antara
+    // render dan efek, tanpa sempat memberi tahu pendengar.
+    statusSaatSubscribe = 'online';
+
+    const { result } = renderHook(() => useNetworkStatus());
+
+    expect(result.current).toBe('online');
   });
 
   it('berhenti langganan saat hook dilepas', () => {
