@@ -15,7 +15,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, View, StyleSheet } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Platform, View, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -50,6 +50,7 @@ import {
   InitialWindowProvider,
   withInitialWindow,
 } from './src/components/motion/InitialWindow';
+import { animasiTumpukan } from './src/components/motion/animasiTumpukan';
 import { TEMA_DRIVER, ThemeProvider } from './src/theme/ThemeProvider';
 import { themes } from './src/theme/tokens';
 
@@ -403,7 +404,9 @@ function App(): React.JSX.Element {
               <Stack.Navigator
                 screenOptions={{
                   headerShown: false,
-                  animation: kurangiGerak ? 'none' : 'slide_from_right',
+                  // iOS pakai animasi bawaan, jadi gestur geser kembali dari
+                  // tepi kiri tetap jalan.
+                  animation: animasiTumpukan(kurangiGerak, Platform.OS),
                 }}
               >
                 <Stack.Screen name="Orders" options={{ contentStyle: styles.latarLayarDriver }}>
