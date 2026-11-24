@@ -15,8 +15,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 import type { Order } from '@delivery/shared';
 
-import { getOrderById, UnauthorizedError } from '../sync/client';
+import { getOrderById, requestNewDriver, ApiError, UnauthorizedError } from '../sync/client';
 import { ordersSocket } from '../sync/ordersSocket';
+import type { HasilCariDriverLain } from './customerTrackView';
 
 /** Jeda antar ambil ulang berkala, dalam milidetik. */
 export const AMBIL_ULANG_MS = 60 * 1000;
@@ -32,6 +33,8 @@ export interface CustomerOrder {
   terputus: boolean;
   tunaiDiterima: boolean;
   asalPerubahan: AsalPerubahan;
+  memintaDriverLain: boolean;
+  mintaDriverLain: () => Promise<HasilCariDriverLain | null>;
 }
 
 export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOrder {
@@ -43,6 +46,7 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
   const [asalPerubahan, setAsalPerubahan] = useState<AsalPerubahan>('awal');
   const [terakhirDiperbarui, setTerakhirDiperbarui] = useState(0);
   const [appAktif, setAppAktif] = useState(AppState.currentState === 'active');
+  const [memintaDriverLain, setMemintaDriverLain] = useState(false);
 
   const orderRef = useRef<Order | null>(null);
   const versiTampilRef = useRef(0);
@@ -55,6 +59,8 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
   const putusCounterRef = useRef(0);
   /** Ada perubahan yang datang sebelum order pertama tampil, jadi perlu ambil ulang sekali. */
   const perluAmbilUlangRef = useRef(false);
+  /** Permintaan minta driver lain yang masih berjalan. */
+  const mintaBerjalanRef = useRef(false);
 
   orderIdRef.current = orderId;
 
@@ -161,6 +167,57 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
     void muatAwal();
   }, [muatAwal]);
 
+  /**
+   * Customer minta driver lain untuk order yang dipegang driver lama.
+   *
+   * Kalau order belum tampil atau permintaan sebelumnya masih berjalan,
+   * fungsi ini mengembalikan null tanpa memanggil server.
+   */
+  const mintaDriverLain = useCallback(async (): Promise<HasilCariDriverLain | null> => {
+    const sekarang = orderRef.current;
+    if (!sekarang || mintaBerjalanRef.current) return null;
+
+    mintaBerjalanRef.current = true;
+    setMemintaDriverLain(true);
+
+    try {
+      const berikut = await requestNewDriver(sekarang.id, sekarang.version);
+      setTerakhirDiperbarui(Date.now());
+
+      // Aturan version sama seperti hasil GET: yang lebih tua diabaikan,
+      // yang sama tetap dipakai.
+      if (berikut.version >= versiTampilRef.current) {
+        orderRef.current = berikut;
+        versiTampilRef.current = berikut.version;
+        setOrder(berikut);
+      }
+      setAsalPerubahan('sendiri');
+      return 'berhasil';
+    } catch (err) {
+      if (err instanceof UnauthorizedError) {
+        return 'sesi_berakhir';
+      }
+      if (err instanceof ApiError && err.status === 409) {
+        // Server menolak, ambil ulang supaya layar ikut keadaan sebenarnya.
+        void ambilUlang();
+        switch (err.code) {
+          case 'DRIVER_STILL_REACHABLE':
+            return 'driver_tersambung';
+          case 'ORDER_NOT_RELEASABLE':
+            return 'tidak_bisa_dialihkan';
+          case 'VERSION_CONFLICT':
+            return 'order_berubah';
+          default:
+            return 'gagal';
+        }
+      }
+      return 'gagal';
+    } finally {
+      mintaBerjalanRef.current = false;
+      setMemintaDriverLain(false);
+    }
+  }, [ambilUlang]);
+
   useEffect(() => {
     genRef.current += 1;
     const myGen = genRef.current;
@@ -174,6 +231,7 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
     setTunaiDiterima(false);
     setAsalPerubahan('awal');
     setTerakhirDiperbarui(0);
+    setMemintaDriverLain(false);
 
     void muatAwal();
 
@@ -318,5 +376,7 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
     terputus,
     tunaiDiterima,
     asalPerubahan,
+    memintaDriverLain,
+    mintaDriverLain,
   };
 }

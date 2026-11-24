@@ -19,7 +19,8 @@ import type {
 } from '@delivery/shared';
 
 import { AMBIL_ULANG_MS, useCustomerOrder } from './useCustomerOrder';
-import { UnauthorizedError } from '../sync/client';
+import { UnauthorizedError, ApiError } from '../sync/client';
+import type { HasilCariDriverLain } from './customerTrackView';
 
 var mockAcceptedSubscribers: Array<(p: OrderAcceptedPayload) => void> = [];
 var mockRejectedSubscribers: Array<(p: OrderRejectedPayload) => void> = [];
@@ -74,6 +75,7 @@ jest.mock('../sync/ordersSocket', () => ({
 }));
 
 const mockGetOrderById = jest.fn<Promise<Order>, [string]>();
+const mockRequestNewDriver = jest.fn<Promise<Order>, [string, number]>();
 
 jest.mock('../sync/client', () => {
   // requireActual supaya class UnauthorizedError tetap sama dengan yang
@@ -82,6 +84,8 @@ jest.mock('../sync/client', () => {
   return {
     ...actual,
     getOrderById: (id: string): Promise<Order> => mockGetOrderById(id),
+    requestNewDriver: (id: string, version: number): Promise<Order> =>
+      mockRequestNewDriver(id, version),
   };
 });
 
@@ -170,6 +174,31 @@ function pendengarAppState(): (status: AppStateStatus) => void {
   return pemanggil[1];
 }
 
+/**
+ * Skenario minta driver lain yang ditolak server: jalankan hook, minta
+ * driver lain, lalu laporkan hasilnya dan berapa kali ambil ulang jalan.
+ */
+async function mintaDenganGalat(err: unknown): Promise<{
+  hasil: HasilCariDriverLain | null;
+  jumlahGet: number;
+}> {
+  mockGetOrderById.mockResolvedValue(ORDER);
+  mockRequestNewDriver.mockRejectedValue(err);
+
+  const { result } = renderHook(() => useCustomerOrder('order-1', true));
+  await flush();
+
+  const getSebelum = mockGetOrderById.mock.calls.length;
+
+  let hasil: HasilCariDriverLain | null = null;
+  await act(async () => {
+    hasil = await result.current.mintaDriverLain();
+  });
+  await flush();
+
+  return { hasil, jumlahGet: mockGetOrderById.mock.calls.length - getSebelum };
+}
+
 describe('useCustomerOrder', () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -177,6 +206,8 @@ describe('useCustomerOrder', () => {
     resetSubscribers();
     mockGetOrderById.mockReset();
     mockGetOrderById.mockResolvedValue(ORDER);
+    mockRequestNewDriver.mockReset();
+    mockRequestNewDriver.mockResolvedValue(ORDER);
   });
 
   afterEach(() => {
@@ -582,6 +613,163 @@ describe('useCustomerOrder', () => {
       await flush();
 
       expect(mockGetOrderById).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('minta driver lain', () => {
+    const JAWABAN: Order = {
+      ...ORDER,
+      status: 'ASSIGNED',
+      version: 2,
+      cancelledBy: 'customer-1',
+      cancelReason: 'driver_unreachable',
+    };
+
+    it('data null: mengembalikan null tanpa memanggil server', async () => {
+      mockGetOrderById.mockRejectedValue(new Error('jaringan mati'));
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      let hasil: HasilCariDriverLain | null = null;
+      await act(async () => {
+        hasil = await result.current.mintaDriverLain();
+      });
+
+      expect(hasil).toBeNull();
+      expect(mockRequestNewDriver).not.toHaveBeenCalled();
+    });
+
+    it('panggilan kedua saat permintaan pertama masih berjalan mengembalikan null', async () => {
+      const lambat = tertunda<Order>();
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      mockRequestNewDriver.mockReturnValueOnce(lambat.janji);
+
+      let hasilPertama: HasilCariDriverLain | null = null;
+      act(() => {
+        void result.current.mintaDriverLain().then((h) => {
+          hasilPertama = h;
+        });
+      });
+      expect(result.current.memintaDriverLain).toBe(true);
+
+      let hasilKedua: HasilCariDriverLain | null = null;
+      await act(async () => {
+        hasilKedua = await result.current.mintaDriverLain();
+      });
+
+      expect(hasilKedua).toBeNull();
+      expect(mockRequestNewDriver).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        lambat.selesai(JAWABAN);
+      });
+
+      expect(hasilPertama).toBe('berhasil');
+      expect(result.current.memintaDriverLain).toBe(false);
+    });
+
+    it('sukses: order dari jawaban dipakai dan asal perubahan sendiri', async () => {
+      mockRequestNewDriver.mockResolvedValueOnce(JAWABAN);
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      let hasil: HasilCariDriverLain | null = null;
+      await act(async () => {
+        hasil = await result.current.mintaDriverLain();
+      });
+
+      expect(hasil).toBe('berhasil');
+      expect(mockRequestNewDriver).toHaveBeenCalledWith('order-1', 1);
+      expect(result.current.data?.order).toEqual(JAWABAN);
+      expect(result.current.asalPerubahan).toBe('sendiri');
+      expect(result.current.data?.terakhirDiperbarui).toBeGreaterThan(0);
+      expect(result.current.memintaDriverLain).toBe(false);
+    });
+
+    it('409 dengan kode driver masih tersambung: driver_tersambung dan ambil ulang jalan', async () => {
+      const { hasil, jumlahGet } = await mintaDenganGalat(
+        new ApiError('ditolak', 409, 'DRIVER_STILL_REACHABLE'),
+      );
+
+      expect(hasil).toBe('driver_tersambung');
+      expect(jumlahGet).toBe(1);
+    });
+
+    it('409 dengan kode order tidak bisa dialihkan: tidak_bisa_dialihkan dan ambil ulang jalan', async () => {
+      const { hasil, jumlahGet } = await mintaDenganGalat(
+        new ApiError('ditolak', 409, 'ORDER_NOT_RELEASABLE'),
+      );
+
+      expect(hasil).toBe('tidak_bisa_dialihkan');
+      expect(jumlahGet).toBe(1);
+    });
+
+    it('409 dengan kode order berubah: order_berubah dan ambil ulang jalan', async () => {
+      const { hasil, jumlahGet } = await mintaDenganGalat(
+        new ApiError('ditolak', 409, 'VERSION_CONFLICT'),
+      );
+
+      expect(hasil).toBe('order_berubah');
+      expect(jumlahGet).toBe(1);
+    });
+
+    it('409 dengan kode lain: gagal dan ambil ulang tetap jalan', async () => {
+      const { hasil, jumlahGet } = await mintaDenganGalat(
+        new ApiError('ditolak', 409, 'KODE_LAIN'),
+      );
+
+      expect(hasil).toBe('gagal');
+      expect(jumlahGet).toBe(1);
+    });
+
+    it('401: sesi berakhir dan tidak ada ambil ulang', async () => {
+      const { hasil, jumlahGet } = await mintaDenganGalat(new UnauthorizedError());
+
+      expect(hasil).toBe('sesi_berakhir');
+      expect(jumlahGet).toBe(0);
+    });
+
+    it('galat jaringan: gagal dan tidak ada ambil ulang', async () => {
+      const { hasil, jumlahGet } = await mintaDenganGalat(new Error('jaringan mati'));
+
+      expect(hasil).toBe('gagal');
+      expect(jumlahGet).toBe(0);
+    });
+
+    it('order cancelled gema sesudah sukses tidak mengubah apa pun', async () => {
+      mockRequestNewDriver.mockResolvedValueOnce(JAWABAN);
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      let hasil: HasilCariDriverLain | null = null;
+      await act(async () => {
+        hasil = await result.current.mintaDriverLain();
+      });
+      expect(hasil).toBe('berhasil');
+
+      const waktuSebelum = result.current.data?.terakhirDiperbarui;
+
+      await act(async () => {
+        jest.advanceTimersByTime(5_000);
+      });
+
+      act(() => {
+        triggerCancelled({
+          orderId: 'order-1',
+          status: 'ASSIGNED',
+          version: 2,
+          reason: 'driver_unreachable',
+        });
+      });
+
+      expect(result.current.data?.order).toEqual(JAWABAN);
+      expect(result.current.data?.terakhirDiperbarui).toBe(waktuSebelum);
     });
   });
 
