@@ -298,6 +298,14 @@ const PermissionsAndroid = {
   request: jest.fn().mockResolvedValue('granted'),
 };
 
+// AppState stub: dipakai hook yang perlu tahu app di depan atau di latar.
+// addEventListener-nya jest.fn supaya tes bisa mengambil pendengarnya dari
+// mock.calls dan memanggilnya sendiri.
+const AppState = {
+  currentState: 'active',
+  addEventListener: jest.fn(() => ({ remove: () => {} })),
+};
+
 // Re-exports minimal
 // Untuk hal yang tidak dipakai component ini tapi mungkin di-require
 // transitively, kita re-export mock undefined (akan throw kalau dipakai).
@@ -309,6 +317,7 @@ module.exports = {
   ActivityIndicator,
   Alert,
   AppRegistry,
+  AppState,
   Button,
   FlatList,
   Image,
