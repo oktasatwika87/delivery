@@ -1774,7 +1774,7 @@ describe('handleAccept - accept order lewat REST', () => {
     expect(await rowExistsInAdapter(rowId)).toBe(true);
   });
 
-  // Tes 4: 409 ORDER_UNAVAILABLE (cron melepas order ke CONFIRMED), Alert + pool-refresh
+  // Tes 4: 409 ORDER_UNAVAILABLE (order bukan ASSIGNED lagi atau sudah diterima driver lain), Alert + pool-refresh
   it('409 ORDER_UNAVAILABLE, Alert muncul + syncEvents.emit("pool-refresh")', async () => {
     const client = jest.requireMock('../sync/client') as { acceptOrder: jest.Mock };
     const session = jest.requireMock('../sync/session') as { getCurrentUserId: jest.Mock };
