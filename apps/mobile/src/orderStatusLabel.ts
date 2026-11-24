@@ -14,15 +14,12 @@ import type { OrderStatus } from '@delivery/shared';
 
 const STATUS_DISPLAY: Record<OrderStatus, string> = {
   PENDING: 'Menunggu konfirmasi',
-  CONFIRMED: 'Dikonfirmasi, mencari driver...',
-  // ASSIGNED = pool state (Mencari driver), bukan "Driver ditugaskan"
-  // lagi. Order boleh di-broadcast sebagai ASSIGNED + driverId null
-  // yang artinya customer melihatnya lagi mencari driver setelah
-  // reject/cancel/timeout. Backend emit status 'ASSIGNED' untuk
-  // order:rejected dan order:cancelled, lihat OrderRejectedPayload/
-  // OrderCancelledPayload.
-  ASSIGNED: 'Mencari driver...',
-  PREPARING: 'Driver sedang menyiapkan',
+  CONFIRMED: 'Menunggu konfirmasi',
+  // ASSIGNED = pool state, bukan "Driver ditugaskan". Order tanpa driver
+  // menunggu diambil driver, dan order kembali ke sini kalau driver
+  // membatalkan atau customer minta driver lain.
+  ASSIGNED: 'Mencari driver',
+  PREPARING: 'Driver ditemukan',
   OUT_FOR_DELIVERY: 'Dalam perjalanan',
   DELIVERED: 'Terkirim',
   CANCELLED: 'Dibatalkan',

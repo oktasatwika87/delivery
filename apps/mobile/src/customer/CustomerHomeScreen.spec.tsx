@@ -201,7 +201,7 @@ describe('CustomerHomeScreen', () => {
     await waitFor(() => {
       expect(getByText('#ORDER-AB')).toBeTruthy();
     });
-    expect(getByText('Mencari driver...')).toBeTruthy();
+    expect(getByText('Mencari driver')).toBeTruthy();
     expect(getByText('Rp 50.000')).toBeTruthy();
   });
 
@@ -221,7 +221,7 @@ describe('CustomerHomeScreen', () => {
     });
 
     await waitFor(() => {
-      expect(getByText('Mencari driver...')).toBeTruthy();
+      expect(getByText('Mencari driver')).toBeTruthy();
     });
 
     // Ubah objek record YANG SAMA ke PREPARING, lalu kirim ulang.
@@ -231,9 +231,9 @@ describe('CustomerHomeScreen', () => {
     });
 
     await waitFor(() => {
-      expect(getByText('Driver sedang menyiapkan')).toBeTruthy();
+      expect(getByText('Driver ditemukan')).toBeTruthy();
     });
-    expect(queryByText('Mencari driver...')).toBeNull();
+    expect(queryByText('Mencari driver')).toBeNull();
   });
 
   it('(d) ketuk baris memanggil navigasi ke tracking dengan id order', async () => {

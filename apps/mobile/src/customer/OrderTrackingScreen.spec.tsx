@@ -15,7 +15,7 @@
  * 11. order:cod_collected untuk orderId lain di-ignore
  * 12. Tombol "Tutup" pada cod banner dismiss banner
  * 13. order:cod_collected TIDAK mengubah status order (bukan state-sync event)
- * 14. STATUS_DISPLAY.ASSIGNED = "Mencari driver..." (pool state)
+ * 14. STATUS_DISPLAY.ASSIGNED = "Mencari driver" (pool state)
  */
 
 import React from 'react';
@@ -277,7 +277,7 @@ describe('OrderTrackingScreen', () => {
     });
 
     await waitFor(() => {
-      expect(getByText('Driver sedang menyiapkan')).toBeTruthy();
+      expect(getByText('Driver ditemukan')).toBeTruthy();
     });
 
     // Status lama (PENDING) sudah tidak tampil
@@ -308,7 +308,7 @@ describe('OrderTrackingScreen', () => {
     });
 
     await waitFor(() => {
-      expect(getByText('Mencari driver...')).toBeTruthy();
+      expect(getByText('Mencari driver')).toBeTruthy();
     });
   });
 
@@ -334,7 +334,7 @@ describe('OrderTrackingScreen', () => {
     });
 
     await waitFor(() => {
-      expect(getByText('Mencari driver...')).toBeTruthy();
+      expect(getByText('Mencari driver')).toBeTruthy();
       expect(getByText('Kendaraan mogok')).toBeTruthy();
     });
   });
@@ -362,7 +362,7 @@ describe('OrderTrackingScreen', () => {
 
     // Status tidak berubah
     expect(getByText('Menunggu konfirmasi')).toBeTruthy();
-    expect(queryByText('Driver sedang menyiapkan')).toBeNull();
+    expect(queryByText('Driver ditemukan')).toBeNull();
   });
 
   it('order:cod_collected event -> tampil banner receipt dengan jumlah benar', async () => {
@@ -521,7 +521,7 @@ describe('OrderTrackingScreen', () => {
     );
 
     await waitFor(() => {
-      expect(getByText('Driver sedang menyiapkan')).toBeTruthy();
+      expect(getByText('Driver ditemukan')).toBeTruthy();
     });
 
     act(() => {
@@ -537,7 +537,7 @@ describe('OrderTrackingScreen', () => {
       expect(getByText('Dalam perjalanan')).toBeTruthy();
     });
     // Status PREPARING sudah tidak tampil
-    expect(() => getByText('Driver sedang menyiapkan')).toThrow();
+    expect(() => getByText('Driver ditemukan')).toThrow();
   });
 
   it('order:status_updated untuk orderId LAIN diabaikan', async () => {
