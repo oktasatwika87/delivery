@@ -311,4 +311,149 @@ describe('fetchAvailableOrders: timeout 8 detik', () => {
   });
 });
 
+describe('requestNewDriver', () => {
+  const originalFetch = globalThis.fetch;
+
+  const ORDER: Order = {
+    id: 'order-123',
+    customerId: 'customer-1',
+    status: 'ASSIGNED',
+    items: [
+      { id: 'item-1', productId: 'prod-1', name: 'Nasi Goreng', quantity: 1, unitPriceCents: 25000 },
+    ],
+    deliveryAddress: {
+      recipientName: 'Budi',
+      phone: '081234567890',
+      street: 'Jl. Merdeka No. 1',
+      city: 'Jakarta',
+      postalCode: '10110',
+    },
+    totalCents: 25000,
+    currency: 'IDR',
+    version: 8,
+    createdAt: '2026-08-30T00:00:00.000Z',
+    updatedAt: '2026-08-30T00:00:00.000Z',
+  };
+
+  function clientBaru(): typeof import('./client') {
+    return jest.requireActual<typeof import('./client')>('./client');
+  }
+
+  function sebagaiApiError(err: unknown): InstanceType<typeof import('./client').ApiError> {
+    const { ApiError } = clientBaru();
+    if (err instanceof ApiError) return err;
+    throw new Error('galat yang diterima bukan ApiError');
+  }
+
+  beforeEach(() => {
+    jest.resetModules();
+    globalThis.fetch = jest.fn();
+    jest.doMock('./session', () => ({
+      getCurrentToken: jest.fn().mockResolvedValue('test-token'),
+    }));
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    globalThis.fetch = originalFetch;
+    jest.clearAllMocks();
+    jest.resetModules();
+  });
+
+  it('POST ke /orders/:id/request-new-driver dengan body { version }', async () => {
+    const { requestNewDriver } = clientBaru();
+
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () => Promise.resolve(ORDER),
+    });
+
+    await requestNewDriver('order-123', 7);
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'http://localhost:3000/orders/order-123/request-new-driver',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ version: 7 }),
+      }),
+    );
+  });
+
+  it('sukses mengembalikan order dari jawaban server', async () => {
+    const { requestNewDriver } = clientBaru();
+
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () => Promise.resolve(ORDER),
+    });
+
+    await expect(requestNewDriver('order-123', 7)).resolves.toEqual(ORDER);
+  });
+
+  it('401 melempar UnauthorizedError', async () => {
+    const { requestNewDriver, UnauthorizedError } = clientBaru();
+
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      status: 401,
+      ok: false,
+      json: () => Promise.reject(new Error('not used')),
+    });
+
+    await expect(requestNewDriver('order-123', 7)).rejects.toBeInstanceOf(UnauthorizedError);
+  });
+
+  it('409 jadi ApiError dengan status dan code dari server', async () => {
+    const { requestNewDriver } = clientBaru();
+
+    (globalThis.fetch as jest.Mock).mockResolvedValueOnce({
+      status: 409,
+      ok: false,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({ code: 'DRIVER_STILL_REACHABLE', message: 'Driver masih tersambung' }),
+        ),
+    });
+
+    const galat = await requestNewDriver('order-123', 7).catch((err: unknown) => err);
+    const apiError = sebagaiApiError(galat);
+
+    expect(apiError.status).toBe(409);
+    expect(apiError.code).toBe('DRIVER_STILL_REACHABLE');
+  });
+
+  it('batas waktu 8 detik melempar galat AbortError', async () => {
+    const { requestNewDriver } = clientBaru();
+
+    (globalThis.fetch as jest.Mock).mockImplementation(
+      (_url: string, options: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          const batal = () => {
+            const err = new Error('The operation was aborted');
+            err.name = 'AbortError';
+            reject(err);
+          };
+          if (options.signal?.aborted) {
+            batal();
+            return;
+          }
+          options.signal?.addEventListener('abort', batal);
+        }),
+    );
+
+    const panggilan = requestNewDriver('order-123', 7);
+    const harapan = expect(panggilan).rejects.toMatchObject({ name: 'AbortError' });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    jest.advanceTimersByTime(8000);
+
+    await harapan;
+  });
+});
+
 void syncEventsModule;

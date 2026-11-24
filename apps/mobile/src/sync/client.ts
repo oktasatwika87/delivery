@@ -531,6 +531,47 @@ export async function acceptOrder(orderId: string, version: number): Promise<Ord
 }
 
 /**
+ * Customer minta driver lain untuk order yang dipegang driver lama.
+ *
+ * Server hanya melepas order yang belum dibawa driver (order masih
+ * PREPARING) dan kontak terakhir driver sudah lewat batas. Kalau order
+ * sudah berubah, server balas 409 dengan kode VERSION_CONFLICT,
+ * ORDER_NOT_RELEASABLE, atau DRIVER_STILL_REACHABLE.
+ */
+export async function requestNewDriver(
+  orderId: string,
+  version: number,
+): Promise<Order> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await fetchWithAuth(`${API_BASE}/orders/${orderId}/request-new-driver`, {
+      method: 'POST',
+      body: JSON.stringify({ version }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.status === 401) {
+      throw new UnauthorizedError();
+    }
+
+    if (!res.ok) {
+      throw await buildApiError('requestNewDriver', res);
+    }
+
+    return res.json() as Promise<Order>;
+  } catch (err: unknown) {
+    clearTimeout(timeoutId);
+    if (err instanceof Error && err.name === 'AbortError') {
+      console.warn('[requestNewDriver] Request aborted due to 8s timeout');
+    }
+    throw err;
+  }
+}
+
+/**
  * Driver collects COD (cash on delivery) for an order.
  * Uses idempotency key to prevent double-collection.
  */
