@@ -39,10 +39,10 @@ Status dan pemilik order cuma bisa berubah lewat endpoint REST (buat, terima, ub
 COD), masing-masing dicek peran dan versinya. Push sinkron dari app untuk order dan pembayaran
 ditolak server, dan jumlah COD diambil dari total order di server, bukan dari app.
 
-Order baru langsung masuk daftar Tersedia. Order yang dibatalin driver, atau yang drivernya nggak
-aktif 15 menit (50 menit kalau udah di jalan), dibalikin ke daftar itu lewat satu fungsi yang sama,
-lalu driver lain dan customer dikabarin lewat socket. Order yang COD-nya udah tercatat nggak pernah
-dibalikin, biar uang tunainya nggak bisa ditagih dua kali.
+Order baru langsung masuk daftar Tersedia. Order yang dibatalin driver dibalikin ke daftar itu, lalu
+driver lain dan customer dikabarin lewat socket. Order yang udah diterima nggak pernah diambil balik
+sama server walau HP drivernya lama nggak nyambung, soalnya di jalan itu biasa. Order yang COD-nya
+udah tercatat nggak pernah dibalikin, biar uang tunainya nggak bisa ditagih dua kali.
 
 Data di HP cuma punya satu pemilik. Keluar ngosongin database lokal kalau semua udah terkirim. Kalau
 masih ada yang antre, datanya tetap disimpan dan akun lain nggak bisa masuk di HP itu sampai akun

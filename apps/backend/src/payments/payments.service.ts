@@ -20,7 +20,7 @@ export class PaymentsService {
    *
    * Semua cek dan penulisan berjalan di satu transaksi yang lebih dulu
    * mengunci baris order (`SELECT ... FOR UPDATE`), sama seperti
-   * releaseToPool, supaya COD dan pelepasan order (pembatalan atau cron) yang
+   * releaseToPool, supaya COD dan pelepasan order (misalnya pembatalan) yang
    * datang bersamaan tidak bisa sama-sama lolos:
    * 1. Order dibaca lewat tx. Tidak ada: 404. Driver bukan pemanggil: 403
    *    dengan code ORDER_NOT_ASSIGNED.

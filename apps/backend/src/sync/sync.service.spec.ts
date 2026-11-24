@@ -185,9 +185,9 @@ describe('SyncService.applyOne', () => {
   // Conflict ack membawa cancelledBy/cancelReason
 
   it('should include cancelledBy and cancelReason in ack.serverData on conflict', async () => {
-    // Server punya order dengan data batal dari cron - saat conflict, data ini
-    // harus ikut di serverData supaya client yang menarik row ini bisa melihat
-    // alasan pembatalan lama.
+    // Server punya order dengan data batal lama dari pelepasan otomatis - saat
+    // conflict, data ini harus ikut di serverData supaya client yang menarik
+    // row ini bisa melihat alasan pembatalan itu.
     const record = makeRecord({
       op: 'update',
       baseVersion: 2,
@@ -1607,7 +1607,7 @@ describe('SyncService.pullSince', () => {
 
   describe('cancelledBy/cancelReason propagation (Temuan 14)', () => {
     test('pullSince membawa cancelledBy & cancelReason untuk order yang punya nilai', async () => {
-      // Order dengan data pembatalan lama (mis. dari cron reassign). Saat
+      // Order dengan data pembatalan lama (mis. dari pelepasan otomatis). Saat
       // customer melakukan pull, kedua field ini harus ikut agar OrderTrackingScreen
       // bisa menampilkan alasan batal yang sebenarnya (OrderTrackingScreen
       // menampilkan text dari cancelReason, lihat syncCancelledOrder handler).

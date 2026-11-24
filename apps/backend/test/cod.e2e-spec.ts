@@ -8,8 +8,6 @@
  * 4. flag-orphaned: jumlah di email dan payment sama dengan data server
  */
 
-jest.unmock('@nestjs/schedule');
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';

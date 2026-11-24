@@ -15,10 +15,6 @@
  * 7. Driver cancel jadi balik ke pool (ASSIGNED + driverId null)
  */
 
-// E2E tests boot real AppModule, unmock @nestjs/schedule so ScheduleModule.forRoot()
-// returns the real class, not the string-only mock (which causes WeakMap error in DI).
-jest.unmock('@nestjs/schedule');
-
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';

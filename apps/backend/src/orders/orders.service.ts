@@ -293,10 +293,8 @@ export class OrdersService {
         data: {
           status: OrderStatusDb.PREPARING,
           driverId, // assign driver saat accept
-          // Bersihkan data batal lama, order barulang ASSIGNED setelah cron
-          // (cancelledBy 'SYSTEM', cancelReason 'system_timeout') akan overwrite
-          // ke null di sini supaya toDomain tidak lagi bawa cancelReason saat
-          // accept berikutnya.
+          // Bersihkan data pelepasan sebelumnya supaya order yang diterima
+          // lagi tidak membawa alasan lama.
           cancelledBy: null,
           cancelReason: null,
           version: { increment: 1 },
@@ -436,9 +434,10 @@ export class OrdersService {
     // Cek 2: driver order bukan pemanggil, tiga cabang seperti di komentar fungsi.
     if (current.driverId !== driverId) {
       // 2a: kiriman ulang pembatalan yang sudah berhasil. Hanya cancelOrder
-      // yang menulis `cancelledBy` dengan id driver (rejectOrder menulis null,
-      // cron 'SYSTEM'), dan versi harus tepat satu di atas kiriman. Kalau
-      // lebih, order sudah diubah lagi setelah pembatalan itu.
+      // yang menulis `cancelledBy` dengan id driver (jalur pelepasan lain
+      // menulis null atau id yang bukan id driver), dan versi harus tepat satu
+      // di atas kiriman. Kalau lebih, order sudah diubah lagi setelah
+      // pembatalan itu.
       if (
         current.status === OrderStatusDb.ASSIGNED &&
         current.driverId === null &&
@@ -498,20 +497,18 @@ export class OrdersService {
   /**
    * Lepas order kembali ke pool dengan atomic OCC update.
    *
-   * Helper terpusat untuk semua "release-to-pool" operations: rejectOrder,
-   * cancelOrder, dan ReassignmentService.triggerReassignment (cron reassignment)
-   * semua lewat sini. Single pool state = ASSIGNED + driverId null, jadi semua
-   * release berakhir di shape yang sama dan findAvailable() bisa find mereka
-   * semua dengan satu query.
+   * Helper terpusat untuk semua "release-to-pool" operations: rejectOrder dan
+   * cancelOrder semua lewat sini. Single pool state = ASSIGNED + driverId
+   * null, jadi semua release berakhir di shape yang sama dan findAvailable()
+   * bisa find mereka semua dengan satu query.
    *
    * Setelah sukses, broadcast ke pool (emitOrderAvailable). Untuk reject
    * dan cancel, customer juga dikabari lewat emitOrderRejected/emitOrderCancelled
    * itu tetap tanggung jawab caller, bukan releaseToPool, karena ada
    * payload spesifik per event (reason untuk cancel, dll).
    *
-   * P2025 jadi ConflictException(VERSION_CONFLICT) supaya caller bisa
-   * translate sesuai konteks (OrdersService.rejectOrder/cancelOrder
-   * propagate ke HTTP 409, ReassignmentService tangkap dan skip silently).
+   * P2025 jadi ConflictException(VERSION_CONFLICT); rejectOrder dan cancelOrder
+   * meneruskannya sebagai HTTP 409.
    *
    * Order dengan COD tercatat (payment CASH PAYMENT CAPTURED) tidak boleh
    * dilepas, supaya COD order itu tidak bisa dicatat lagi oleh driver lain.

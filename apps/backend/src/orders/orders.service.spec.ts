@@ -388,9 +388,9 @@ describe('OrdersService', () => {
       });
     });
 
-    // Temuan 4: order di-cron keluar ASSIGNED dengan cancelReason 'system_timeout',
-    // lalu di-accept jadi data update harus menghapus cancelledBy/cancelReason dan
-    // toDomain tidak membawa cancelReason.
+    // Data lama dari pelepasan otomatis yang dulu ada (cancelledBy 'SYSTEM',
+    // cancelReason 'system_timeout'):
+    // accept menghapus keduanya dan toDomain tidak membawa cancelReason.
     test('accept order yang sebelumnya di-cron: cancelledBy & cancelReason di-clear', async () => {
       const reassignedOrder = {
         ...mockOrderAssigned,
@@ -1552,7 +1552,7 @@ describe('OrdersService', () => {
     });
 
     // Order pool (driverId null) + versi kiriman beda -> 409 ORDER_REASSIGNED.
-    // Bisa terjadi kalau cron melepas order ke pool setelah aplikasi
+    // Bisa terjadi kalau order dilepas ke pool setelah aplikasi
     // membaca versi basi.
     test('order pool (driverId null) dengan versi kiriman beda: 409 ORDER_REASSIGNED', async () => {
       const currentOrder = makeOrder(OrderStatusDb.ASSIGNED, null);

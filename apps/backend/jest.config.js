@@ -4,9 +4,6 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src', '<rootDir>/test'],
   testMatch: ['**/*.spec.ts'],
-  moduleNameMapper: {
-    '^@nestjs/schedule$': '<rootDir>/src/__mocks__/@nestjs/schedule.ts',
-  },
   transform: {
     '^.+\\.tsx?$': [
       'ts-jest',

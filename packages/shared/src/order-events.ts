@@ -65,7 +65,8 @@ export interface OrderRejectedPayload {
  * Order balik ke pool, status ASSIGNED + driverId null, bukan terminal.
  *
  * Dipancarkan saat driver membatalkan order yang dipegangnya (alasan dari
- * driver) dan saat cron melepas order otomatis (alasan 'system_timeout').
+ * driver). Order lama bisa membawa alasan 'system_timeout' dari pelepasan
+ * otomatis yang dulu ada.
  */
 export interface OrderCancelledPayload {
   orderId: string;
