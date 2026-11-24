@@ -28,13 +28,16 @@ import { UserRole, OrderStatus, ReleasedOrder } from '@delivery/shared';
 describe('Orders (e2e) - accept/reject', () => {
   let app: INestApplication;
   let driverToken: string;
+  let driver2Token: string;
   let customerToken: string;
+  let customer2Token: string;
   let prisma: PrismaClient;
   // UUID statis, deterministic, readable, dan valid sebagai @db.Uuid di Prisma.
   // Pola: prefix 'e2e00000-' (8 hex char) + '-0000-0000-' + 12 hex digit suffix.
   // Suffix mnemonic: 'd000' = driver, 'c000' = customer, suffix per-test dari nama test.
   const driverUserId = 'e2e00000-0000-0000-0000-00000000d000';
   const customerUserId = 'e2e00000-0000-0000-0000-00000000c000';
+  const customer2UserId = 'e2e00000-0000-0000-0000-00000000c002';
   // Additional driver IDs used in conflict/race tests
   const driver2UserId = 'e2e00000-0000-0000-0000-0000000d0002';
   const driver3UserId = 'e2e00000-0000-0000-0000-0000000d0003';
@@ -69,6 +72,7 @@ describe('Orders (e2e) - accept/reject', () => {
       { id: customerUserId, role: 'CUSTOMER' as const, name: 'E2E Customer', phone: '+628000000002' },
       { id: driver2UserId, role: 'DRIVER' as const, name: 'E2E Driver 2', phone: '+628000000003' },
       { id: driver3UserId, role: 'DRIVER' as const, name: 'E2E Driver 3', phone: '+628000000004' },
+      { id: customer2UserId, role: 'CUSTOMER' as const, name: 'E2E Customer 2', phone: '+628000000005' },
     ];
     for (const user of testUsers) {
       await prisma.user.upsert({
@@ -79,7 +83,9 @@ describe('Orders (e2e) - accept/reject', () => {
     }
 
     driverToken = generateToken(driverUserId, UserRole.DRIVER);
+    driver2Token = generateToken(driver2UserId, UserRole.DRIVER);
     customerToken = generateToken(customerUserId, UserRole.CUSTOMER);
+    customer2Token = generateToken(customer2UserId, UserRole.CUSTOMER);
 
     // Warm-up: establish Prisma connection pool before any test runs.
     // Without this, a cold pool causes the first query in each Prisma client
@@ -94,11 +100,17 @@ describe('Orders (e2e) - accept/reject', () => {
     // Delete orders first (FK to users), then users
     await prisma.order.deleteMany({
       where: {
-        customerId: { in: [driverUserId, customerUserId, driver2UserId, driver3UserId] },
+        customerId: {
+          in: [driverUserId, customerUserId, customer2UserId, driver2UserId, driver3UserId],
+        },
       },
     });
     await prisma.user.deleteMany({
-      where: { id: { in: [driverUserId, customerUserId, driver2UserId, driver3UserId] } },
+      where: {
+        id: {
+          in: [driverUserId, customerUserId, customer2UserId, driver2UserId, driver3UserId],
+        },
+      },
     });
     await app.close();
     await prisma.$disconnect();
@@ -1931,6 +1943,127 @@ describe('Orders (e2e) - accept/reject', () => {
         expect(ack.serverData.id).toBe(orderId);
       } finally {
         await cleanupOrder();
+      }
+    });
+  });
+
+  describe('POST /orders/:id/request-new-driver', () => {
+    const MENIT = 60 * 1000;
+
+    // Order PREPARING milik driver1, waktu terakhir order disentuh diisi
+    // langsung supaya batas "lama tidak nyambung" bisa diuji.
+    async function createPreparingOrder(id: string, updatedAt: Date) {
+      return prisma.order.upsert({
+        where: { id },
+        create: {
+          id,
+          customerId: customerUserId,
+          driverId: driverUserId,
+          status: OrderStatusDb.PREPARING,
+          itemsJson: [],
+          addressJson: { street: 'Test', city: 'Jakarta' },
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+          updatedAt,
+        },
+        update: {},
+      });
+    }
+
+    test('200: customer minta driver lain, order balik ke pool', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000b01';
+      const lalu = new Date(Date.now() - 31 * MENIT);
+      await createPreparingOrder(orderId, lalu);
+      await prisma.user.update({
+        where: { id: driverUserId },
+        data: { lastSeenAt: lalu },
+      });
+      try {
+        const resp = await request(app.getHttpServer())
+          .post(`/orders/${orderId}/request-new-driver`)
+          .set('Authorization', `Bearer ${customerToken}`)
+          .send({ version: 1 })
+          .expect(200);
+
+        expect(resp.body.status).toBe(OrderStatus.ASSIGNED);
+        expect(resp.body.driverId).toBeUndefined();
+        expect(resp.body.cancelledBy).toBe(customerUserId);
+        expect(resp.body.cancelReason).toBe('driver_unreachable');
+        expect(resp.body.version).toBe(2);
+
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.status).toBe(OrderStatusDb.ASSIGNED);
+        expect(dbOrder?.driverId).toBeNull();
+        expect(dbOrder?.cancelledBy).toBe(customerUserId);
+        expect(dbOrder?.cancelReason).toBe('driver_unreachable');
+        expect(dbOrder?.version).toBe(2);
+
+        // Order sudah di pool, driver lain bisa lihat di daftar Tersedia.
+        const pool = await request(app.getHttpServer())
+          .get('/orders/available')
+          .set('Authorization', `Bearer ${driver2Token}`)
+          .expect(200);
+        const orderIds = (pool.body.items as { orderId: string }[]).map((item) => item.orderId);
+        expect(orderIds).toContain(orderId);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('409: driver masih nyambung, order tetap dipegang driver', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000b02';
+      const lalu = new Date(Date.now() - 31 * MENIT);
+      await createPreparingOrder(orderId, lalu);
+      await prisma.user.update({
+        where: { id: driverUserId },
+        data: { lastSeenAt: new Date() },
+      });
+      try {
+        const resp = await request(app.getHttpServer())
+          .post(`/orders/${orderId}/request-new-driver`)
+          .set('Authorization', `Bearer ${customerToken}`)
+          .send({ version: 1 })
+          .expect(409);
+
+        expect(resp.body.code).toBe('DRIVER_STILL_REACHABLE');
+
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.status).toBe(OrderStatusDb.PREPARING);
+        expect(dbOrder?.driverId).toBe(driverUserId);
+        expect(dbOrder?.version).toBe(1);
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('403: customer lain dan driver tidak boleh minta driver lain', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000b03';
+      const lalu = new Date(Date.now() - 31 * MENIT);
+      await createPreparingOrder(orderId, lalu);
+      await prisma.user.update({
+        where: { id: driverUserId },
+        data: { lastSeenAt: lalu },
+      });
+      try {
+        await request(app.getHttpServer())
+          .post(`/orders/${orderId}/request-new-driver`)
+          .set('Authorization', `Bearer ${customer2Token}`)
+          .send({ version: 1 })
+          .expect(403);
+
+        await request(app.getHttpServer())
+          .post(`/orders/${orderId}/request-new-driver`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .send({ version: 1 })
+          .expect(403);
+
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(dbOrder?.status).toBe(OrderStatusDb.PREPARING);
+        expect(dbOrder?.driverId).toBe(driverUserId);
+        expect(dbOrder?.version).toBe(1);
+      } finally {
+        await cleanupOrder(orderId);
       }
     });
   });

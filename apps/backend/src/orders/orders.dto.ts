@@ -150,7 +150,7 @@ export class UpdateOrderStatusDto {
   version!: number;
 }
 
-/** Request body untuk POST /orders/:id/accept dan /reject. */
+/** Request body untuk POST /orders/:id/accept, /reject, dan /request-new-driver. */
 export class OrderAcceptRejectDto {
   @IsInt({ message: 'version harus bilangan bulat' })
   @Min(1, { message: 'version minimal 1' })

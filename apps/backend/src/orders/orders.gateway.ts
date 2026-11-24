@@ -130,7 +130,8 @@ export class OrdersGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   /**
-   * Mengabari customer saat driver membatalkan order.
+   * Mengabari customer saat driver membatalkan order atau saat customer
+   * meminta driver lain.
    *
    * Status 'ASSIGNED', order balik ke pool, single pool state sekarang ASSIGNED
    * + driverId null (lihat releaseToPool). Customer lihat "Mencari driver",

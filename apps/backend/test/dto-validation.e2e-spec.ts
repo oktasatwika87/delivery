@@ -32,6 +32,7 @@ describe('DTO validation (e2e)', () => {
     'e2e00000-0000-4000-8000-000000000a04',
     'e2e00000-0000-4000-8000-000000000a05',
     'e2e00000-0000-4000-8000-000000000a06',
+    'e2e00000-0000-4000-8000-000000000a07',
   ];
 
   function generateToken(userId: string, role: UserRole): string {
@@ -165,6 +166,32 @@ describe('DTO validation (e2e)', () => {
         .post(`/orders/${order.id}/cancel`)
         .set('Authorization', `Bearer ${driverToken}`)
         .send({ version: '1' });
+
+      expect(res.status).toBe(400);
+    });
+  });
+
+  // POST /orders/:id/request-new-driver
+
+  describe('POST /orders/:id/request-new-driver', () => {
+    test('400: version 0', async () => {
+      const order = await prisma.order.create({
+        data: {
+          id: 'e2e00000-0000-4000-8000-000000000a07',
+          customerId: customerUserId,
+          status: 'ASSIGNED',
+          itemsJson: [],
+          addressJson: {},
+          totalCents: 50000,
+          currency: 'IDR',
+          version: 1,
+        },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post(`/orders/${order.id}/request-new-driver`)
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({ version: 0 });
 
       expect(res.status).toBe(400);
     });

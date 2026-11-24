@@ -18,6 +18,11 @@ export const OrderStatus = {
 
 export type OrderStatus = (typeof OrderStatus)[keyof typeof OrderStatus];
 
+/**
+ * Batas menit tanpa kontak dari driver sebelum customer boleh minta driver lain.
+ */
+export const DRIVER_UNREACHABLE_MINUTES = 30;
+
 export interface OrderItem {
   id: string;
   productId: string;

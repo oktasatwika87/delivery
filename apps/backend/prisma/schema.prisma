@@ -29,6 +29,7 @@ model User {
   // treat null hash sebagai invalid (otomatis reject), jadi aman set optional.
   passwordHash String? @map("password_hash")
   // Di-update setiap kali device driver berhasil sync ke server.
+  // Dipakai untuk menilai kapan customer boleh meminta driver lain.
   lastSeenAt DateTime? @map("last_seen_at")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")

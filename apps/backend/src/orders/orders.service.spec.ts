@@ -55,6 +55,9 @@ describe('OrdersService', () => {
     payment: {
       findFirst: jest.Mock;
     };
+    user: {
+      findUnique: jest.Mock;
+    };
     $executeRaw: jest.Mock;
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
@@ -87,6 +90,10 @@ describe('OrdersService', () => {
         // Bawaan: belum ada COD tercatat. Tes yang butuh COD tercatat
         // mengganti nilai ini.
         findFirst: jest.fn().mockResolvedValue(null),
+      },
+      user: {
+        // Bawaan: driver belum pernah sync, jadi lastSeenAt kosong.
+        findUnique: jest.fn().mockResolvedValue({ lastSeenAt: null }),
       },
       $executeRaw: jest.fn(),
       $queryRaw: jest.fn(),
@@ -1794,6 +1801,238 @@ describe('OrdersService', () => {
       await service.transitionStatus(orderId, 'OUT_FOR_DELIVERY', version, driverId);
 
       expect(mockPrisma.payment.findFirst).not.toHaveBeenCalled();
+    });
+  });
+
+  // ===== requestNewDriver tests =====
+
+  describe('requestNewDriver()', () => {
+    const MENIT = 60 * 1000;
+    const otherCustomerId = 'customer-uuid-2';
+
+    function menitLalu(jumlah: number): Date {
+      return new Date(Date.now() - jumlah * MENIT);
+    }
+
+    // Order PREPARING milik driver, waktu terakhir order disentuh bisa diatur.
+    function makePreparingOrder(updatedAt: Date) {
+      return {
+        id: orderId,
+        customerId,
+        driverId,
+        status: OrderStatusDb.PREPARING,
+        itemsJson: [],
+        addressJson: {},
+        totalCents: 50000,
+        currency: 'IDR',
+        notes: null,
+        version,
+        createdAt: new Date(),
+        updatedAt,
+        cancelledBy: null,
+        cancelReason: null,
+      };
+    }
+
+    test('gagal: order tidak ditemukan -> 404', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(null);
+
+      await expect(service.requestNewDriver(orderId, version, customerId)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(mockGateway.emitOrderCancelled).not.toHaveBeenCalled();
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    test('gagal: order bukan milik pemanggil -> 403', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(makePreparingOrder(menitLalu(31)));
+
+      await expect(
+        service.requestNewDriver(orderId, version, otherCustomerId),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockGateway.emitOrderCancelled).not.toHaveBeenCalled();
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    test('gagal: versi beda -> 409 VERSION_CONFLICT', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(makePreparingOrder(menitLalu(31)));
+
+      let caught: unknown;
+      try {
+        await service.requestNewDriver(orderId, version + 1, customerId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({ code: 'VERSION_CONFLICT' });
+      expect(mockGateway.emitOrderCancelled).not.toHaveBeenCalled();
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    test('gagal: status OUT_FOR_DELIVERY -> 409 ORDER_NOT_RELEASABLE', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        ...makePreparingOrder(menitLalu(31)),
+        status: OrderStatusDb.OUT_FOR_DELIVERY,
+      });
+
+      let caught: unknown;
+      try {
+        await service.requestNewDriver(orderId, version, customerId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({ code: 'ORDER_NOT_RELEASABLE' });
+      expect(mockGateway.emitOrderCancelled).not.toHaveBeenCalled();
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    test('gagal: status ASSIGNED tanpa driver -> 409 ORDER_NOT_RELEASABLE', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue({
+        ...makePreparingOrder(menitLalu(31)),
+        status: OrderStatusDb.ASSIGNED,
+        driverId: null,
+      });
+
+      let caught: unknown;
+      try {
+        await service.requestNewDriver(orderId, version, customerId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({ code: 'ORDER_NOT_RELEASABLE' });
+      expect(mockGateway.emitOrderCancelled).not.toHaveBeenCalled();
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    test('gagal: driver masih nyambung (lastSeenAt baru, order lama) -> 409 DRIVER_STILL_REACHABLE', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(makePreparingOrder(menitLalu(120)));
+      mockPrisma.user.findUnique.mockResolvedValue({ lastSeenAt: menitLalu(5) });
+
+      let caught: unknown;
+      try {
+        await service.requestNewDriver(orderId, version, customerId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({ code: 'DRIVER_STILL_REACHABLE' });
+      expect(mockGateway.emitOrderCancelled).not.toHaveBeenCalled();
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    test('gagal: driver masih nyambung (lastSeenAt lama, order baru disentuh) -> 409 DRIVER_STILL_REACHABLE', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(makePreparingOrder(menitLalu(5)));
+      mockPrisma.user.findUnique.mockResolvedValue({ lastSeenAt: menitLalu(120) });
+
+      let caught: unknown;
+      try {
+        await service.requestNewDriver(orderId, version, customerId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({ code: 'DRIVER_STILL_REACHABLE' });
+      expect(mockGateway.emitOrderCancelled).not.toHaveBeenCalled();
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
+    });
+
+    test('berhasil: driver lama sudah lama tidak nyambung -> order balik ke pool', async () => {
+      const releasedOrder = {
+        ...makePreparingOrder(menitLalu(31)),
+        status: OrderStatusDb.ASSIGNED,
+        driverId: null,
+        cancelledBy: customerId,
+        cancelReason: 'driver_unreachable',
+        version: version + 1,
+      };
+
+      mockPrisma.order.findUnique.mockResolvedValue(makePreparingOrder(menitLalu(31)));
+      mockPrisma.user.findUnique.mockResolvedValue({ lastSeenAt: menitLalu(31) });
+      mockPrisma.order.update.mockResolvedValue(releasedOrder);
+
+      const result = await service.requestNewDriver(orderId, version, customerId);
+
+      expect(mockPrisma.order.update).toHaveBeenCalledWith({
+        where: { id: orderId, version },
+        data: expect.objectContaining({
+          status: OrderStatusDb.ASSIGNED,
+          driverId: null,
+          cancelledBy: customerId,
+          cancelReason: 'driver_unreachable',
+          version: { increment: 1 },
+        }),
+      });
+      expect(mockGateway.emitOrderCancelled).toHaveBeenCalledTimes(1);
+      expect(mockGateway.emitOrderCancelled).toHaveBeenCalledWith(
+        customerId,
+        orderId,
+        version + 1,
+        'driver_unreachable',
+      );
+      expect(mockGateway.emitOrderAvailable).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe('ASSIGNED');
+      expect(result.driverId).toBeUndefined();
+      expect(result.cancelledBy).toBe(customerId);
+      expect(result.cancelReason).toBe('driver_unreachable');
+      expect(result.version).toBe(version + 1);
+    });
+
+    test('berhasil: driver belum pernah sync (lastSeenAt null) -> order balik ke pool', async () => {
+      const releasedOrder = {
+        ...makePreparingOrder(menitLalu(31)),
+        status: OrderStatusDb.ASSIGNED,
+        driverId: null,
+        cancelledBy: customerId,
+        cancelReason: 'driver_unreachable',
+        version: version + 1,
+      };
+
+      mockPrisma.order.findUnique.mockResolvedValue(makePreparingOrder(menitLalu(31)));
+      mockPrisma.user.findUnique.mockResolvedValue({ lastSeenAt: null });
+      mockPrisma.order.update.mockResolvedValue(releasedOrder);
+
+      const result = await service.requestNewDriver(orderId, version, customerId);
+
+      expect(result.status).toBe('ASSIGNED');
+      expect(result.cancelReason).toBe('driver_unreachable');
+      expect(mockGateway.emitOrderCancelled).toHaveBeenCalledTimes(1);
+    });
+
+    test('gagal: COD sudah tercatat -> 409 COD_ALREADY_CAPTURED', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(makePreparingOrder(menitLalu(31)));
+      mockPrisma.user.findUnique.mockResolvedValue({ lastSeenAt: menitLalu(31) });
+      mockPrisma.payment.findFirst.mockResolvedValue({
+        id: 'payment-uuid-1',
+        orderId,
+        method: 'CASH',
+        kind: 'PAYMENT',
+        status: 'CAPTURED',
+      });
+
+      let caught: unknown;
+      try {
+        await service.requestNewDriver(orderId, version, customerId);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ConflictException);
+      const response = (caught as ConflictException).getResponse();
+      expect(response).toMatchObject({ code: 'COD_ALREADY_CAPTURED' });
+      expect(mockGateway.emitOrderCancelled).not.toHaveBeenCalled();
+      expect(mockPrisma.order.update).not.toHaveBeenCalled();
     });
   });
 

@@ -129,6 +129,26 @@ export class OrdersController {
   }
 
   /**
+   * Customer minta driver lain.
+   * HANYA bisa diakses oleh user dengan role CUSTOMER.
+   * Order harus masih PREPARING, punya driver, dan kontak terakhir driver
+   * sudah lewat batas menit tanpa nyambung.
+   */
+  @Post(':id/request-new-driver')
+  @HttpCode(HttpStatus.OK)
+  requestNewDriver(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: OrderAcceptRejectDto,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: string,
+  ) {
+    if (role !== UserRole.CUSTOMER) {
+      throw new ForbiddenException('Hanya customer yang bisa meminta driver lain');
+    }
+    return this.ordersService.requestNewDriver(id, body.version, userId);
+  }
+
+  /**
    * Driver reject order.
    * HANYA bisa diakses oleh user dengan role DRIVER.
    * Order harus dalam status ASSIGNED.

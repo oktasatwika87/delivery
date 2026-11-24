@@ -13,6 +13,7 @@ import {
 } from '@delivery/shared';
 
 import { OrdersGateway } from './orders.gateway';
+import { driverUnreachableSince } from './driver-reachability';
 
 /**
  * Slim payload untuk GET /orders/available.
@@ -495,20 +496,118 @@ export class OrdersService {
   }
 
   /**
+   * Customer minta driver lain untuk order yang dipegang driver lama.
+   *
+   * Server sendiri tidak pernah melepas order yang sudah diterima, jadi kalau
+   * HP driver lama sudah lama tidak tersambung, yang memutuskan order itu
+   * ditinggal atau bukan adalah customer. Syaratnya: order masih PREPARING,
+   * punya driver, dan kontak terakhir driver sudah lewat batas menit.
+   *
+   * Urutan cek:
+   * 1. Order tidak ada: 404.
+   * 2. Order bukan milik pemanggil: 403.
+   * 3. Versi beda: 409 VERSION_CONFLICT.
+   * 4. Status bukan PREPARING atau belum ada driver: 409
+   *    ORDER_NOT_RELEASABLE.
+   * 5. Driver masih tersambung: 409 DRIVER_STILL_REACHABLE.
+   * 6. Lepas ke pool, lalu kabari customer.
+   *
+   * Barang belum dibawa driver (order masih PREPARING), jadi customer masih
+   * aman memutuskan untuk cari driver lain.
+   */
+  async requestNewDriver(
+    id: string,
+    expectedVersion: number,
+    customerId: string,
+  ): Promise<Order> {
+    const current = await this.prisma.order.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException(`Order ${id} tidak ditemukan`);
+
+    if (current.customerId !== customerId) {
+      throw new ForbiddenException('Order ini bukan milik Anda');
+    }
+
+    if (current.version !== expectedVersion) {
+      throw new ConflictException({
+        code: 'VERSION_CONFLICT',
+        message: 'Order sudah diubah oleh permintaan lain. Muat ulang lalu coba lagi.',
+      });
+    }
+
+    if (current.status !== OrderStatusDb.PREPARING || current.driverId === null) {
+      throw new ConflictException({
+        code: 'ORDER_NOT_RELEASABLE',
+        message: 'Order ini sudah tidak bisa dialihkan ke driver lain.',
+      });
+    }
+
+    const unreachableSince = await this.unreachableSince(current);
+    if (unreachableSince === null) {
+      throw new ConflictException({
+        code: 'DRIVER_STILL_REACHABLE',
+        message: 'Driver masih tersambung, jadi order tetap dipegang driver.',
+      });
+    }
+
+    const updated = await this.releaseToPool({
+      orderId: id,
+      expectedVersion,
+      cancelledBy: customerId,
+      cancelReason: 'driver_unreachable',
+    });
+
+    this.ordersGateway.emitOrderCancelled(
+      current.customerId,
+      id,
+      updated.version,
+      'driver_unreachable',
+    );
+
+    return updated;
+  }
+
+  /**
+   * Kapan driver terakhir tersambung, kalau sudah lewat batas menit tanpa
+   * kontak. Order yang bukan PREPARING atau belum ada driver-nya tidak perlu
+   * dicek, jadi kasus itu tidak perlu membaca tabel user.
+   */
+  private async unreachableSince(order: {
+    status: OrderStatusDb;
+    driverId: string | null;
+    updatedAt: Date;
+  }): Promise<Date | null> {
+    if (order.status !== OrderStatusDb.PREPARING || order.driverId === null) {
+      return null;
+    }
+
+    const driver = await this.prisma.user.findUnique({
+      where: { id: order.driverId },
+      select: { lastSeenAt: true },
+    });
+
+    return driverUnreachableSince(
+      driver?.lastSeenAt ?? null,
+      order.updatedAt,
+      new Date(),
+    );
+  }
+
+  /**
    * Lepas order kembali ke pool dengan atomic OCC update.
    *
-   * Helper terpusat untuk semua "release-to-pool" operations: rejectOrder dan
-   * cancelOrder semua lewat sini. Single pool state = ASSIGNED + driverId
-   * null, jadi semua release berakhir di shape yang sama dan findAvailable()
-   * bisa find mereka semua dengan satu query.
+   * Helper terpusat untuk semua "release-to-pool" operations: rejectOrder,
+   * cancelOrder, dan requestNewDriver semua lewat sini. Single pool state =
+   * ASSIGNED + driverId null, jadi semua release berakhir di shape yang sama
+   * dan findAvailable() bisa find mereka semua dengan satu query.
    *
-   * Setelah sukses, broadcast ke pool (emitOrderAvailable). Untuk reject
-   * dan cancel, customer juga dikabari lewat emitOrderRejected/emitOrderCancelled
-   * itu tetap tanggung jawab caller, bukan releaseToPool, karena ada
-   * payload spesifik per event (reason untuk cancel, dll).
+   * Setelah sukses, broadcast ke pool (emitOrderAvailable). Untuk reject,
+   * cancel, dan requestNewDriver, customer juga dikabari lewat
+   * emitOrderRejected/emitOrderCancelled. Itu tetap tanggung jawab caller,
+   * bukan releaseToPool, karena ada payload spesifik per event (reason untuk
+   * cancel, dll).
    *
-   * P2025 jadi ConflictException(VERSION_CONFLICT); rejectOrder dan cancelOrder
-   * meneruskannya sebagai HTTP 409.
+   * P2025 jadi ConflictException(VERSION_CONFLICT); rejectOrder, cancelOrder,
+   * dan requestNewDriver meneruskannya sebagai HTTP 409.
    *
    * Order dengan COD tercatat (payment CASH PAYMENT CAPTURED) tidak boleh
    * dilepas, supaya COD order itu tidak bisa dicatat lagi oleh driver lain.

@@ -166,6 +166,7 @@ export class SyncService {
     }
 
     // Update driver lastSeenAt setiap kali device berhasil sync.
+    // Dipakai untuk menilai kapan customer boleh meminta driver lain.
     await this.prisma.user.updateMany({
       where: { id: userId },
       data: { lastSeenAt: new Date() },
