@@ -2036,6 +2036,96 @@ describe('OrdersService', () => {
     });
   });
 
+  // ===== findById tests =====
+
+  describe('findById()', () => {
+    const MENIT = 60 * 1000;
+
+    function menitLalu(jumlah: number): Date {
+      return new Date(Date.now() - jumlah * MENIT);
+    }
+
+    function makeOrderWith(
+      status: OrderStatusDb,
+      pemilikDriver: string | null,
+      updatedAt: Date,
+    ) {
+      return {
+        id: orderId,
+        customerId,
+        driverId: pemilikDriver,
+        status,
+        itemsJson: [],
+        addressJson: {},
+        totalCents: 50000,
+        currency: 'IDR',
+        notes: null,
+        version,
+        createdAt: new Date(),
+        updatedAt,
+        cancelledBy: null,
+        cancelReason: null,
+      };
+    }
+
+    test('customer: driver sudah lama tidak nyambung, bawa waktu kontak terakhir', async () => {
+      const lalu = menitLalu(31);
+      mockPrisma.order.findUnique.mockResolvedValue(
+        makeOrderWith(OrderStatusDb.PREPARING, driverId, lalu),
+      );
+      mockPrisma.user.findUnique.mockResolvedValue({ lastSeenAt: lalu });
+
+      const result = await service.findById(orderId, customerId);
+
+      expect(result.driverUnreachableSince).toBe(lalu.toISOString());
+    });
+
+    test('customer: driver masih nyambung, driverUnreachableSince null', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(
+        makeOrderWith(OrderStatusDb.PREPARING, driverId, menitLalu(120)),
+      );
+      mockPrisma.user.findUnique.mockResolvedValue({ lastSeenAt: menitLalu(5) });
+
+      const result = await service.findById(orderId, customerId);
+
+      expect(result.driverUnreachableSince).toBeNull();
+    });
+
+    test('customer: order bukan PREPARING, driverUnreachableSince null tanpa baca user', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(
+        makeOrderWith(OrderStatusDb.OUT_FOR_DELIVERY, driverId, menitLalu(120)),
+      );
+
+      const result = await service.findById(orderId, customerId);
+
+      expect(result.driverUnreachableSince).toBeNull();
+      expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+    });
+
+    test('customer: order tanpa driver, driverUnreachableSince null', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(
+        makeOrderWith(OrderStatusDb.ASSIGNED, null, menitLalu(120)),
+      );
+
+      const result = await service.findById(orderId, customerId);
+
+      expect(result.driverUnreachableSince).toBeNull();
+      expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+    });
+
+    test('driver: order detail tidak punya driverUnreachableSince', async () => {
+      mockPrisma.order.findUnique.mockResolvedValue(
+        makeOrderWith(OrderStatusDb.PREPARING, driverId, menitLalu(31)),
+      );
+
+      const result = await service.findById(orderId, driverId);
+
+      expect(result.driverUnreachableSince).toBeUndefined();
+      expect('driverUnreachableSince' in result).toBe(false);
+      expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
   // ===== findAvailable tests =====
 
   describe('findAvailable()', () => {

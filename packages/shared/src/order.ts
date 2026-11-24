@@ -69,6 +69,13 @@ export interface Order {
   cancelledBy?: string;
   /** Alasan cancel yang diberikan driver. */
   cancelReason?: string;
+
+  /**
+   * Hanya diisi di GET /orders/:id untuk customer order itu. Berisi waktu
+   * kontak terakhir driver (ISO) kalau customer sudah boleh minta driver
+   * lain, selain itu null.
+   */
+  driverUnreachableSince?: string | null;
 }
 
 /** Request body untuk create order dari mobile. */

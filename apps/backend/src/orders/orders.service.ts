@@ -54,6 +54,17 @@ export class OrdersService {
     if (row.customerId !== userId && row.driverId !== userId) {
       throw new ForbiddenException('Order ini bukan milik Anda');
     }
+    // Customer butuh tahu sejak kapan driver-nya tidak tersambung, kalau
+    // dia sudah boleh minta driver lain. Driver tidak butuh info itu.
+    if (row.customerId === userId) {
+      const unreachableSince = await this.unreachableSince(row);
+      return {
+        ...this.toDomain(row),
+        driverUnreachableSince: unreachableSince
+          ? unreachableSince.toISOString()
+          : null,
+      };
+    }
     return this.toDomain(row);
   }
 

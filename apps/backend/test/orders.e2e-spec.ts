@@ -2037,6 +2037,36 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
 
+    test('GET /orders/:id: customer bawa waktu driver terakhir nyambung, driver tidak', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000b04';
+      const lalu = new Date(Date.now() - 31 * MENIT);
+      await createPreparingOrder(orderId, lalu);
+      await prisma.user.update({
+        where: { id: driverUserId },
+        data: { lastSeenAt: lalu },
+      });
+      try {
+        const customerResp = await request(app.getHttpServer())
+          .get(`/orders/${orderId}`)
+          .set('Authorization', `Bearer ${customerToken}`)
+          .expect(200);
+
+        const dbOrder = await prisma.order.findUnique({ where: { id: orderId } });
+        expect(customerResp.body.driverUnreachableSince).toBe(
+          dbOrder?.updatedAt.toISOString(),
+        );
+
+        const driverResp = await request(app.getHttpServer())
+          .get(`/orders/${orderId}`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .expect(200);
+
+        expect(driverResp.body.driverUnreachableSince).toBeUndefined();
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
     test('403: customer lain dan driver tidak boleh minta driver lain', async () => {
       const orderId = 'e2e00000-0000-0000-0000-000000000b03';
       const lalu = new Date(Date.now() - 31 * MENIT);
