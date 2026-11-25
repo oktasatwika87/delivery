@@ -138,10 +138,12 @@ describe('CashBox', () => {
     const teks = StyleSheet.flatten(pohon.getByText('Siapkan uang tunai').props.style);
     expect(teks.color).toBe(themes.terang.onAccent);
     expect(teks.fontFamily).toBe('PlusJakartaSans-Medium');
+    expect(teks.fontSize).toBe(15);
 
     const jumlah = StyleSheet.flatten(pohon.getByText(JUMLAH).props.style);
     expect(jumlah.color).toBe(themes.terang.onAccent);
     expect(jumlah.fontFamily).toBe('PlusJakartaSans-Bold');
+    expect(jumlah.fontSize).toBe(22);
 
     const ikon = pohon.UNSAFE_getByType(Icon);
     expect(ikon.props.name).toBe('payments');

@@ -8,7 +8,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, type TextStyle } from 'react-native';
 import Animated, {
   runOnJS,
   useAnimatedStyle,
@@ -46,6 +46,20 @@ const TEKS: Record<CashBoxVariant, string> = {
   diterima: 'Pembayaran tunai diterima',
 };
 
+/** Gaya huruf teks isi per bentuk. */
+const GAYA_TEKS: Record<CashBoxVariant, TextStyle> = {
+  tagih: type.bodySm,
+  siapkan: type.bodyMdMedium,
+  diterima: type.bodySmMedium,
+};
+
+/** Gaya huruf jumlah nominal per bentuk. */
+const GAYA_JUMLAH: Record<CashBoxVariant, TextStyle> = {
+  tagih: type.amountLg,
+  siapkan: type.amountLg,
+  diterima: type.stat,
+};
+
 const PADDING_SAMPING = 14;
 const JARAK_ISI = space[3];
 const UKURAN_TANDA = 24;
@@ -55,24 +69,50 @@ const PANJANG_CENTANG = 14.78;
 const MASUK_ISI = fadeIn();
 
 interface BentukKotak {
+  /** Warna isi kotak. */
   backgroundColor: string;
+  /** Warna tepi kotak. */
   borderColor: string;
+  /** Warna ikon di depan isi. */
+  warnaIkon: string;
+  /** Warna teks isi. */
+  warnaTeks: string;
+  /** Warna angka nominal. */
+  warnaJumlah: string;
 }
 
 /**
- * Warna kotak dan tepinya untuk tiap bentuk.
+ * Warna kotak, tepinya, dan isi isinya untuk tiap bentuk.
  *
  * Bentuk siapkan memakai warna aksen untuk latar dan tepinya sekaligus, jadi
  * tepinya tidak terlihat tapi ukurannya sama dengan bentuk lain.
  */
 function bentukKotak(colors: ThemeColors, variant: CashBoxVariant): BentukKotak {
   if (variant === 'tagih') {
-    return { backgroundColor: colors.surface, borderColor: colors.accentLine };
+    return {
+      backgroundColor: colors.surface,
+      borderColor: colors.accentLine,
+      warnaIkon: colors.accent,
+      warnaTeks: colors.textMuted,
+      warnaJumlah: colors.text,
+    };
   }
   if (variant === 'siapkan') {
-    return { backgroundColor: colors.accent, borderColor: colors.accent };
+    return {
+      backgroundColor: colors.accent,
+      borderColor: colors.accent,
+      warnaIkon: colors.onAccent,
+      warnaTeks: colors.onAccent,
+      warnaJumlah: colors.onAccent,
+    };
   }
-  return { backgroundColor: colors.infoWash, borderColor: colors.infoLine };
+  return {
+    backgroundColor: colors.infoWash,
+    borderColor: colors.infoLine,
+    warnaIkon: colors.info,
+    warnaTeks: colors.text,
+    warnaJumlah: colors.text,
+  };
 }
 
 interface IsiProps {
@@ -88,11 +128,7 @@ function IsiKotak({ variant, amountText, animate }: IsiProps): React.JSX.Element
   // yang sedang digambar tidak melompat jadi utuh saat isi lama selesai keluar.
   const [gambarCentang] = useState(animate);
 
-  const siapkan = variant === 'siapkan';
-  const warnaTeks = siapkan ? colors.onAccent : variant === 'tagih' ? colors.textMuted : colors.text;
-  const gayaTeks = siapkan ? styles.teksSiapkan : variant === 'tagih' ? styles.teksTagih : styles.teksDiterima;
-  const gayaJumlah = siapkan ? styles.jumlahSiapkan : variant === 'tagih' ? styles.jumlahTagih : styles.jumlahDiterima;
-  const warnaJumlah = siapkan ? colors.onAccent : colors.text;
+  const bentuk = bentukKotak(colors, variant);
 
   return (
     <>
@@ -108,14 +144,16 @@ function IsiKotak({ variant, amountText, animate }: IsiProps): React.JSX.Element
           />
         </Svg>
       ) : (
-        <Icon
-          name="payments"
-          size={size.icon}
-          color={siapkan ? colors.onAccent : colors.accent}
-        />
+        <Icon name="payments" size={size.icon} color={bentuk.warnaIkon} />
       )}
-      <Text style={[styles.teks, gayaTeks, { color: warnaTeks }]}>{TEKS[variant]}</Text>
-      <Text style={[gayaJumlah, { color: warnaJumlah }]}>{amountText}</Text>
+      <Text
+        style={[styles.teks, GAYA_TEKS[variant], { color: bentuk.warnaTeks }]}
+      >
+        {TEKS[variant]}
+      </Text>
+      <Text style={[GAYA_JUMLAH[variant], { color: bentuk.warnaJumlah }]}>
+        {amountText}
+      </Text>
     </>
   );
 }
@@ -252,23 +290,5 @@ const styles = StyleSheet.create({
   },
   teks: {
     flex: 1,
-  },
-  teksTagih: {
-    ...type.bodySm,
-  },
-  teksSiapkan: {
-    ...type.bodyMdMedium,
-  },
-  teksDiterima: {
-    ...type.bodySmMedium,
-  },
-  jumlahTagih: {
-    ...type.amountLg,
-  },
-  jumlahSiapkan: {
-    ...type.amountLg,
-  },
-  jumlahDiterima: {
-    ...type.stat,
   },
 });
