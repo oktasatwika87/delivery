@@ -3,7 +3,7 @@
  *
  * Lembar muncul dari bawah layar untuk minta kepastian pengguna. Lembar naik
  * sambil motornya jalan ke kanan, dan keluar dengan motor berbalik ke kiri
- * kalau pembatalannya yang dipilih.
+ * kalau Tidak yang dipilih.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -43,14 +43,18 @@ const PANJANG_GARIS_BIRU = MARGIN_GAMBAR + UKURAN_RIDER.ujungRodaDepanX;
 const DURASI_MASUK_GESER = 450;
 /** Jeda motor berjalan setelah lembar mulai naik. */
 const JEDA_MASUK_GESER = 60;
-/** Durasi gambar berbalik arah. */
-const DURASI_BALIK = 100;
-/** Durasi motor berjalan ke kiri saat pembatalan. */
-const DURASI_KELUAR_GESER = 360;
-/** Jeda lembar turun saat keluar. */
-const JEDA_KELUAR_NAIK = 140;
-/** Jeda latar pudar saat keluar. */
-const JEDA_KELUAR_LATAR = 300;
+/** Durasi gambar berbalik arah saat keluar. */
+const DURASI_BALIK = 140;
+/** Jeda motor berjalan ke kiri setelah berbalik. */
+const JEDA_TIDAK_GESER = 100;
+/** Jeda lembar turun setelah motor berjalan ke kiri. */
+const JEDA_TIDAK_LEMBAR = 180;
+/** Jeda latar pudar setelah lembar mulai turun. */
+const JEDA_TIDAK_LATAR = 360;
+/** Jeda lembar turun saat keluar lewat Ya. */
+const JEDA_YA_LEMBAR = 140;
+/** Jeda latar pudar saat keluar lewat Ya. */
+const JEDA_YA_LATAR = 300;
 
 export type ConfirmSheetTone = 'primary' | 'danger';
 
@@ -112,8 +116,8 @@ export function ConfirmSheet({
     setTerpasang(false);
   }, []);
 
-  /** Keluar karena pembatalan: motor berbalik lalu jalan ke kiri. */
-  const keluarBatal = useCallback(() => {
+  /** Keluar karena Tidak: motor berbalik lalu jalan ke kiri. */
+  const keluarTidak = useCallback(() => {
     if (sedangKeluar.current) return;
     sedangKeluar.current = true;
 
@@ -121,19 +125,22 @@ export function ConfirmSheet({
       duration: DURASI_BALIK,
       easing: standardEasing,
     });
-    geser.value = withTiming(-(MARGIN_GAMBAR + UKURAN_RIDER.lebar), {
-      duration: DURASI_KELUAR_GESER,
-      easing: exitEasing,
-    });
+    geser.value = withDelay(
+      JEDA_TIDAK_GESER,
+      withTiming(-(MARGIN_GAMBAR + UKURAN_RIDER.lebar), {
+        duration: motion.duration.exit,
+        easing: exitEasing,
+      }),
+    );
     naik.value = withDelay(
-      JEDA_KELUAR_NAIK,
+      JEDA_TIDAK_LEMBAR,
       withTiming(tinggiLembar, {
         duration: motion.duration.exit,
         easing: exitEasing,
       }),
     );
     latar.value = withDelay(
-      JEDA_KELUAR_LATAR,
+      JEDA_TIDAK_LATAR,
       withTiming(
         0,
         { duration: motion.duration.fadeOut, easing: exitEasing },
@@ -154,14 +161,14 @@ export function ConfirmSheet({
       easing: exitEasing,
     });
     naik.value = withDelay(
-      JEDA_KELUAR_NAIK,
+      JEDA_YA_LEMBAR,
       withTiming(tinggiLembar, {
         duration: motion.duration.exit,
         easing: exitEasing,
       }),
     );
     latar.value = withDelay(
-      JEDA_KELUAR_LATAR,
+      JEDA_YA_LATAR,
       withTiming(
         0,
         { duration: motion.duration.fadeOut, easing: exitEasing },
@@ -183,8 +190,8 @@ export function ConfirmSheet({
     if (sudahPilih.current || sedangKeluar.current) return;
     sudahPilih.current = true;
     onCancel();
-    keluarBatal();
-  }, [onCancel, keluarBatal]);
+    keluarTidak();
+  }, [onCancel, keluarTidak]);
 
   // Lembar yang dibuka lagi dipasang ulang dan geraknya diulang dari awal.
   useEffect(() => {
@@ -200,10 +207,10 @@ export function ConfirmSheet({
       return;
     }
 
-    // Ditutup dari luar: keluar seperti pembatalan, tanpa memanggil apa pun.
+    // Ditutup dari luar: keluar seperti memilih Tidak, tanpa memanggil apa pun.
     sudahPilih.current = true;
-    keluarBatal();
-  }, [visible, keluarBatal, opasitasLembar]);
+    keluarTidak();
+  }, [visible, keluarTidak, opasitasLembar]);
 
   // Ukuran lembar diketahui dari pengukuran pertamanya, lalu geraknya mulai.
   const ukurLembar = useCallback(

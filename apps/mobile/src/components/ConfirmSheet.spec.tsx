@@ -522,6 +522,7 @@ describe('ConfirmSheet', () => {
 
   it('Ya membuat motor jalan ke kanan keluar dari tepi lembar', () => {
     const timing = jest.spyOn(reanimated, 'withTiming');
+    const tunda = jest.spyOn(reanimated, 'withDelay');
     const pohon = render(lembar());
     ukur(pohon);
 
@@ -543,27 +544,35 @@ describe('ConfirmSheet', () => {
       },
       expect.any(Function),
     );
+    expect(tunda).toHaveBeenCalledWith(140, 300);
+    expect(tunda).toHaveBeenCalledWith(300, 0);
+    expect(timing).not.toHaveBeenCalledWith(-1, expect.anything());
   });
 
   it('Tidak membuat motor berbalik lalu jalan ke kiri', () => {
     const timing = jest.spyOn(reanimated, 'withTiming');
+    const tunda = jest.spyOn(reanimated, 'withDelay');
     const pohon = render(lembar());
     ukur(pohon);
 
     fireEvent.press(pohon.getByLabelText('Tidak'));
 
     expect(timing).toHaveBeenCalledWith(-1, {
-      duration: 100,
+      duration: 140,
       easing: standardEasing,
     });
     expect(timing).toHaveBeenCalledWith(-134, {
-      duration: 360,
+      duration: 260,
       easing: exitEasing,
     });
+    expect(tunda).toHaveBeenCalledWith(100, -134);
+    expect(tunda).toHaveBeenCalledWith(180, 300);
+    expect(tunda).toHaveBeenCalledWith(360, 0);
   });
 
   it('ditutup dari luar motor keluar tanpa memanggil apa pun', () => {
     const timing = jest.spyOn(reanimated, 'withTiming');
+    const tunda = jest.spyOn(reanimated, 'withDelay');
     const onCancel = jest.fn();
     const pohon = render(
       <ConfirmSheet
@@ -590,8 +599,15 @@ describe('ConfirmSheet', () => {
 
     expect(onCancel).not.toHaveBeenCalled();
     expect(timing).toHaveBeenCalledWith(-1, {
-      duration: 100,
+      duration: 140,
       easing: standardEasing,
     });
+    expect(timing).toHaveBeenCalledWith(-134, {
+      duration: 260,
+      easing: exitEasing,
+    });
+    expect(tunda).toHaveBeenCalledWith(100, -134);
+    expect(tunda).toHaveBeenCalledWith(180, 300);
+    expect(tunda).toHaveBeenCalledWith(360, 0);
   });
 });
