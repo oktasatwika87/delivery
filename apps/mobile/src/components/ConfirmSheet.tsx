@@ -71,7 +71,10 @@ export interface ConfirmSheetProps {
   tone?: ConfirmSheetTone;
   /** Dipanggil saat tombol Ya ditekan. */
   onConfirm: () => void;
-  /** Dipanggil saat tombol Tidak ditekan atau lembar ditutup dari luar. */
+  /**
+   * Dipanggil saat Tidak dipilih lewat tombol Tidak, ketuk latar, tombol
+   * kembali Android, atau gestur escape.
+   */
   onCancel: () => void;
 }
 
@@ -79,7 +82,8 @@ export interface ConfirmSheetProps {
  * Lembar konfirmasi dari bawah.
  *
  * Pemanggil mengubah `visible` jadi false di dalam `onConfirm` dan
- * `onCancel`. Kalau tidak, lembar tetap terpasang dan tombolnya menganggur.
+ * `onCancel`. Kalau tidak, lembar tetap lepas sesudah gerak keluar, tapi
+ * tidak bisa dibuka lagi selama `visible` masih true.
  */
 export function ConfirmSheet({
   visible,

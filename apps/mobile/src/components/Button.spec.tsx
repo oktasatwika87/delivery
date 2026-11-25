@@ -211,7 +211,7 @@ describe('Button', () => {
     expect(gaya.fontSize).toBe(15);
   });
 
-  it('tombol hantu ukuran besar memakai huruf besar tebal', () => {
+  it('teks tombol hantu ukuran besar sama dengan tombol utama', () => {
     const { getByText } = render(
       <Button title="Abaikan" onPress={() => {}} variant="ghost" size="lg" />,
     );
@@ -220,7 +220,7 @@ describe('Button', () => {
     expect(gaya.fontFamily).toBe('PlusJakartaSans-SemiBold');
   });
 
-  it('tombol kedua ukuran besar memakai huruf besar tebal', () => {
+  it('teks tombol kedua ukuran besar sama dengan tombol utama', () => {
     const { getByText } = render(
       <Button title="Coba lagi" onPress={() => {}} variant="secondary" size="lg" />,
     );

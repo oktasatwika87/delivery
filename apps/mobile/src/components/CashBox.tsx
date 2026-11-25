@@ -1,10 +1,10 @@
 /**
  * Kotak tunai.
  *
- * Tiga bentuk: tagih, saat uang masih diminta ke driver, siapkan, saat
- * customer harus menyiapkan uang tunai sebelum dibayar, dan diterima, setelah
- * pembayaran tunai selesai. Isinya berganti di tempat, jadi isi yang lama
- * keluar sementara isi yang baru masuk.
+ * Tiga bentuk: tagih, di layar driver sebelum uang diterima, siapkan, di
+ * layar customer sebelum membayar, dan diterima, sesudah pembayaran tunai
+ * selesai. Isinya berganti di tempat, jadi isi yang lama keluar sementara isi
+ * yang baru masuk.
  */
 
 import React, { useEffect, useState } from 'react';

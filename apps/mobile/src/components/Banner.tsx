@@ -119,7 +119,7 @@ const GAYA_TONE = perTema(
 /**
  * Varian tombol aksi pertama untuk tiap nada.
  *
- * Nada warning memakai tombol terang, supaya warnanya tidak bertabrakan
+ * Nada warning memakai tombol kedua, supaya tidak ada oranye yang bertabrakan
  * dengan belang kuning di belakang banner.
  */
 const VARIAN_PERTAMA: Record<BannerTone, ButtonVariant> = {
