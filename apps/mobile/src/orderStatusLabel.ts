@@ -15,9 +15,9 @@ import type { OrderStatus } from '@delivery/shared';
 const STATUS_DISPLAY: Record<OrderStatus, string> = {
   PENDING: 'Menunggu konfirmasi',
   CONFIRMED: 'Menunggu konfirmasi',
-  // ASSIGNED = pool state, bukan "Driver ditugaskan". Order tanpa driver
-  // menunggu diambil driver, dan order kembali ke sini kalau driver
-  // membatalkan atau customer minta driver lain.
+  // ASSIGNED berarti order belum punya driver dan menunggu diambil, bukan
+  // "Driver ditugaskan". Order kembali ke sini kalau driver membatalkan atau
+  // customer minta driver lain.
   ASSIGNED: 'Mencari driver',
   PREPARING: 'Driver ditemukan',
   OUT_FOR_DELIVERY: 'Dalam perjalanan',
