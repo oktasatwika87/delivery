@@ -19,10 +19,10 @@ const TINGGI_VIEW_BOX = 172;
 const TINGGI_BAWAAN = 43;
 
 const JALUR_HURUF_M = 'M20 108 V24 L60 78 L100 24 V108';
-const JALUR_CANGKANG =
+export const JALUR_CANGKANG =
   'M0 0 V-60 C0 -74 12 -84 28 -84 C60 -84 82 -58 82 -26 V-10 C82 -4 78 0 72 0 Z';
-const JALUR_KACA = 'M14 -60 V-14 H70';
-const JALUR_PET = 'M6 -70 L-6 -76';
+export const JALUR_KACA = 'M14 -60 V-14 H70';
+export const JALUR_PET = 'M6 -70 L-6 -76';
 const JALUR_TALI = 'M95 98 C103 90 120 92 118 116';
 
 /** Tebal garis untuk logo besar dan logo kecil. */
