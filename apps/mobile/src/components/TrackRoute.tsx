@@ -27,7 +27,7 @@ import { Icon } from '../theme/Icon';
 import { useTheme } from '../theme/ThemeProvider';
 import { motion, size, stroke, type ThemeColors } from '../theme/tokens';
 import { useInitialWindow } from './motion/InitialWindow';
-import { fadeIn, fadeOut, standardEasing } from './motion/presets';
+import { fadeIn, fadeOut, motorEasing, standardEasing } from './motion/presets';
 
 /** Langkah order di rute. Null berarti order dibatalkan. */
 export type LangkahRute = 1 | 2 | 3 | 4 | null;
@@ -67,6 +67,7 @@ function titikKubik(
   akhir: Titik,
   t: number,
 ): Titik {
+  'worklet';
   const u = 1 - t;
   return {
     x:
@@ -155,6 +156,8 @@ const CAHAYA_TERANG = 0.6;
 const CAHAYA_SKALA = 0.8;
 /** Lama cahaya motor menyala. */
 const DURASI_CAHAYA = 700;
+/** Batas miring motor, supaya motor tidak miring terlalu jauh. */
+const BATAS_SUDUT = 15;
 
 /** Lingkaran riak yang bisa dianimasikan. */
 const LingkaranRiak = Animated.createAnimatedComponent(Circle);
@@ -162,15 +165,16 @@ const LingkaranRiak = Animated.createAnimatedComponent(Circle);
 const JalurProgres = Animated.createAnimatedComponent(Path);
 
 /** Jenis gerak rute ketika langkah order berubah. */
-export type JenisGerak = 'muncul' | 'kembali' | 'langsung';
+export type JenisGerak = 'muncul' | 'kembali' | 'langsung' | 'luncur';
 
 /**
  * Menentukan jenis gerak dari perubahan langkah.
  *
  * 'muncul' kalau order yang tadinya belum ada driver sekarang punya driver,
  * atau lompat dari langkah dua ke empat. 'kembali' kalau order balik ke
- * langkah satu, jadi sedang mencari driver lagi. Sisanya berubah langsung
- * saja tanpa gerak.
+ * langkah satu, jadi sedang mencari driver lagi. 'luncur' kalau motor meluncur
+ * dari satu titik ke titik berikutnya. Sisanya berubah langsung saja tanpa
+ * gerak.
  */
 export function jenisGerakRute(lama: LangkahRute, baru: LangkahRute): JenisGerak {
   if (lama === baru) return 'langsung';
@@ -178,7 +182,48 @@ export function jenisGerakRute(lama: LangkahRute, baru: LangkahRute): JenisGerak
   if (baru === 1) return 'kembali';
   if (lama === 1) return 'muncul';
   if (lama === 2 && baru === 4) return 'muncul';
+  if (baru === lama + 1) return 'luncur';
   return 'langsung';
+}
+
+/**
+ * Posisi motor di lengkung ke-k.
+ *
+ * Panjang lengkung dihitung dari 0 sampai 2, dan t dari 0 sampai 1. Di t 0
+ * motor masih di awal lengkung, di t 1 sudah di titik akhirnya.
+ */
+export function posisiMotor(k: number, t: number): Titik {
+  'worklet';
+  const lengkung = LENGKUNG[k];
+  return titikKubik(lengkung[0], lengkung[1], lengkung[2], lengkung[3], t);
+}
+
+/**
+ * Arah motor di lengkung ke-k, dalam derajat.
+ *
+ * Arahnya diambil dari garis singgung lengkung, dibatasi 15 derajat supaya
+ * motor tidak miring terlalu jauh, lalu dikali sinus supaya motor tegak di
+ * awal dan di akhir lintasan.
+ */
+export function sudutMotor(k: number, t: number): number {
+  'worklet';
+  const lengkung = LENGKUNG[k];
+  const awal = lengkung[0];
+  const kendali1 = lengkung[1];
+  const kendali2 = lengkung[2];
+  const akhir = lengkung[3];
+  const u = 1 - t;
+  const dx =
+    3 * u * u * (kendali1.x - awal.x) +
+    6 * u * t * (kendali2.x - kendali1.x) +
+    3 * t * t * (akhir.x - kendali2.x);
+  const dy =
+    3 * u * u * (kendali1.y - awal.y) +
+    6 * u * t * (kendali2.y - kendali1.y) +
+    3 * t * t * (akhir.y - kendali2.y);
+  const sudut = (Math.atan2(dy, dx) * 180) / Math.PI;
+  const dibatasi = Math.min(BATAS_SUDUT, Math.max(-BATAS_SUDUT, sudut));
+  return dibatasi * Math.sin(Math.PI * t);
 }
 
 /**
@@ -354,6 +399,8 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
   const [nomorMotor, setNomorMotor] = useState(0);
   /** True kalau motor yang baru masuk pakai gerak pudar. */
   const [motorMasuk, setMotorMasuk] = useState(false);
+  /** Posisi motor di lengkung, 1 kalau motor sudah diam di titik. */
+  const tMotor = useSharedValue(1);
 
   const ukur = useCallback((event: LayoutChangeEvent) => {
     setLebar(event.nativeEvent.layout.width);
@@ -367,10 +414,16 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
   // Jenis geraknya dihitung saat render, supaya efek yang menjalankannya
   // selalu memakai perubahan yang baru saja terjadi.
   if (riwayat.baru !== langkah) {
+    const jenis = jenisGerakRute(riwayat.baru, langkah);
+    // Motor yang meluncur diisi ke awal lengkung lebih dulu, supaya frame
+    // pertamanya sudah di titik asal dan tidak loncat ke titik tujuan.
+    if (jenis === 'luncur' && bolehGerak) {
+      tMotor.value = 0;
+    }
     setRiwayat({
       lama: riwayat.baru,
       baru: langkah,
-      jenis: jenisGerakRute(riwayat.baru, langkah),
+      jenis,
       boleh: bolehGerak,
     });
   }
@@ -381,7 +434,26 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
     if (!riwayat.boleh || riwayat.jenis === 'langsung') {
       panjang.value = target;
       cahaya.value = 1;
+      tMotor.value = 1;
       setMotorMasuk(false);
+      return;
+    }
+
+    if (riwayat.jenis === 'luncur') {
+      tMotor.value = 0;
+      tMotor.value = withTiming(1, {
+        duration: motion.duration.motorStep,
+        easing: motorEasing,
+      });
+      panjang.value = withTiming(target, {
+        duration: motion.duration.motorStep,
+        easing: motorEasing,
+      });
+      cahaya.value = 0;
+      cahaya.value = withDelay(
+        motion.duration.motorStep,
+        withTiming(1, { duration: DURASI_CAHAYA, easing: standardEasing }),
+      );
       return;
     }
 
@@ -405,8 +477,9 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
       easing: standardEasing,
     });
     cahaya.value = 1;
+    tMotor.value = 1;
     setMotorMasuk(false);
-  }, [cahaya, panjang, riwayat]);
+  }, [cahaya, panjang, riwayat, tMotor]);
 
   const propsProgres = useAnimatedProps<PathProps>(() => ({
     strokeDashoffset: PANJANG_TOTAL - panjang.value,
@@ -418,6 +491,31 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
   const titikMotor = langkahMotor ? TITIK[langkahMotor - 1] : null;
   const motorKiri = titikMotor ? titikMotor.x * skala - UKURAN_MOTOR / 2 : 0;
   const motorAtas = titikMotor ? titikMotor.y * skala - UKURAN_MOTOR / 2 : 0;
+  /** Lengkung yang dilalui motor, dihitung dari langkah sekarang. */
+  const kurva = langkahMotor !== null ? langkahMotor - 2 : -1;
+
+  /**
+   * Gaya motor: posisi dan kemiringannya mengikuti lengkung yang dilalui.
+   *
+   * Motor diam di t 1, jadi posisinya tepat di titik langkah dan tegak.
+   */
+  const gayaMotor = useAnimatedStyle(() => {
+    'worklet';
+    if (kurva < 0) {
+      return {
+        transform: [{ translateX: 0 }, { translateY: 0 }, { rotate: '0deg' }],
+      };
+    }
+    const titik = posisiMotor(kurva, tMotor.value);
+    const sudut = Math.round(sudutMotor(kurva, tMotor.value) * 100) / 100;
+    return {
+      transform: [
+        { translateX: titik.x * skala - UKURAN_MOTOR / 2 },
+        { translateY: titik.y * skala - UKURAN_MOTOR / 2 },
+        { rotate: `${sudut}deg` },
+      ],
+    };
+  }, [kurva, skala]);
 
   return (
     <View
@@ -482,10 +580,9 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
                 style={[
                   styles.motor,
                   {
-                    left: motorKiri,
-                    top: motorAtas,
                     backgroundColor: colors.info,
                   },
+                  gayaMotor,
                 ]}
               >
                 <Icon name="two_wheeler" size={size.iconMd} color={colors.onInfoFill} />
@@ -504,6 +601,8 @@ const styles = StyleSheet.create({
   },
   motor: {
     position: 'absolute',
+    left: 0,
+    top: 0,
     width: UKURAN_MOTOR,
     height: UKURAN_MOTOR,
     borderRadius: UKURAN_MOTOR / 2,

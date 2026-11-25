@@ -13,6 +13,7 @@ import {
   expandIn,
   fadeIn,
   fadeOut,
+  motorEasing,
   shift,
   shrinkOut,
   staggerDelay,
@@ -119,6 +120,12 @@ describe('pola gerak', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('kurva motor meluncur beda dari kurva gerak lain', () => {
+    expect(motorEasing).toBeDefined();
+    expect(motorEasing).not.toBe(standardEasing);
+    expect(motorEasing).not.toBe(exitEasing);
   });
 
   it('pola masuk dengan pudar bisa diberi jeda', () => {

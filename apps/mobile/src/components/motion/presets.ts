@@ -28,6 +28,8 @@ import { motion } from '../../theme/tokens';
 
 export const standardEasing = Easing.bezier(...motion.curve.standard);
 export const exitEasing = Easing.bezier(...motion.curve.exit);
+/** Kurva motor meluncur: pelan di awal, lalu lancar ke titik berikutnya. */
+export const motorEasing = Easing.bezier(...motion.curve.motor);
 
 /** Masuk dari bawah: opacity naik sambil naik 25 dp ke posisi akhir. */
 export function enterFromBelow(delay = 0) {
