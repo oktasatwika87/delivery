@@ -177,11 +177,16 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
     const sekarang = orderRef.current;
     if (!sekarang || mintaBerjalanRef.current) return null;
 
+    const myGen = genRef.current;
     mintaBerjalanRef.current = true;
     setMemintaDriverLain(true);
 
     try {
       const berikut = await requestNewDriver(sekarang.id, sekarang.version);
+      // Jawaban yang datang sesudah hook dilepas atau orderId berganti
+      // diabaikan, sama seperti hasil ambil ulang.
+      if (genRef.current !== myGen) return 'berhasil';
+
       setTerakhirDiperbarui(Date.now());
 
       // Aturan version sama seperti hasil GET: yang lebih tua diabaikan,
@@ -190,8 +195,8 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
         orderRef.current = berikut;
         versiTampilRef.current = berikut.version;
         setOrder(berikut);
+        setAsalPerubahan('sendiri');
       }
-      setAsalPerubahan('sendiri');
       return 'berhasil';
     } catch (err) {
       if (err instanceof UnauthorizedError) {
@@ -199,7 +204,9 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
       }
       if (err instanceof ApiError && err.status === 409) {
         // Server menolak, ambil ulang supaya layar ikut keadaan sebenarnya.
-        void ambilUlang();
+        if (genRef.current === myGen) {
+          void ambilUlang();
+        }
         switch (err.code) {
           case 'DRIVER_STILL_REACHABLE':
             return 'driver_tersambung';

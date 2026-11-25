@@ -712,6 +712,64 @@ describe('useCustomerOrder', () => {
       expect(result.current.memintaDriverLain).toBe(false);
     });
 
+    it('orderId berganti selama permintaan berjalan: jawaban untuk order lama tidak dipasang', async () => {
+      const lambat = tertunda<Order>();
+      mockRequestNewDriver.mockReturnValueOnce(lambat.janji);
+
+      const { result, rerender } = renderHook(
+        ({ id }: { id: string }) => useCustomerOrder(id, true),
+        { initialProps: { id: 'order-1' } },
+      );
+      await flush();
+
+      let hasil: HasilCariDriverLain | null = null;
+      act(() => {
+        void result.current.mintaDriverLain().then((h) => {
+          hasil = h;
+        });
+      });
+
+      mockGetOrderById.mockResolvedValue({ ...ORDER, id: 'order-2' });
+      rerender({ id: 'order-2' });
+      await flush();
+
+      await act(async () => {
+        lambat.selesai(JAWABAN);
+      });
+
+      expect(hasil).toBe('berhasil');
+      expect(result.current.data?.order.id).toBe('order-2');
+      expect(result.current.asalPerubahan).toBe('awal');
+    });
+
+    it('jawaban dengan version lebih kecil dari yang tampil tidak mengubah asal perubahan', async () => {
+      mockGetOrderById.mockResolvedValueOnce({ ...ORDER, version: 2 });
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        triggerAccepted({
+          orderId: 'order-1',
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 3,
+        });
+      });
+      expect(result.current.asalPerubahan).toBe('pihak_lain');
+
+      mockRequestNewDriver.mockResolvedValueOnce({ ...ORDER, version: 2 });
+
+      let hasil: HasilCariDriverLain | null = null;
+      await act(async () => {
+        hasil = await result.current.mintaDriverLain();
+      });
+
+      expect(hasil).toBe('berhasil');
+      expect(result.current.asalPerubahan).toBe('pihak_lain');
+      expect(result.current.data?.order.version).toBe(3);
+    });
+
     it('409 dengan kode driver masih tersambung: driver_tersambung dan ambil ulang jalan', async () => {
       const { hasil, jumlahGet } = await mintaDenganGalat(
         new ApiError('ditolak', 409, 'DRIVER_STILL_REACHABLE'),
