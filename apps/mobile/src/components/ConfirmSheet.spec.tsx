@@ -447,13 +447,59 @@ describe('ConfirmSheet', () => {
 
   it('garis biru berhenti di roda depan', () => {
     const pohon = render(lembar());
+    ukur(pohon);
 
     const gaya = StyleSheet.flatten(
       pohon.getByTestId('garis-biru', { includeHiddenElements: true }).props
         .style,
     );
-    expect(gaya.width).toBeCloseTo(106.55, 2);
+    expect(gaya.left).toBeCloseTo(-360, 2);
+    expect(gaya.width).toBeCloseTo(466.55, 2);
+    expect(gaya.transform[0].translateX).toBeCloseTo(0, 2);
+    expect(gaya.left + gaya.width + gaya.transform[0].translateX).toBeCloseTo(
+      106.55,
+      2,
+    );
     expect(gaya.backgroundColor).toBe(themes.gelap.info);
+  });
+
+  it('garis biru ikut motor saat keluar lewat Ya', () => {
+    jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+    const pohon = render(lembar());
+    ukur(pohon);
+
+    fireEvent.press(pohon.getByLabelText('Ya, batalkan'));
+    pohon.rerender(lembar());
+
+    const gaya = StyleSheet.flatten(
+      pohon.getByTestId('garis-biru', { includeHiddenElements: true }).props
+        .style,
+    );
+    const geser = gaya.transform[0].translateX;
+    expect(geser).toBeCloseTo(348, 2);
+    expect(gaya.left + geser).toBeLessThanOrEqual(0);
+    expect(gaya.left + gaya.width + geser).toBeGreaterThanOrEqual(360);
+  });
+
+  it('garis biru memendek saat keluar lewat Tidak', () => {
+    jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+    const pohon = render(lembar());
+    ukur(pohon);
+
+    fireEvent.press(pohon.getByLabelText('Tidak'));
+    pohon.rerender(lembar());
+
+    const gaya = StyleSheet.flatten(
+      pohon.getByTestId('garis-biru', { includeHiddenElements: true }).props
+        .style,
+    );
+    const geser = gaya.transform[0].translateX;
+    expect(geser).toBeCloseTo(-134, 2);
+    expect(gaya.left + gaya.width + geser).toBeLessThan(0);
   });
 
   it('gambar motor diletakkan dua belas piksel dari tepi', () => {

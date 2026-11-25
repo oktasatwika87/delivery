@@ -36,7 +36,7 @@ const MARGIN_GAMBAR = 12;
 const TINGGI_BARIS = 80;
 /** Tebal garis rel dan garis biru di baris gambar. */
 const TEBAL_GARIS = 3 * UKURAN_RIDER.skala;
-/** Panjang garis biru, dari tepi baris sampai roda depan. */
+/** Ujung kanan garis biru saat diam, dari tepi lembar sampai bawah roda depan. */
 const PANJANG_GARIS_BIRU = MARGIN_GAMBAR + UKURAN_RIDER.ujungRodaDepanX;
 
 /** Durasi motor berjalan ke tempatnya saat lembar dibuka. */
@@ -251,6 +251,10 @@ export function ConfirmSheet({
     transform: [{ translateY: naik.value }],
     opacity: opasitasLembar.value,
   }));
+  // Garis biru digeser bersama motornya, jadi panjangnya tetap.
+  const gayaGarisBiru = useAnimatedStyle(() => ({
+    transform: [{ translateX: geser.value }],
+  }));
 
   if (!terpasang) {
     return null;
@@ -312,15 +316,17 @@ export function ConfirmSheet({
                 },
               ]}
             />
-            <View
+            <Animated.View
               testID="garis-biru"
               style={[
                 styles.garis,
                 {
                   top: tinggiGaris,
-                  width: PANJANG_GARIS_BIRU,
+                  left: -lebarLembar,
+                  width: lebarLembar + PANJANG_GARIS_BIRU,
                   backgroundColor: colors.info,
                 },
+                gayaGarisBiru,
               ]}
             />
             <View style={styles.gambar}>
