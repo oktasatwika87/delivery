@@ -378,6 +378,137 @@ describe('ConfirmSheet', () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
+  it('lembar yang dibuka lagi selagi keluar tidak hilang', () => {
+    const timing = jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+    const onConfirm = jest.fn();
+    const pohon = render(
+      <ConfirmSheet
+        visible
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={onConfirm}
+        onCancel={jest.fn()}
+      />,
+    );
+    ukur(pohon);
+
+    fireEvent.press(pohon.getByLabelText('Tidak'));
+    pohon.rerender(
+      <ConfirmSheet
+        visible={false}
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={onConfirm}
+        onCancel={jest.fn()}
+      />,
+    );
+    timing.mockClear();
+    pohon.rerender(
+      <ConfirmSheet
+        visible
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={onConfirm}
+        onCancel={jest.fn()}
+      />,
+    );
+
+    expect(pohon.UNSAFE_queryByType(Modal)).not.toBeNull();
+    const gaya = StyleSheet.flatten(
+      pohon.getByTestId('lembar-konfirmasi').props.style,
+    );
+    expect(gaya.opacity).toBe(1);
+    expect(timing).toHaveBeenCalledWith(1, {
+      duration: 180,
+      easing: standardEasing,
+    });
+    expect(timing).toHaveBeenCalledWith(0, {
+      duration: 380,
+      easing: standardEasing,
+    });
+    expect(timing).toHaveBeenCalledWith(1, {
+      duration: 140,
+      easing: standardEasing,
+    });
+    expect(timing).toHaveBeenCalledWith(0, {
+      duration: 450,
+      easing: standardEasing,
+    });
+
+    fireEvent.press(pohon.getByLabelText('Ya'));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('lembar yang ditutup dari luar lalu dibuka lagi tidak hilang', () => {
+    const timing = jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+    const onConfirm = jest.fn();
+    const pohon = render(
+      <ConfirmSheet
+        visible
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={onConfirm}
+        onCancel={jest.fn()}
+      />,
+    );
+    ukur(pohon);
+
+    pohon.rerender(
+      <ConfirmSheet
+        visible={false}
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={onConfirm}
+        onCancel={jest.fn()}
+      />,
+    );
+    timing.mockClear();
+    pohon.rerender(
+      <ConfirmSheet
+        visible
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={onConfirm}
+        onCancel={jest.fn()}
+      />,
+    );
+
+    expect(pohon.UNSAFE_queryByType(Modal)).not.toBeNull();
+    const gaya = StyleSheet.flatten(
+      pohon.getByTestId('lembar-konfirmasi').props.style,
+    );
+    expect(gaya.opacity).toBe(1);
+    expect(timing).toHaveBeenCalledWith(1, {
+      duration: 180,
+      easing: standardEasing,
+    });
+    expect(timing).toHaveBeenCalledWith(0, {
+      duration: 380,
+      easing: standardEasing,
+    });
+    expect(timing).toHaveBeenCalledWith(1, {
+      duration: 140,
+      easing: standardEasing,
+    });
+    expect(timing).toHaveBeenCalledWith(0, {
+      duration: 450,
+      easing: standardEasing,
+    });
+
+    fireEvent.press(pohon.getByLabelText('Ya'));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
   it('tone danger memakai tombol isi danger', () => {
     const pohon = render(lembar({ tone: 'danger' }));
 

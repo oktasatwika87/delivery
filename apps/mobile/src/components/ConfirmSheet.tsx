@@ -179,6 +179,35 @@ export function ConfirmSheet({
     );
   }, [geser, latar, naik, lebarLembar, tinggiLembar, lepas]);
 
+  /**
+   * Membuka lembar: latar pudar masuk, lembar naik, motor berbalik lalu jalan.
+   *
+   * Fungsi ini dipakai dua kali: saat lembar diukur pertama kali, dan saat
+   * lembar yang sedang keluar dibuka lagi. Bedanya cuma nilai awal yang
+   * diisi saat pengukuran.
+   */
+  const bukaLembar = useCallback(() => {
+    latar.value = withTiming(1, {
+      duration: motion.duration.fadeIn,
+      easing: standardEasing,
+    });
+    naik.value = withTiming(0, {
+      duration: motion.duration.enter,
+      easing: standardEasing,
+    });
+    arah.value = withTiming(1, {
+      duration: DURASI_BALIK,
+      easing: standardEasing,
+    });
+    geser.value = withDelay(
+      JEDA_MASUK_GESER,
+      withTiming(0, {
+        duration: DURASI_MASUK_GESER,
+        easing: standardEasing,
+      }),
+    );
+  }, [arah, geser, latar, naik]);
+
   const pilihYa = useCallback(() => {
     if (sudahPilih.current || sedangKeluar.current) return;
     sudahPilih.current = true;
@@ -193,7 +222,9 @@ export function ConfirmSheet({
     keluarTidak();
   }, [onCancel, keluarTidak]);
 
-  // Lembar yang dibuka lagi dipasang ulang dan geraknya diulang dari awal.
+  // Perubahan visible mengatur pasang dan lepasnya lembar. Lembar yang masih
+  // terpasang dan sudah diukur diulang geraknya dari posisi sekarang, jadi
+  // gerak keluar yang kebatal tidak membuat lembar hilang.
   useEffect(() => {
     if (visible === visibleTerakhir.current) return;
     visibleTerakhir.current = visible;
@@ -201,6 +232,11 @@ export function ConfirmSheet({
     if (visible) {
       sedangKeluar.current = false;
       sudahPilih.current = false;
+      if (terpasang && sudahTerukur.current) {
+        bukaLembar();
+        return;
+      }
+      // Lembar yang sudah lepas: dipasang lagi dan menunggu pengukuran.
       sudahTerukur.current = false;
       opasitasLembar.value = 0;
       setTerpasang(true);
@@ -210,7 +246,7 @@ export function ConfirmSheet({
     // Ditutup dari luar: keluar seperti memilih Tidak, tanpa memanggil apa pun.
     sudahPilih.current = true;
     keluarTidak();
-  }, [visible, keluarTidak, opasitasLembar]);
+  }, [visible, keluarTidak, opasitasLembar, bukaLembar]);
 
   // Ukuran lembar diketahui dari pengukuran pertamanya, lalu geraknya mulai.
   const ukurLembar = useCallback(
@@ -227,23 +263,9 @@ export function ConfirmSheet({
       arah.value = 1;
       latar.value = 0;
 
-      latar.value = withTiming(1, {
-        duration: motion.duration.fadeIn,
-        easing: standardEasing,
-      });
-      naik.value = withTiming(0, {
-        duration: motion.duration.enter,
-        easing: standardEasing,
-      });
-      geser.value = withDelay(
-        JEDA_MASUK_GESER,
-        withTiming(0, {
-          duration: DURASI_MASUK_GESER,
-          easing: standardEasing,
-        }),
-      );
+      bukaLembar();
     },
-    [arah, geser, latar, naik, opasitasLembar],
+    [arah, geser, latar, naik, opasitasLembar, bukaLembar],
   );
 
   const gayaLatar = useAnimatedStyle(() => ({ opacity: latar.value }));
