@@ -1,25 +1,37 @@
 /**
  * Tes komponen CashBox.
  *
- * Kotak tunai punya dua bentuk, tagih dan diterima. Isinya berganti di tempat
- * waktu bentuknya berubah.
+ * Kotak tunai punya tiga bentuk, tagih, siapkan, dan diterima. Isinya berganti
+ * di tempat waktu bentuknya berubah.
  */
 
 import React from 'react';
 import { StyleSheet } from 'react-native';
 import { render } from '@testing-library/react-native';
 import { Circle, Path } from 'react-native-svg';
+import * as reanimated from 'react-native-reanimated';
 
-import { CashBox } from './CashBox';
+import { CashBox, type CashBoxVariant } from './CashBox';
 import { DrawnStroke } from './motion/DrawnPath';
 import { InitialWindowProvider } from './motion/InitialWindow';
+import { Icon } from '../theme/Icon';
+import { ThemeProvider } from '../theme/ThemeProvider';
 import { iconPaths } from '../theme/icons';
 import { themes, size, space } from '../theme/tokens';
 
 const JUMLAH = 'Rp 25.000';
 
-function kotak(variant: 'tagih' | 'diterima'): React.JSX.Element {
+function kotak(variant: CashBoxVariant): React.JSX.Element {
   return <CashBox variant={variant} amountText={JUMLAH} />;
+}
+
+/** Kotak tunai di dalam tema terang, seperti layar customer. */
+function kotakTerang(variant: CashBoxVariant): React.JSX.Element {
+  return (
+    <ThemeProvider name="terang">
+      <CashBox variant={variant} amountText={JUMLAH} />
+    </ThemeProvider>
+  );
 }
 
 describe('CashBox', () => {
@@ -114,6 +126,130 @@ describe('CashBox', () => {
 
     const pohon = render(kotak('tagih'));
     pohon.rerender(kotak('diterima'));
+
+    expect(galat).not.toHaveBeenCalled();
+
+    galat.mockRestore();
+  });
+
+  it('bentuk siapkan memakai warna aksen untuk isinya', () => {
+    const pohon = render(kotakTerang('siapkan'));
+
+    const teks = StyleSheet.flatten(pohon.getByText('Siapkan uang tunai').props.style);
+    expect(teks.color).toBe(themes.terang.onAccent);
+    expect(teks.fontFamily).toBe('PlusJakartaSans-Medium');
+
+    const jumlah = StyleSheet.flatten(pohon.getByText(JUMLAH).props.style);
+    expect(jumlah.color).toBe(themes.terang.onAccent);
+    expect(jumlah.fontFamily).toBe('PlusJakartaSans-Bold');
+
+    const ikon = pohon.UNSAFE_getByType(Icon);
+    expect(ikon.props.name).toBe('payments');
+    expect(ikon.props.color).toBe(themes.terang.onAccent);
+  });
+
+  it('bentuk siapkan memakai warna aksen untuk latar dan tepinya', () => {
+    const pohon = render(kotakTerang('siapkan'));
+
+    const gaya = StyleSheet.flatten(pohon.getByTestId('kotak-tunai').props.style);
+    expect(gaya.backgroundColor).toBe(themes.terang.accent);
+    expect(gaya.borderColor).toBe(themes.terang.accent);
+  });
+
+  it('bentuk siapkan punya label aksesibel', () => {
+    const pohon = render(kotakTerang('siapkan'));
+    expect(pohon.getByLabelText(`Siapkan uang tunai, ${JUMLAH}`)).toBeTruthy();
+  });
+
+  it('pergantian dari siapkan ke diterima menggambar centang', () => {
+    const pohon = render(kotakTerang('siapkan'));
+    pohon.rerender(kotakTerang('diterima'));
+
+    expect(pohon.queryByText('Siapkan uang tunai')).toBeNull();
+    expect(pohon.getByText('Pembayaran tunai diterima')).toBeTruthy();
+
+    const centang = pohon.UNSAFE_getAllByType(DrawnStroke);
+    expect(centang).toHaveLength(1);
+    expect(centang[0].props.animate).toBe(true);
+  });
+
+  it('di dalam jendela awal pergantian dari siapkan ke diterima tidak menggambar centang', () => {
+    const pohon = render(
+      <InitialWindowProvider>{kotakTerang('siapkan')}</InitialWindowProvider>,
+    );
+    pohon.rerender(
+      <InitialWindowProvider>{kotakTerang('diterima')}</InitialWindowProvider>,
+    );
+
+    expect(pohon.queryByText('Siapkan uang tunai')).toBeNull();
+    expect(pohon.getByText('Pembayaran tunai diterima')).toBeTruthy();
+
+    const centang = pohon.UNSAFE_getAllByType(DrawnStroke);
+    expect(centang).toHaveLength(1);
+    expect(centang[0].props.animate).toBe(false);
+  });
+
+  it('lapisan lama dari bentuk siapkan membawa latar dan tepi bentuk lama', () => {
+    const tahan = jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+
+    const pohon = render(kotakTerang('siapkan'));
+    pohon.rerender(kotakTerang('diterima'));
+
+    const gaya = StyleSheet.flatten(
+      pohon.getByTestId('isi-kotak-lama', { includeHiddenElements: true }).props
+        .style,
+    );
+    expect(gaya.backgroundColor).toBe(themes.terang.accent);
+    expect(gaya.borderColor).toBe(themes.terang.accent);
+
+    tahan.mockRestore();
+  });
+
+  it('lapisan lama dari bentuk tagih membawa latar dan tepi bentuk lama', () => {
+    const tahan = jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+
+    const pohon = render(kotakTerang('tagih'));
+    pohon.rerender(kotakTerang('diterima'));
+
+    const gaya = StyleSheet.flatten(
+      pohon.getByTestId('isi-kotak-lama', { includeHiddenElements: true }).props
+        .style,
+    );
+    expect(gaya.backgroundColor).toBe(themes.terang.surface);
+    expect(gaya.borderColor).toBe(themes.terang.accentLine);
+
+    tahan.mockRestore();
+  });
+
+  it('isi di lapisan lama tetap sejajar dengan isi baru', () => {
+    const tahan = jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+
+    const pohon = render(kotakTerang('siapkan'));
+    pohon.rerender(kotakTerang('diterima'));
+
+    const gayaLama = StyleSheet.flatten(
+      pohon.getByTestId('isi-kotak-lama', { includeHiddenElements: true }).props
+        .style,
+    );
+    const gayaKotak = StyleSheet.flatten(pohon.getByTestId('kotak-tunai').props.style);
+    expect(gayaLama.paddingHorizontal).toBe(gayaKotak.paddingHorizontal);
+    expect(gayaLama.paddingVertical).toBe(gayaKotak.paddingVertical);
+    expect(gayaLama.borderRadius).toBe(gayaKotak.borderRadius);
+
+    tahan.mockRestore();
+  });
+
+  it('pergantian dari siapkan tidak memunculkan peringatan console', () => {
+    const galat = jest.spyOn(console, 'error');
+
+    const pohon = render(kotakTerang('siapkan'));
+    pohon.rerender(kotakTerang('diterima'));
 
     expect(galat).not.toHaveBeenCalled();
 

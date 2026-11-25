@@ -1,9 +1,10 @@
 /**
  * Kotak tunai.
  *
- * Dua bentuk: tagih, saat uang masih diminta ke customer, dan diterima,
- * setelah pembayaran tunai selesai. Isinya berganti di tempat, jadi isi yang
- * lama keluar sementara isi yang baru masuk.
+ * Tiga bentuk: tagih, saat uang masih diminta ke driver, siapkan, saat
+ * customer harus menyiapkan uang tunai sebelum dibayar, dan diterima, setelah
+ * pembayaran tunai selesai. Isinya berganti di tempat, jadi isi yang lama
+ * keluar sementara isi yang baru masuk.
  */
 
 import React, { useEffect, useState } from 'react';
@@ -18,12 +19,20 @@ import Svg, { Circle } from 'react-native-svg';
 
 import { Icon } from '../theme/Icon';
 import { useTheme } from '../theme/ThemeProvider';
-import { motion, radius, size, space, stroke, type } from '../theme/tokens';
+import {
+  motion,
+  radius,
+  size,
+  space,
+  stroke,
+  type,
+  type ThemeColors,
+} from '../theme/tokens';
 import { DrawnStroke } from './motion/DrawnPath';
 import { exitEasing, fadeIn } from './motion/presets';
 import { useGantiIsi } from './motion/useGantiIsi';
 
-export type CashBoxVariant = 'tagih' | 'diterima';
+export type CashBoxVariant = 'tagih' | 'siapkan' | 'diterima';
 
 export interface CashBoxProps {
   variant: CashBoxVariant;
@@ -33,6 +42,7 @@ export interface CashBoxProps {
 
 const TEKS: Record<CashBoxVariant, string> = {
   tagih: 'Tagih tunai ke customer',
+  siapkan: 'Siapkan uang tunai',
   diterima: 'Pembayaran tunai diterima',
 };
 
@@ -43,6 +53,27 @@ const PANJANG_CENTANG = 14.78;
 
 /** Masuk lapisan isi baru: pudar masuk tanpa geser. */
 const MASUK_ISI = fadeIn();
+
+interface BentukKotak {
+  backgroundColor: string;
+  borderColor: string;
+}
+
+/**
+ * Warna kotak dan tepinya untuk tiap bentuk.
+ *
+ * Bentuk siapkan memakai warna aksen untuk latar dan tepinya sekaligus, jadi
+ * tepinya tidak terlihat tapi ukurannya sama dengan bentuk lain.
+ */
+function bentukKotak(colors: ThemeColors, variant: CashBoxVariant): BentukKotak {
+  if (variant === 'tagih') {
+    return { backgroundColor: colors.surface, borderColor: colors.accentLine };
+  }
+  if (variant === 'siapkan') {
+    return { backgroundColor: colors.accent, borderColor: colors.accent };
+  }
+  return { backgroundColor: colors.infoWash, borderColor: colors.infoLine };
+}
 
 interface IsiProps {
   variant: CashBoxVariant;
@@ -57,11 +88,15 @@ function IsiKotak({ variant, amountText, animate }: IsiProps): React.JSX.Element
   // yang sedang digambar tidak melompat jadi utuh saat isi lama selesai keluar.
   const [gambarCentang] = useState(animate);
 
+  const siapkan = variant === 'siapkan';
+  const warnaTeks = siapkan ? colors.onAccent : variant === 'tagih' ? colors.textMuted : colors.text;
+  const gayaTeks = siapkan ? styles.teksSiapkan : variant === 'tagih' ? styles.teksTagih : styles.teksDiterima;
+  const gayaJumlah = siapkan ? styles.jumlahSiapkan : variant === 'tagih' ? styles.jumlahTagih : styles.jumlahDiterima;
+  const warnaJumlah = siapkan ? colors.onAccent : colors.text;
+
   return (
     <>
-      {variant === 'tagih' ? (
-        <Icon name="payments" size={size.icon} color={colors.accent} />
-      ) : (
+      {variant === 'diterima' ? (
         <Svg width={UKURAN_TANDA} height={UKURAN_TANDA} viewBox="0 0 24 24">
           <Circle cx={12} cy={12} r={11} fill={colors.infoFill} />
           <DrawnStroke
@@ -72,24 +107,15 @@ function IsiKotak({ variant, amountText, animate }: IsiProps): React.JSX.Element
             animate={gambarCentang}
           />
         </Svg>
+      ) : (
+        <Icon
+          name="payments"
+          size={size.icon}
+          color={siapkan ? colors.onAccent : colors.accent}
+        />
       )}
-      <Text
-        style={[
-          styles.teks,
-          variant === 'tagih' ? styles.teksTagih : styles.teksDiterima,
-          { color: variant === 'tagih' ? colors.textMuted : colors.text },
-        ]}
-      >
-        {TEKS[variant]}
-      </Text>
-      <Text
-        style={[
-          variant === 'tagih' ? styles.jumlahTagih : styles.jumlahDiterima,
-          { color: colors.text },
-        ]}
-      >
-        {amountText}
-      </Text>
+      <Text style={[styles.teks, gayaTeks, { color: warnaTeks }]}>{TEKS[variant]}</Text>
+      <Text style={[gayaJumlah, { color: warnaJumlah }]}>{amountText}</Text>
     </>
   );
 }
@@ -109,7 +135,9 @@ function LapisanLama({
   nomor,
   selesai,
 }: LapisanLamaProps): React.JSX.Element {
+  const { colors } = useTheme();
   const opasitas = useSharedValue(1);
+  const bentuk = bentukKotak(colors, variant);
 
   useEffect(() => {
     opasitas.value = withTiming(
@@ -127,7 +155,15 @@ function LapisanLama({
 
   return (
     <Animated.View
-      style={[styles.lapisanLama, gaya]}
+      testID="isi-kotak-lama"
+      style={[
+        styles.lapisanLama,
+        {
+          backgroundColor: bentuk.backgroundColor,
+          borderColor: bentuk.borderColor,
+        },
+        gaya,
+      ]}
       pointerEvents="none"
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
@@ -140,7 +176,11 @@ function LapisanLama({
 export function CashBox({ variant, amountText }: CashBoxProps): React.JSX.Element {
   const { colors } = useTheme();
   const ganti = useGantiIsi({ variant, amountText }, `${variant}|${amountText}`);
+  const bentuk = bentukKotak(colors, variant);
+  // Centang digambar saat bentuk diterima datang dari bentuk yang menagih
+  // atau menyiapkan uang, bukan dari bentuk diterima yang sebelumnya.
   const dariTagih = ganti.lama?.variant === 'tagih' && variant === 'diterima';
+  const dariSiapkan = ganti.lama?.variant === 'siapkan' && variant === 'diterima';
 
   return (
     <View
@@ -150,8 +190,8 @@ export function CashBox({ variant, amountText }: CashBoxProps): React.JSX.Elemen
       style={[
         styles.kotak,
         {
-          backgroundColor: variant === 'tagih' ? colors.surface : colors.infoWash,
-          borderColor: variant === 'tagih' ? colors.accentLine : colors.infoLine,
+          backgroundColor: bentuk.backgroundColor,
+          borderColor: bentuk.borderColor,
         },
       ]}
     >
@@ -160,7 +200,11 @@ export function CashBox({ variant, amountText }: CashBoxProps): React.JSX.Elemen
         entering={ganti.nomor > 0 ? MASUK_ISI : undefined}
         style={styles.lapisan}
       >
-        <IsiKotak variant={variant} amountText={amountText} animate={dariTagih} />
+        <IsiKotak
+          variant={variant}
+          amountText={amountText}
+          animate={dariTagih || dariSiapkan}
+        />
       </Animated.View>
       {ganti.lama ? (
         <LapisanLama
@@ -194,11 +238,14 @@ const styles = StyleSheet.create({
   },
   lapisanLama: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    top: -stroke.hairline,
+    left: -stroke.hairline,
+    right: -stroke.hairline,
+    bottom: -stroke.hairline,
     paddingHorizontal: PADDING_SAMPING,
+    paddingVertical: space[2],
+    borderRadius: radius.xl,
+    borderWidth: stroke.hairline,
     flexDirection: 'row',
     alignItems: 'center',
     gap: JARAK_ISI,
@@ -209,10 +256,16 @@ const styles = StyleSheet.create({
   teksTagih: {
     ...type.bodySm,
   },
+  teksSiapkan: {
+    ...type.bodyMdMedium,
+  },
   teksDiterima: {
     ...type.bodySmMedium,
   },
   jumlahTagih: {
+    ...type.amountLg,
+  },
+  jumlahSiapkan: {
     ...type.amountLg,
   },
   jumlahDiterima: {
