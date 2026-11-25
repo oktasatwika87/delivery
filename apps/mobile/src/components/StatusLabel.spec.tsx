@@ -59,6 +59,51 @@ const KASUS: { status: OrderStatus; ikon: string; isi: string; teks: string }[] 
   },
 ];
 
+const KASUS_CUSTOMER: { status: OrderStatus; ikon: string; isi: string; teks: string }[] = [
+  {
+    status: OrderStatus.ASSIGNED,
+    ikon: 'search',
+    isi: themes.gelap.fillNeutral,
+    teks: themes.gelap.text,
+  },
+  {
+    status: OrderStatus.PENDING,
+    ikon: 'hourglass_top',
+    isi: themes.gelap.fillNeutral,
+    teks: themes.gelap.text,
+  },
+  {
+    status: OrderStatus.CONFIRMED,
+    ikon: 'hourglass_top',
+    isi: themes.gelap.fillNeutral,
+    teks: themes.gelap.text,
+  },
+  {
+    status: OrderStatus.PREPARING,
+    ikon: 'person',
+    isi: themes.gelap.infoSoft,
+    teks: themes.gelap.onInfoSoft,
+  },
+  {
+    status: OrderStatus.OUT_FOR_DELIVERY,
+    ikon: 'two_wheeler',
+    isi: themes.gelap.infoSoft,
+    teks: themes.gelap.onInfoSoft,
+  },
+  {
+    status: OrderStatus.DELIVERED,
+    ikon: 'check_circle',
+    isi: themes.gelap.accentSoft,
+    teks: themes.gelap.onAccentSoft,
+  },
+  {
+    status: OrderStatus.CANCELLED,
+    ikon: 'cancel',
+    isi: themes.gelap.dangerSoft,
+    teks: themes.gelap.danger,
+  },
+];
+
 describe('StatusLabel', () => {
   it('label tampil apa adanya dari pemanggil', () => {
     const { getByText } = render(
@@ -156,5 +201,59 @@ describe('StatusLabel', () => {
     expect(galat).not.toHaveBeenCalled();
 
     galat.mockRestore();
+  });
+
+  it.each(KASUS_CUSTOMER)(
+    'peran customer pada status $status memakai ikon dan warnanya sendiri',
+    (kasus) => {
+      const { toJSON, UNSAFE_getByType, getByText } = render(
+        <StatusLabel status={kasus.status} label="Label" peran="customer" />,
+      );
+
+      expect(UNSAFE_getByType(Icon).props.name).toBe(kasus.ikon);
+
+      const gaya = StyleSheet.flatten(toJSON().props.style);
+      expect(gaya.backgroundColor).toBe(kasus.isi);
+
+      const gayaTeks = StyleSheet.flatten(getByText('Label').props.style);
+      expect(gayaTeks.color).toBe(kasus.teks);
+    },
+  );
+
+  it('peran customer tanpa penyedia tema memakai warna tema gelap', () => {
+    const { toJSON } = render(
+      <StatusLabel status={OrderStatus.PREPARING} label="Label" peran="customer" />,
+    );
+    const gaya = StyleSheet.flatten(toJSON().props.style);
+    expect(gaya.backgroundColor).toBe(themes.gelap.infoSoft);
+  });
+
+  it('tanpa peran hasilnya tetap tabel driver', () => {
+    const { UNSAFE_getByType, toJSON } = render(
+      <StatusLabel status={OrderStatus.PREPARING} label="Label" />,
+    );
+    expect(UNSAFE_getByType(Icon).props.name).toBe('inventory_2');
+    const gaya = StyleSheet.flatten(toJSON().props.style);
+    expect(gaya.backgroundColor).toBe(themes.gelap.fillNeutral);
+  });
+
+  it('peran customer yang berganti menyisakan pil baru dengan warna dan ikon baru', () => {
+    const pohon = render(
+      <StatusLabel status={OrderStatus.ASSIGNED} label="Mencari driver" peran="customer" />,
+    );
+    pohon.rerender(
+      <StatusLabel status={OrderStatus.PREPARING} label="Driver ditemukan" peran="customer" />,
+    );
+
+    expect(pohon.getByText('Driver ditemukan')).toBeTruthy();
+
+    const gaya = StyleSheet.flatten(pohon.getByTestId('pil-status').props.style);
+    expect(gaya.backgroundColor).toBeUndefined();
+
+    const gayaWadah = StyleSheet.flatten(pohon.toJSON().props.style);
+    expect(gayaWadah.backgroundColor).toBe(themes.gelap.infoSoft);
+
+    const ikon = pohon.UNSAFE_getAllByType(Icon).find((el) => el.props.name === 'person');
+    expect(ikon).toBeTruthy();
   });
 });
