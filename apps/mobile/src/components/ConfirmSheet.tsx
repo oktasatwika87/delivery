@@ -101,6 +101,8 @@ export function ConfirmSheet({
 
   /** True kalau sedang keluar, supaya geraknya tidak dijalankan dua kali. */
   const sedangKeluar = useRef(false);
+  /** True kalau sudah ada pilihan, jadi ketukan berikutnya diabaikan. */
+  const sudahPilih = useRef(false);
   /** True kalau lembar sudah pernah diukur, jadi geraknya jalan sekali saja. */
   const sudahTerukur = useRef(false);
   /** Nilai visible terakhir, buat tahu pemanggil membuka atau menutup lembar. */
@@ -171,11 +173,15 @@ export function ConfirmSheet({
   }, [geser, latar, naik, lebarLembar, tinggiLembar, lepas]);
 
   const pilihYa = useCallback(() => {
+    if (sudahPilih.current || sedangKeluar.current) return;
+    sudahPilih.current = true;
     onConfirm();
     keluarYa();
   }, [onConfirm, keluarYa]);
 
   const pilihTidak = useCallback(() => {
+    if (sudahPilih.current || sedangKeluar.current) return;
+    sudahPilih.current = true;
     onCancel();
     keluarBatal();
   }, [onCancel, keluarBatal]);
@@ -187,6 +193,7 @@ export function ConfirmSheet({
 
     if (visible) {
       sedangKeluar.current = false;
+      sudahPilih.current = false;
       sudahTerukur.current = false;
       opasitasLembar.value = 0;
       setTerpasang(true);
@@ -194,6 +201,7 @@ export function ConfirmSheet({
     }
 
     // Ditutup dari luar: keluar seperti pembatalan, tanpa memanggil apa pun.
+    sudahPilih.current = true;
     keluarBatal();
   }, [visible, keluarBatal, opasitasLembar]);
 

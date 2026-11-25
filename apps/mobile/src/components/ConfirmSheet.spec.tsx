@@ -292,6 +292,92 @@ describe('ConfirmSheet', () => {
     expect(onConfirm).toHaveBeenCalledTimes(2);
   });
 
+  it('ketukan kedua setelah pilihan pertama diabaikan', () => {
+    jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+    const onConfirm = jest.fn();
+    const onCancel = jest.fn();
+    const pohon = render(
+      <ConfirmSheet
+        visible
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    );
+
+    fireEvent.press(pohon.getByLabelText('Ya'));
+    fireEvent.press(pohon.getByLabelText('Ya'));
+    fireEvent.press(pohon.getByTestId('latar-lembar'));
+    fireEvent(pohon.UNSAFE_getByType(Modal), 'requestClose');
+    fireEvent(pohon.getByTestId('lembar-konfirmasi'), 'accessibilityEscape');
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('Tidak lalu Ya memanggil onCancel sekali dan tidak memanggil onConfirm', () => {
+    jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+    const onConfirm = jest.fn();
+    const onCancel = jest.fn();
+    const pohon = render(
+      <ConfirmSheet
+        visible
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    );
+
+    fireEvent.press(pohon.getByLabelText('Tidak'));
+    fireEvent.press(pohon.getByLabelText('Ya'));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it('ditutup dari luar lalu ketukan berikutnya diabaikan', () => {
+    jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+    const onConfirm = jest.fn();
+    const onCancel = jest.fn();
+    const pohon = render(
+      <ConfirmSheet
+        visible
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    );
+
+    pohon.rerender(
+      <ConfirmSheet
+        visible={false}
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    );
+
+    fireEvent.press(pohon.getByLabelText('Ya'));
+    fireEvent.press(pohon.getByLabelText('Tidak'));
+
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
   it('tone danger memakai tombol isi danger', () => {
     const pohon = render(lembar({ tone: 'danger' }));
 
