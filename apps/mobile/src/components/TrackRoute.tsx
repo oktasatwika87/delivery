@@ -2,17 +2,32 @@
  * Rute langkah order.
  *
  * Menempatkan order di antara empat langkah yang dihubungkan lewat satu rute
- * melengkung. Yang digambar di sini diam: rel, progres, riak, titik, dan
- * motor.
+ * melengkung. Yang bergerak di sini: riak berdenyut selama order masih
+ * mencari driver, garis biru menunjukkan bagian rute yang sudah dilalui, dan
+ * motor muncul di titik langkah yang sedang berjalan.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Circle, Path, type CircleProps, type PathProps } from 'react-native-svg';
+import Animated, {
+  Easing,
+  cancelAnimation,
+  useAnimatedProps,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withTiming,
+  type SharedValue,
+} from 'react-native-reanimated';
 
 import { Icon } from '../theme/Icon';
 import { useTheme } from '../theme/ThemeProvider';
-import { size, stroke, type ThemeColors } from '../theme/tokens';
+import { motion, size, stroke, type ThemeColors } from '../theme/tokens';
+import { useInitialWindow } from './motion/InitialWindow';
+import { fadeIn, fadeOut, standardEasing } from './motion/presets';
 
 /** Langkah order di rute. Null berarti order dibatalkan. */
 export type LangkahRute = 1 | 2 | 3 | 4 | null;
@@ -118,10 +133,80 @@ const UKURAN_MOTOR = 36;
 const RADIUS_TITIK = 7;
 /** Tebal tepi titik langkah. */
 const TEBAL_TITIK = 3;
-/** Jari-jari riak pertama dan kedua. */
+/** Titik tempat riak berdenyut selama order masih mencari driver. */
+const TITIK_RIAK = TITIK[3];
+/** Jari-jari riak diam, dipakai kalau gerakan dikurangi. */
 const RADIUS_RIAK = [15, 24];
-/** Transparansi riak pertama dan kedua. */
+/** Transparansi riak diam, dipakai kalau gerakan dikurangi. */
 const OPASITAS_RIAK = [0.5, 0.22];
+/** Jari-jari riak paling kecil saat denyutannya hampir habis. */
+const RIAK_AWAL = 7;
+/** Selisih jari-jari riak antara awal dan akhir denyutan. */
+const RIAK_SELISIH = 21;
+/** Transparansi riak paling awal. */
+const RIAK_OPASITAS = 0.5;
+/** Lama satu denyutan riak. */
+const SIKLUS_RIAK = 1400;
+/** Jeda cincin kedua, biar denyutannya tidak serempak. */
+const JEDA_RIAK = 700;
+/** Transparansi cahaya motor saat paling terang. */
+const CAHAYA_TERANG = 0.6;
+/** Tambahan ukuran cahaya motor. */
+const CAHAYA_SKALA = 0.8;
+/** Lama cahaya motor menyala. */
+const DURASI_CAHAYA = 700;
+
+/** Lingkaran riak yang bisa dianimasikan. */
+const LingkaranRiak = Animated.createAnimatedComponent(Circle);
+/** Jalur progres yang bisa dianimasikan. */
+const JalurProgres = Animated.createAnimatedComponent(Path);
+
+/** Jenis gerak rute ketika langkah order berubah. */
+export type JenisGerak = 'muncul' | 'kembali' | 'langsung';
+
+/**
+ * Menentukan jenis gerak dari perubahan langkah.
+ *
+ * 'muncul' kalau order yang tadinya belum ada driver sekarang punya driver,
+ * atau lompat dari langkah dua ke empat. 'kembali' kalau order balik ke
+ * langkah satu, jadi sedang mencari driver lagi. Sisanya berubah langsung
+ * saja tanpa gerak.
+ */
+export function jenisGerakRute(lama: LangkahRute, baru: LangkahRute): JenisGerak {
+  if (lama === baru) return 'langsung';
+  if (lama === null || baru === null) return 'langsung';
+  if (baru === 1) return 'kembali';
+  if (lama === 1) return 'muncul';
+  if (lama === 2 && baru === 4) return 'muncul';
+  return 'langsung';
+}
+
+/**
+ * Panjang garis progres yang diam untuk suatu langkah.
+ *
+ * Langkah satu dan order yang dibatalkan belum punya progres, jadi
+ * panjangnya nol.
+ */
+function panjangDiam(langkah: LangkahRute): number {
+  if (langkah === null || langkah < 2) return 0;
+  return PANJANG_SAMPAI[langkah - 2];
+}
+
+/**
+ * Transparansi cahaya motor.
+ *
+ * Cahaya mulai dan selesai dengan tidak terlihat, jadi yang kelihatan hanya
+ * bagian tengah denyutannya.
+ */
+export function opasitasCahaya(c: number): number {
+  if (c <= 0 || c >= 1) return 0;
+  return CAHAYA_TERANG * (1 - c);
+}
+
+/** Ukuran cahaya motor, dikali skala denyutannya. */
+export function skalaCahaya(c: number): number {
+  return 1 + CAHAYA_SKALA * c;
+}
 
 export interface TrackRouteProps {
   /** Langkah order sekarang. Null berarti order dibatalkan. */
@@ -153,18 +238,186 @@ function warnaTitik(
   return { fill: colors.header, stroke: colors.rail };
 }
 
+/**
+ * Satu cincin riak yang berdenyut.
+ *
+ * Cincin ini penanda order yang masih menunggu driver, jadi ia tetap berdenyut
+ * sejak langkah pertama tampil, termasuk di dalam jendela awal.
+ */
+function Riak({
+  urutan,
+  warna,
+}: {
+  urutan: number;
+  warna: string;
+}): React.JSX.Element {
+  const kurangiGerak = useReducedMotion();
+  const fase = useSharedValue(0);
+
+  const props = useAnimatedProps<CircleProps>(() =>
+    kurangiGerak
+      ? { r: RADIUS_RIAK[urutan], opacity: OPASITAS_RIAK[urutan] }
+      : {
+          r: RIAK_AWAL + RIAK_SELISIH * (1 - (1 - fase.value) * (1 - fase.value)),
+          opacity: RIAK_OPASITAS * (1 - fase.value),
+        },
+  );
+
+  useEffect(() => {
+    if (kurangiGerak) return undefined;
+
+    const denyut = withRepeat(
+      withTiming(1, { duration: SIKLUS_RIAK, easing: Easing.linear }),
+      -1,
+      false,
+    );
+    fase.value = urutan === 0 ? denyut : withDelay(JEDA_RIAK, denyut);
+
+    return () => {
+      cancelAnimation(fase);
+    };
+  }, [fase, kurangiGerak, urutan]);
+
+  return (
+    <LingkaranRiak
+      animatedProps={props}
+      cx={TITIK_RIAK.x}
+      cy={TITIK_RIAK.y}
+      fill="none"
+      stroke={warna}
+      strokeWidth={stroke.ring}
+    />
+  );
+}
+
+/**
+ * Cahaya yang menyala di sekitar motor.
+ *
+ * Cahaya ini digambar di belakang motor, jadi motor tetap terbaca.
+ */
+function CahayaMotor({
+  kiri,
+  atas,
+  nilai,
+}: {
+  kiri: number;
+  atas: number;
+  nilai: SharedValue<number>;
+}): React.JSX.Element {
+  const { colors } = useTheme();
+
+  const gaya = useAnimatedStyle(() => ({
+    opacity: opasitasCahaya(nilai.value),
+    transform: [{ scale: skalaCahaya(nilai.value) }],
+  }));
+
+  return (
+    <Animated.View
+      testID="cahaya-rute"
+      pointerEvents="none"
+      style={[
+        styles.cahaya,
+        { left: kiri, top: atas, borderColor: colors.info, borderWidth: stroke.ring },
+        gaya,
+      ]}
+    />
+  );
+}
+
+/** Riwayat perubahan langkah, dipakai untuk menentukan jenis geraknya. */
+interface RiwayatGerak {
+  /** Langkah sebelum perubahan. */
+  lama: LangkahRute;
+  /** Langkah sesudah perubahan. */
+  baru: LangkahRute;
+  /** Jenis gerak dari perubahan itu. */
+  jenis: JenisGerak;
+  /** True kalau geraknya boleh jalan waktu perubahan itu terjadi. */
+  boleh: boolean;
+}
+
 export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
   const { colors } = useTheme();
   const [lebar, setLebar] = useState(0);
+  const dalamJendela = useInitialWindow();
+  const kurangiGerak = useReducedMotion();
+
+  const panjang = useSharedValue(panjangDiam(langkah));
+  const cahaya = useSharedValue(1);
+  const [riwayat, setRiwayat] = useState<RiwayatGerak>({
+    lama: langkah,
+    baru: langkah,
+    jenis: 'langsung',
+    boleh: false,
+  });
+  /** Nomor motor, naik setiap kali motor baru masuk. */
+  const [nomorMotor, setNomorMotor] = useState(0);
+  /** True kalau motor yang baru masuk pakai gerak pudar. */
+  const [motorMasuk, setMotorMasuk] = useState(false);
 
   const ukur = useCallback((event: LayoutChangeEvent) => {
     setLebar(event.nativeEvent.layout.width);
   }, []);
 
+  // Gerak boleh jalan kalau layar sudah lama terbuka, gerakan tidak dikurangi,
+  // dan gambar sudah diukur. Selama salah satu belum terpenuhi, perubahan
+  // langkah langsung saja ke bentuk barunya.
+  const bolehGerak = !dalamJendela && !kurangiGerak && lebar > 0;
+
+  // Jenis geraknya dihitung saat render, supaya efek yang menjalankannya
+  // selalu memakai perubahan yang baru saja terjadi.
+  if (riwayat.baru !== langkah) {
+    setRiwayat({
+      lama: riwayat.baru,
+      baru: langkah,
+      jenis: jenisGerakRute(riwayat.baru, langkah),
+      boleh: bolehGerak,
+    });
+  }
+
+  useEffect(() => {
+    const target = panjangDiam(riwayat.baru);
+
+    if (!riwayat.boleh || riwayat.jenis === 'langsung') {
+      panjang.value = target;
+      cahaya.value = 1;
+      setMotorMasuk(false);
+      return;
+    }
+
+    if (riwayat.jenis === 'muncul') {
+      panjang.value = withTiming(target, {
+        duration: motion.duration.drawLine,
+        easing: standardEasing,
+      });
+      cahaya.value = 0;
+      cahaya.value = withDelay(
+        motion.duration.drawLine,
+        withTiming(1, { duration: DURASI_CAHAYA, easing: standardEasing }),
+      );
+      setNomorMotor((nomor) => nomor + 1);
+      setMotorMasuk(true);
+      return;
+    }
+
+    panjang.value = withTiming(0, {
+      duration: motion.duration.drawLine,
+      easing: standardEasing,
+    });
+    cahaya.value = 1;
+    setMotorMasuk(false);
+  }, [cahaya, panjang, riwayat]);
+
+  const propsProgres = useAnimatedProps<PathProps>(() => ({
+    strokeDashoffset: PANJANG_TOTAL - panjang.value,
+  }));
+
   const skala = lebar / LEBAR_VB;
   const tinggi = (lebar * TINGGI_VB) / LEBAR_VB;
   const langkahMotor = langkah !== null && langkah >= 2 ? langkah : null;
   const titikMotor = langkahMotor ? TITIK[langkahMotor - 1] : null;
+  const motorKiri = titikMotor ? titikMotor.x * skala - UKURAN_MOTOR / 2 : 0;
+  const motorAtas = titikMotor ? titikMotor.y * skala - UKURAN_MOTOR / 2 : 0;
 
   return (
     <View
@@ -184,28 +437,19 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
               strokeWidth={stroke.route}
               strokeLinecap="round"
             />
-            {langkah !== null && langkah >= 2 ? (
-              <Path
-                d={JALUR}
-                fill="none"
-                stroke={colors.info}
-                strokeWidth={stroke.route}
-                strokeLinecap="round"
-                strokeDasharray={[PANJANG_SAMPAI[langkah - 2], PANJANG_TOTAL]}
-              />
-            ) : null}
+            <JalurProgres
+              testID="progres-rute"
+              animatedProps={propsProgres}
+              d={JALUR}
+              fill="none"
+              stroke={colors.info}
+              strokeWidth={stroke.route}
+              strokeLinecap="round"
+              strokeDasharray={[PANJANG_TOTAL, PANJANG_TOTAL]}
+            />
             {langkah === 1
-              ? RADIUS_RIAK.map((radius, urutan) => (
-                  <Circle
-                    key={`riak-${urutan}`}
-                    cx={TITIK[3].x}
-                    cy={TITIK[3].y}
-                    r={radius}
-                    fill="none"
-                    stroke={colors.info}
-                    strokeWidth={stroke.ring}
-                    opacity={OPASITAS_RIAK[urutan]}
-                  />
+              ? RADIUS_RIAK.map((_, urutan) => (
+                  <Riak key={`riak-${urutan}`} urutan={urutan} warna={colors.info} />
                 ))
               : null}
             {TITIK.map((titik, urutan) => {
@@ -224,19 +468,29 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
             })}
           </Svg>
           {titikMotor ? (
-            <View
-              testID="motor-rute"
-              style={[
-                styles.motor,
-                {
-                  left: titikMotor.x * skala - UKURAN_MOTOR / 2,
-                  top: titikMotor.y * skala - UKURAN_MOTOR / 2,
-                  backgroundColor: colors.info,
-                },
-              ]}
-            >
-              <Icon name="two_wheeler" size={size.iconMd} color={colors.onInfoFill} />
-            </View>
+            <>
+              <CahayaMotor kiri={motorKiri} atas={motorAtas} nilai={cahaya} />
+              <Animated.View
+                key={nomorMotor}
+                testID="motor-rute"
+                entering={
+                  motorMasuk
+                    ? fadeIn(motion.duration.drawLine - motion.duration.fadeIn)
+                    : undefined
+                }
+                exiting={bolehGerak ? fadeOut() : undefined}
+                style={[
+                  styles.motor,
+                  {
+                    left: motorKiri,
+                    top: motorAtas,
+                    backgroundColor: colors.info,
+                  },
+                ]}
+              >
+                <Icon name="two_wheeler" size={size.iconMd} color={colors.onInfoFill} />
+              </Animated.View>
+            </>
           ) : null}
         </>
       ) : null}
@@ -255,5 +509,11 @@ const styles = StyleSheet.create({
     borderRadius: UKURAN_MOTOR / 2,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  cahaya: {
+    position: 'absolute',
+    width: UKURAN_MOTOR,
+    height: UKURAN_MOTOR,
+    borderRadius: UKURAN_MOTOR / 2,
   },
 });

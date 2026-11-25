@@ -9,6 +9,7 @@ import React from 'react';
 import { StyleSheet } from 'react-native';
 import { fireEvent, render, within } from '@testing-library/react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
+import * as reanimated from 'react-native-reanimated';
 
 import {
   JALUR,
@@ -16,14 +17,28 @@ import {
   PANJANG_SAMPAI,
   PANJANG_TOTAL,
   TrackRoute,
+  jenisGerakRute,
+  opasitasCahaya,
   type LangkahRute,
 } from './TrackRoute';
+import { InitialWindowProvider } from './motion/InitialWindow';
+import * as presets from './motion/presets';
 import { themes } from '../theme/tokens';
 
 type Pohon = ReturnType<typeof render>;
 
 const LEBAR = 360;
 const TINGGI = 88;
+/** Lama satu denyutan riak. */
+const SIKLUS_RIAK = 1400;
+/** Jeda cincin riak kedua. */
+const JEDA_RIAK = 700;
+/** Lama cahaya motor menyala. */
+const DURASI_CAHAYA = 700;
+/** Lama gambar garis progres. */
+const DURASI_GARIS = 320;
+/** Jeda masuknya motor, supaya selesai bersama garis progres. */
+const JEDA_MOTOR = 140;
 
 function rute(langkah: LangkahRute): React.JSX.Element {
   return <TrackRoute langkah={langkah} />;
@@ -54,14 +69,25 @@ function titikLangkah(pohon: Pohon) {
   return lingkaran(pohon).filter((el) => el.props.r === 7);
 }
 
-/** Dua lingkaran riak. */
+/** Dua cincin riak yang bisa dianimasikan. */
 function riak(pohon: Pohon) {
-  return lingkaran(pohon).filter((el) => el.props.r !== 7);
+  return lingkaran(pohon).filter((el) => el.props.animatedProps !== undefined);
 }
 
 /** Jalur progres, yaitu jalur yang warnanya biru. */
 function progres(pohon: Pohon) {
   return lintasan(pohon).filter((el) => el.props.stroke === themes.gelap.info);
+}
+
+/** Panjang garis progres yang sedang tampil. */
+function panjangProgres(pohon: Pohon): number {
+  const garis = progres(pohon)[0];
+  return PANJANG_TOTAL - garis.props.animatedProps.strokeDashoffset;
+}
+
+/** Motor di rute, termasuk yang disembunyikan dari pembaca layar. */
+function motor(pohon: Pohon) {
+  return pohon.getByTestId('motor-rute', { includeHiddenElements: true });
 }
 
 describe('TrackRoute', () => {
@@ -100,20 +126,38 @@ describe('TrackRoute', () => {
     expect(rel?.props.fill).toBe('none');
   });
 
-  it('langkah satu menggambar riak dan tanpa progres', () => {
+  it('langkah satu menggambar riak berdenyut dan progres sepanjang 0', () => {
+    jest.restoreAllMocks();
+    const spyUlang = jest.spyOn(reanimated, 'withRepeat');
+    const spyTiming = jest.spyOn(reanimated, 'withTiming');
+    const spyJeda = jest.spyOn(reanimated, 'withDelay');
+
     const pohon = render(rute(1));
     ukur(pohon);
 
-    expect(progres(pohon)).toHaveLength(0);
+    expect(riak(pohon)).toHaveLength(2);
+    expect(spyUlang).toHaveBeenCalledTimes(2);
+    expect(spyTiming).toHaveBeenCalledWith(1, {
+      duration: SIKLUS_RIAK,
+      easing: reanimated.Easing.linear,
+    });
+    expect(spyJeda).toHaveBeenCalledWith(JEDA_RIAK, expect.anything());
+    expect(panjangProgres(pohon)).toBeCloseTo(0, 5);
+  });
 
-    const riakLingkaran = riak(pohon);
-    expect(riakLingkaran).toHaveLength(2);
-    expect(riakLingkaran[0].props.r).toBe(15);
-    expect(riakLingkaran[0].props.opacity).toBe(0.5);
-    expect(riakLingkaran[1].props.r).toBe(24);
-    expect(riakLingkaran[1].props.opacity).toBe(0.22);
-    expect(riakLingkaran[0].props.stroke).toBe(themes.gelap.info);
-    expect(riakLingkaran[0].props.fill).toBe('none');
+  it('riak diam dengan kurangi gerakan', () => {
+    jest.restoreAllMocks();
+    jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+
+    const pohon = render(rute(1));
+    ukur(pohon);
+
+    const cincin = riak(pohon);
+    expect(cincin).toHaveLength(2);
+    expect(cincin[0].props.animatedProps.r).toBe(15);
+    expect(cincin[0].props.animatedProps.opacity).toBe(0.5);
+    expect(cincin[1].props.animatedProps.r).toBe(24);
+    expect(cincin[1].props.animatedProps.opacity).toBe(0.22);
   });
 
   it('langkah satu tidak menggambar motor', () => {
@@ -146,9 +190,10 @@ describe('TrackRoute', () => {
     const garis = progres(pohon);
     expect(garis).toHaveLength(1);
     expect(garis[0].props.d).toBe(JALUR);
-    expect(garis[0].props.strokeDasharray[0]).toBeCloseTo(92.9, 1);
-    expect(garis[0].props.strokeDasharray[1]).toBeCloseTo(281.62, 1);
+    expect(garis[0].props.strokeDasharray[0]).toBeCloseTo(PANJANG_TOTAL, 1);
+    expect(garis[0].props.strokeDasharray[1]).toBeCloseTo(PANJANG_TOTAL, 1);
     expect(garis[0].props.strokeLinecap).toBe('round');
+    expect(panjangProgres(pohon)).toBeCloseTo(92.9, 1);
 
     expect(riak(pohon)).toHaveLength(0);
   });
@@ -159,8 +204,9 @@ describe('TrackRoute', () => {
 
     const garis = progres(pohon);
     expect(garis).toHaveLength(1);
-    expect(garis[0].props.strokeDasharray[0]).toBeCloseTo(188.26, 1);
-    expect(garis[0].props.strokeDasharray[1]).toBeCloseTo(281.62, 1);
+    expect(garis[0].props.strokeDasharray[0]).toBeCloseTo(PANJANG_TOTAL, 1);
+    expect(garis[0].props.strokeDasharray[1]).toBeCloseTo(PANJANG_TOTAL, 1);
+    expect(panjangProgres(pohon)).toBeCloseTo(188.26, 1);
   });
 
   it('langkah empat menggambar progres penuh', () => {
@@ -169,8 +215,9 @@ describe('TrackRoute', () => {
 
     const garis = progres(pohon);
     expect(garis).toHaveLength(1);
-    expect(garis[0].props.strokeDasharray[0]).toBeCloseTo(281.62, 1);
-    expect(garis[0].props.strokeDasharray[1]).toBeCloseTo(281.62, 1);
+    expect(garis[0].props.strokeDasharray[0]).toBeCloseTo(PANJANG_TOTAL, 1);
+    expect(garis[0].props.strokeDasharray[1]).toBeCloseTo(PANJANG_TOTAL, 1);
+    expect(panjangProgres(pohon)).toBeCloseTo(281.62, 1);
   });
 
   it('titik langkah pada langkah dua', () => {
@@ -203,8 +250,7 @@ describe('TrackRoute', () => {
     const pohon = render(rute(2));
     ukur(pohon);
 
-    const motor = pohon.getByTestId('motor-rute', { includeHiddenElements: true });
-    const gaya = StyleSheet.flatten(motor.props.style);
+    const gaya = StyleSheet.flatten(motor(pohon).props.style);
     expect(gaya.left).toBe(117);
     expect(gaya.top).toBe(14);
     expect(gaya.backgroundColor).toBe(themes.gelap.info);
@@ -214,8 +260,7 @@ describe('TrackRoute', () => {
     const pohon = render(rute(3));
     ukur(pohon);
 
-    const motor = pohon.getByTestId('motor-rute', { includeHiddenElements: true });
-    const gaya = StyleSheet.flatten(motor.props.style);
+    const gaya = StyleSheet.flatten(motor(pohon).props.style);
     expect(gaya.left).toBe(207);
     expect(gaya.top).toBe(42);
   });
@@ -224,17 +269,16 @@ describe('TrackRoute', () => {
     const pohon = render(rute(4));
     ukur(pohon);
 
-    const motor = pohon.getByTestId('motor-rute', { includeHiddenElements: true });
-    const gaya = StyleSheet.flatten(motor.props.style);
+    const gaya = StyleSheet.flatten(motor(pohon).props.style);
     expect(gaya.left).toBe(297);
     expect(gaya.top).toBe(20);
   });
 
-  it('order dibatalkan tidak menggambar progres, riak, dan motor', () => {
+  it('order dibatalkan: progres sepanjang 0, tanpa riak, dan tanpa motor', () => {
     const pohon = render(rute(null));
     ukur(pohon);
 
-    expect(progres(pohon)).toHaveLength(0);
+    expect(panjangProgres(pohon)).toBeCloseTo(0, 5);
     expect(riak(pohon)).toHaveLength(0);
     expect(pohon.queryByTestId('motor-rute')).toBeNull();
   });
@@ -263,8 +307,7 @@ describe('TrackRoute', () => {
     expect(gambar.props.width).toBe(720);
     expect(gambar.props.height).toBe(176);
 
-    const motor = pohon.getByTestId('motor-rute', { includeHiddenElements: true });
-    const gaya = StyleSheet.flatten(motor.props.style);
+    const gaya = StyleSheet.flatten(motor(pohon).props.style);
     expect(gaya.left).toBe(252);
     expect(gaya.top).toBe(46);
   });
@@ -282,5 +325,164 @@ describe('TrackRoute', () => {
 
     const gaya = StyleSheet.flatten(wadah(pohon).props.style);
     expect(gaya.aspectRatio).toBeCloseTo(LEBAR / TINGGI, 5);
+  });
+
+  it('jenis gerak rute untuk semua pasangan langkah', () => {
+    expect(jenisGerakRute(1, 1)).toBe('langsung');
+    expect(jenisGerakRute(1, 2)).toBe('muncul');
+    expect(jenisGerakRute(1, 3)).toBe('muncul');
+    expect(jenisGerakRute(1, 4)).toBe('muncul');
+    expect(jenisGerakRute(2, 1)).toBe('kembali');
+    expect(jenisGerakRute(3, 1)).toBe('kembali');
+    expect(jenisGerakRute(4, 1)).toBe('kembali');
+    expect(jenisGerakRute(2, 3)).toBe('langsung');
+    expect(jenisGerakRute(3, 4)).toBe('langsung');
+    expect(jenisGerakRute(4, 3)).toBe('langsung');
+    expect(jenisGerakRute(4, 2)).toBe('langsung');
+    expect(jenisGerakRute(1, null)).toBe('langsung');
+    expect(jenisGerakRute(null, 1)).toBe('langsung');
+    expect(jenisGerakRute(null, 2)).toBe('langsung');
+  });
+
+  it('langkah satu ke dua: garis digambar 320 milidetik, motor masuk, cahaya telat', () => {
+    jest.restoreAllMocks();
+    const spyTiming = jest.spyOn(reanimated, 'withTiming');
+    const spyJeda = jest.spyOn(reanimated, 'withDelay');
+    const spyMasuk = jest.spyOn(presets, 'fadeIn');
+
+    const pohon = render(rute(1));
+    ukur(pohon);
+    pohon.rerender(rute(2));
+    pohon.rerender(rute(2));
+
+    expect(spyTiming).toHaveBeenCalledWith(PANJANG_SAMPAI[0], {
+      duration: DURASI_GARIS,
+      easing: presets.standardEasing,
+    });
+    expect(spyMasuk).toHaveBeenCalledWith(JEDA_MOTOR);
+    expect(spyJeda).toHaveBeenCalledWith(DURASI_GARIS, expect.anything());
+    expect(spyTiming).toHaveBeenCalledWith(1, {
+      duration: DURASI_CAHAYA,
+      easing: presets.standardEasing,
+    });
+  });
+
+  it('langkah dua ke satu: garis kembali nol, motor keluar, riak muncul lagi', () => {
+    jest.restoreAllMocks();
+    const spyTiming = jest.spyOn(reanimated, 'withTiming');
+
+    const pohon = render(rute(2));
+    ukur(pohon);
+    expect(motor(pohon).props.exiting).toBeDefined();
+
+    pohon.rerender(rute(1));
+    pohon.rerender(rute(1));
+
+    expect(spyTiming).toHaveBeenCalledWith(0, {
+      duration: DURASI_GARIS,
+      easing: presets.standardEasing,
+    });
+    expect(
+      pohon.queryByTestId('motor-rute', { includeHiddenElements: true }),
+    ).toBeNull();
+    expect(riak(pohon)).toHaveLength(2);
+  });
+
+  it('langkah satu ke tiga dan langkah dua ke empat digerakkan muncul', () => {
+    expect(jenisGerakRute(1, 3)).toBe('muncul');
+    expect(jenisGerakRute(2, 4)).toBe('muncul');
+  });
+
+  it('motor dipasang ulang saat langkah dua ke empat', () => {
+    const pohon = render(rute(2));
+    ukur(pohon);
+    const motorLama = motor(pohon);
+
+    pohon.rerender(rute(4));
+    pohon.rerender(rute(4));
+    const motorBaru = motor(pohon);
+
+    expect(motorBaru).not.toBe(motorLama);
+    expect(motorBaru.props.entering).toBeDefined();
+  });
+
+  it('motor tidak dipasang ulang saat langkah dua ke tiga', () => {
+    const pohon = render(rute(2));
+    ukur(pohon);
+    const motorLama = motor(pohon);
+
+    pohon.rerender(rute(3));
+    pohon.rerender(rute(3));
+
+    expect(motor(pohon)).toBe(motorLama);
+    expect(motor(pohon).props.entering).toBeUndefined();
+  });
+
+  it('di dalam jendela awal perubahan langkah langsung tanpa gerak', () => {
+    jest.restoreAllMocks();
+    const spyTiming = jest.spyOn(reanimated, 'withTiming');
+
+    const pohon = render(<InitialWindowProvider>{rute(1)}</InitialWindowProvider>);
+    ukur(pohon);
+    pohon.rerender(<InitialWindowProvider>{rute(2)}</InitialWindowProvider>);
+    pohon.rerender(<InitialWindowProvider>{rute(2)}</InitialWindowProvider>);
+
+    expect(spyTiming).not.toHaveBeenCalledWith(PANJANG_SAMPAI[0], expect.anything());
+    expect(spyTiming).not.toHaveBeenCalledWith(1, {
+      duration: DURASI_CAHAYA,
+      easing: presets.standardEasing,
+    });
+    expect(motor(pohon).props.entering).toBeUndefined();
+  });
+
+  it('dengan kurangi gerakan perubahan langkah langsung tanpa gerak', () => {
+    jest.restoreAllMocks();
+    jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+    const spyTiming = jest.spyOn(reanimated, 'withTiming');
+
+    const pohon = render(rute(1));
+    ukur(pohon);
+    pohon.rerender(rute(2));
+    pohon.rerender(rute(2));
+
+    expect(spyTiming).not.toHaveBeenCalledWith(PANJANG_SAMPAI[0], expect.anything());
+    expect(spyTiming).not.toHaveBeenCalledWith(1, {
+      duration: DURASI_CAHAYA,
+      easing: presets.standardEasing,
+    });
+    expect(motor(pohon).props.entering).toBeUndefined();
+  });
+
+  it('sebelum lebar terukur perubahan langkah langsung tanpa gerak', () => {
+    jest.restoreAllMocks();
+    const spyTiming = jest.spyOn(reanimated, 'withTiming');
+
+    const pohon = render(rute(1));
+    pohon.rerender(rute(2));
+    pohon.rerender(rute(2));
+
+    expect(spyTiming).not.toHaveBeenCalledWith(PANJANG_SAMPAI[0], expect.anything());
+    expect(
+      pohon.queryByTestId('motor-rute', { includeHiddenElements: true }),
+    ).toBeNull();
+  });
+
+  it('riak tetap berdenyut di dalam jendela awal dan dibatalkan saat keluar', () => {
+    jest.restoreAllMocks();
+    const spyUlang = jest.spyOn(reanimated, 'withRepeat');
+    const spyBatal = jest.spyOn(reanimated, 'cancelAnimation');
+
+    const pohon = render(<InitialWindowProvider>{rute(1)}</InitialWindowProvider>);
+    ukur(pohon);
+    expect(spyUlang).toHaveBeenCalledTimes(2);
+
+    pohon.rerender(<InitialWindowProvider>{rute(2)}</InitialWindowProvider>);
+    expect(spyBatal).toHaveBeenCalled();
+  });
+
+  it('cahaya tidak terlihat di awal dan di akhir denyutannya', () => {
+    expect(opasitasCahaya(0)).toBe(0);
+    expect(opasitasCahaya(1)).toBe(0);
+    expect(opasitasCahaya(0.5)).toBeCloseTo(0.3, 5);
   });
 });

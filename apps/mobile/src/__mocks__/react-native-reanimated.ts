@@ -81,6 +81,16 @@ function withSequence(...animasi: unknown[]): unknown {
   return animasi[animasi.length - 1];
 }
 
+/** Pengulangan: yang dipakai adalah animasi itu sendiri. */
+function withRepeat(
+  animasi: unknown,
+  _jumlah?: number,
+  _balik?: boolean,
+  _callback?: unknown,
+): unknown {
+  return animasi;
+}
+
 /** Panggilan balik JS dari worklet: di luar worklet fungsinya apa adanya. */
 function runOnJS<T>(fungsi: T): T {
   return fungsi;
@@ -148,7 +158,7 @@ function easingBezierBaru(): (t: number) => number {
 
 const Easing = {
   bezier: (_x1: number, _y1: number, _x2: number, _y2: number) => easingBezierBaru(),
-  linear: () => fungsiEasing,
+  linear: fungsiEasing,
   in: () => fungsiEasing,
   out: () => fungsiEasing,
   inOut: () => fungsiEasing,
@@ -208,6 +218,7 @@ const isi = {
   useReducedMotion,
   useSharedValue,
   withDelay,
+  withRepeat,
   withSequence,
   withSpring,
   withTiming,
