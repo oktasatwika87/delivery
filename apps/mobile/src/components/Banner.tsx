@@ -11,6 +11,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 
 import { Button } from './Button';
+import type { ButtonVariant } from './Button';
 import { Icon } from '../theme/Icon';
 import type { IconName } from '../theme/icons';
 import { StripeFill } from '../theme/StripeFill';
@@ -39,6 +40,8 @@ export type BannerTone = 'pending' | 'warning' | 'info' | 'danger';
 export interface BannerAction {
   label: string;
   onPress: () => void;
+  /** Kalau true, tombol aksinya menampilkan pemutar dan tidak bisa ditekan. */
+  loading?: boolean;
 }
 
 export interface BannerProps {
@@ -112,6 +115,19 @@ const GAYA_TONE = perTema(
     },
   }),
 );
+
+/**
+ * Varian tombol aksi pertama untuk tiap nada.
+ *
+ * Nada warning memakai tombol terang, supaya warnanya tidak bertabrakan
+ * dengan belang kuning di belakang banner.
+ */
+const VARIAN_PERTAMA: Record<BannerTone, ButtonVariant> = {
+  pending: 'primary',
+  warning: 'secondary',
+  info: 'primary',
+  danger: 'dangerFill',
+};
 
 const gaya = StyleSheet.create({
   wadah: {
@@ -215,13 +231,15 @@ export function Banner({
             <Button
               title={actions[0].label}
               onPress={actions[0].onPress}
+              loading={actions[0].loading}
               size="sm"
-              variant={tone === 'danger' ? 'dangerFill' : 'primary'}
+              variant={VARIAN_PERTAMA[tone]}
             />
             {actions.length === 2 ? (
               <Button
                 title={actions[1].label}
                 onPress={actions[1].onPress}
+                loading={actions[1].loading}
                 size="sm"
                 variant="ghost"
               />

@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { ActivityIndicator, StyleSheet } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 
 import { Banner } from './Banner';
@@ -14,7 +14,8 @@ import { Button } from './Button';
 import { InitialWindowProvider } from './motion/InitialWindow';
 import { CheckMark } from './motion/CheckMark';
 import { Icon } from '../theme/Icon';
-import { themes } from '../theme/tokens';
+import { ThemeProvider } from '../theme/ThemeProvider';
+import { stroke, themes } from '../theme/tokens';
 import type { EntryAnimationsValues, ExitAnimationsValues } from 'react-native-reanimated';
 
 /** Nilai masuk lengkap: semua kolom target dan ukuran jendela. */
@@ -275,5 +276,74 @@ describe('Banner', () => {
     const { toJSON } = render(<Banner tone="info" title="Judul" />);
     const gaya = StyleSheet.flatten(toJSON().props.style);
     expect(gaya.overflow).toBe('hidden');
+  });
+
+  it('tone warning dengan satu aksi memakai tombol berlatar terang', () => {
+    const { getByLabelText } = render(
+      <ThemeProvider name="terang">
+        <Banner
+          tone="warning"
+          title="Belang"
+          actions={[{ label: 'Coba lagi', onPress: jest.fn() }]}
+        />
+      </ThemeProvider>,
+    );
+
+    const gaya = StyleSheet.flatten(getByLabelText('Coba lagi').props.style);
+    expect(gaya.backgroundColor).toBe(themes.terang.actionSecondary);
+    expect(gaya.borderColor).toBe(themes.terang.lineControl);
+    expect(gaya.borderWidth).toBe(stroke.hairline);
+  });
+
+  it('aksi yang sedang memuat membuat tombol sibuk dan tidak bisa ditekan', () => {
+    const onPress = jest.fn();
+    const { getByLabelText, UNSAFE_getByType } = render(
+      <Banner
+        tone="info"
+        title="Judul"
+        actions={[{ label: 'Coba lagi', onPress, loading: true }]}
+      />,
+    );
+
+    const tombol = getByLabelText('Coba lagi');
+    expect(tombol.props.accessibilityState.busy).toBe(true);
+    expect(UNSAFE_getByType(ActivityIndicator)).toBeTruthy();
+
+    fireEvent.press(tombol);
+    expect(onPress).not.toHaveBeenCalled();
+  });
+
+  it('aksi kedua yang sedang memuat juga membuat tombolnya sibuk', () => {
+    const { getByLabelText } = render(
+      <Banner
+        tone="info"
+        title="Judul"
+        actions={[
+          { label: 'Coba lagi', onPress: jest.fn() },
+          { label: 'Abaikan', onPress: jest.fn(), loading: true },
+        ]}
+      />,
+    );
+
+    expect(getByLabelText('Abaikan').props.accessibilityState.busy).toBe(true);
+    expect(getByLabelText('Coba lagi').props.accessibilityState.busy).toBe(false);
+  });
+
+  it('aksi tanpa memuat membuat tombol biasa', () => {
+    const onPress = jest.fn();
+    const { getByLabelText, UNSAFE_queryByType } = render(
+      <Banner
+        tone="info"
+        title="Judul"
+        actions={[{ label: 'Coba lagi', onPress }]}
+      />,
+    );
+
+    const tombol = getByLabelText('Coba lagi');
+    expect(tombol.props.accessibilityState.busy).toBe(false);
+    expect(UNSAFE_queryByType(ActivityIndicator)).toBeNull();
+
+    fireEvent.press(tombol);
+    expect(onPress).toHaveBeenCalledTimes(1);
   });
 });
