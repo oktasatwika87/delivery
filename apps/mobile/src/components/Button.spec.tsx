@@ -211,6 +211,24 @@ describe('Button', () => {
     expect(gaya.fontSize).toBe(15);
   });
 
+  it('tombol hantu ukuran besar memakai huruf besar tebal', () => {
+    const { getByText } = render(
+      <Button title="Abaikan" onPress={() => {}} variant="ghost" size="lg" />,
+    );
+    const gaya = StyleSheet.flatten(getByText('Abaikan').props.style);
+    expect(gaya.fontSize).toBe(17);
+    expect(gaya.fontFamily).toBe('PlusJakartaSans-SemiBold');
+  });
+
+  it('tombol kedua ukuran besar memakai huruf besar tebal', () => {
+    const { getByText } = render(
+      <Button title="Coba lagi" onPress={() => {}} variant="secondary" size="lg" />,
+    );
+    const gaya = StyleSheet.flatten(getByText('Coba lagi').props.style);
+    expect(gaya.fontSize).toBe(17);
+    expect(gaya.fontFamily).toBe('PlusJakartaSans-SemiBold');
+  });
+
   it('judul yang berganti menyisakan judul baru saja', () => {
     const pohon = render(<Button title="Lama" onPress={() => {}} />);
     pohon.rerender(<Button title="Baru" onPress={() => {}} />);

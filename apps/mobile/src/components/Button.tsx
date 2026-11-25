@@ -255,10 +255,10 @@ export function Button({
           : [];
 
   const gayaTeks: TextStyle = {
-    ...(variant === 'secondary' || variant === 'ghost'
-      ? type.bodyMdMedium
-      : size === 'lg'
-        ? type.labelLg
+    ...(size === 'lg'
+      ? type.labelLg
+      : variant === 'secondary' || variant === 'ghost'
+        ? type.bodyMdMedium
         : size === 'sm'
           ? type.labelMd
           : type.label),
