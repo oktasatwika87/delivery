@@ -852,6 +852,103 @@ describe('useCustomerOrder', () => {
     });
   });
 
+  describe('asal perubahan', () => {
+    it('awal sesudah get pertama', async () => {
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      expect(result.current.asalPerubahan).toBe('awal');
+    });
+
+    it('pihak lain sesudah kejadian socket', async () => {
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        triggerAccepted({
+          orderId: 'order-1',
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 2,
+        });
+      });
+
+      expect(result.current.asalPerubahan).toBe('pihak_lain');
+    });
+
+    it('pihak lain sesudah ambil ulang yang menaikkan version', async () => {
+      mockGetOrderById.mockResolvedValueOnce({ ...ORDER, version: 2 });
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+      expect(result.current.asalPerubahan).toBe('awal');
+
+      mockGetOrderById.mockResolvedValueOnce({ ...ORDER, version: 3 });
+      act(() => {
+        triggerConnect();
+      });
+      await flush();
+
+      expect(result.current.asalPerubahan).toBe('pihak_lain');
+      expect(result.current.data?.order.version).toBe(3);
+    });
+
+    it('tidak berubah sesudah ambil ulang dengan version sama', async () => {
+      mockGetOrderById.mockResolvedValueOnce({ ...ORDER, version: 2 });
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        triggerAccepted({
+          orderId: 'order-1',
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 3,
+        });
+      });
+      expect(result.current.asalPerubahan).toBe('pihak_lain');
+
+      mockGetOrderById.mockResolvedValueOnce({ ...ORDER, version: 3 });
+      act(() => {
+        triggerConnect();
+      });
+      await flush();
+
+      expect(result.current.asalPerubahan).toBe('pihak_lain');
+      expect(result.current.data?.order.version).toBe(3);
+    });
+
+    it('sendiri dari order cancelled yang datang sebelum jawaban http', async () => {
+      mockGetOrderById.mockResolvedValueOnce({
+        ...ORDER,
+        status: 'PREPARING',
+        driverId: 'driver-1',
+        version: 2,
+      });
+      const lambat = tertunda<Order>();
+      mockRequestNewDriver.mockReturnValueOnce(lambat.janji);
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        void result.current.mintaDriverLain();
+      });
+
+      act(() => {
+        triggerCancelled({
+          orderId: 'order-1',
+          status: 'ASSIGNED',
+          version: 3,
+          reason: 'driver_unreachable',
+        });
+      });
+
+      expect(result.current.asalPerubahan).toBe('sendiri');
+    });
+  });
+
   describe('pelepasan', () => {
     it('dilepas: langganan dilepas dan jawaban yang telat diabaikan', async () => {
       const lambat = tertunda<Order>();
