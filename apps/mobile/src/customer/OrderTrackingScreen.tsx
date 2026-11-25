@@ -12,6 +12,12 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { LayoutChangeEvent, TextStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { LinearGradient, Rect, Stop } from 'react-native-svg';
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
 import type { Order } from '@delivery/shared';
 
@@ -26,7 +32,9 @@ import { ScreenFrame } from '../components/ScreenFrame';
 import { StatusLabel } from '../components/StatusLabel';
 import { TrackRoute } from '../components/TrackRoute';
 import type { LangkahRute } from '../components/TrackRoute';
-import { InitialWindowProvider } from '../components/motion/InitialWindow';
+import { InitialWindowProvider, useInitialWindow } from '../components/motion/InitialWindow';
+import { exitEasing, fadeIn, fadeOut, shift } from '../components/motion/presets';
+import { useGantiIsi } from '../components/motion/useGantiIsi';
 import { formatCurrency } from '../formatCurrency';
 import { formatOrderNumber } from '../formatOrderNumber';
 import { orderStatusLabel } from '../orderStatusLabel';
@@ -34,10 +42,11 @@ import { hapticError } from '../haptics';
 import { useNetworkStatus } from '../map/useNetworkStatus';
 import { Icon } from '../theme/Icon';
 import { ThemeProvider, useTheme } from '../theme/ThemeProvider';
-import { radius, size, space, stroke, type } from '../theme/tokens';
+import { motion, radius, size, space, stroke, type } from '../theme/tokens';
 import { customerTrackView, teksHasilCariDriverLain } from './customerTrackView';
 import type { CustomerTrackView } from './customerTrackView';
 import { useCustomerOrder } from './useCustomerOrder';
+import type { AsalPerubahan } from './useCustomerOrder';
 
 /** Tanda kali di rincian barang. */
 const TANDA_KALI = '\u00d7';
@@ -59,6 +68,18 @@ const JARAK_BARIS_ITEM = 12;
 const ATAS_CATATAN = 12;
 /** Jarak antar isi baris catatan. */
 const JARAK_CATATAN = 10;
+/** Geser posisi isi lembar saat banner di atasnya masuk atau keluar. */
+const GESER = shift();
+/** Judul kepala pudar masuk. */
+const MASUK_JUDUL = fadeIn();
+/** Isi baris orang pudar masuk. */
+const MASUK_ORANG = fadeIn();
+/** Baris orang dan garis yang hilang pudar keluar. */
+const KELUAR_PUDAR = fadeOut();
+/** Batas sorotan baris orang dari isi barisnya, di atas dan bawah. */
+const SOROTAN_ATAS = -8;
+/** Batas sorotan baris orang dari isi barisnya, di kiri dan kanan. */
+const SOROTAN_SAMPING = -12;
 
 /** Empat langkah order, dari order dibuat sampai terkirim. */
 const LABEL_LANGKAH = [
@@ -181,6 +202,53 @@ function KepalaStatus({
   );
 }
 
+/**
+ * Judul kepala yang sedang pudar keluar.
+ *
+ * Lapisan ini digambar absolute di atas judul baru, jadi tidak bisa diketuk dan
+ * tidak dibaca pembaca layar.
+ */
+interface JudulLamaProps {
+  judul: string;
+  /** Nomor pergantian yang sedang ditutup. */
+  nomor: number;
+  /** Dipanggil saat judul lama selesai pudar. */
+  selesai: (nomor: number) => void;
+}
+
+function JudulLama({ judul, nomor, selesai }: JudulLamaProps): React.JSX.Element {
+  const { colors } = useTheme();
+  const opasitas = useSharedValue(1);
+
+  useEffect(() => {
+    opasitas.value = withTiming(
+      0,
+      { duration: motion.duration.fadeOut, easing: exitEasing },
+      (habis) => {
+        if (habis) {
+          runOnJS(selesai)(nomor);
+        }
+      },
+    );
+  }, [nomor, opasitas, selesai]);
+
+  const gaya = useAnimatedStyle(() => ({ opacity: opasitas.value }));
+
+  return (
+    <Animated.View
+      testID="judul-lama"
+      style={[styles.judulLama, gaya]}
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <Text accessibilityRole="header" style={[styles.judul, { color: colors.text }]}>
+        {judul}
+      </Text>
+    </Animated.View>
+  );
+}
+
 /** Isi kepala, selalu di dalam bungkus tema gelap. */
 function IsiKepala({
   order,
@@ -190,6 +258,7 @@ function IsiKepala({
   view: CustomerTrackView;
 }): React.JSX.Element {
   const { colors } = useTheme();
+  const ganti = useGantiIsi(view.judul, view.judul);
 
   return (
     <>
@@ -199,9 +268,25 @@ function IsiKepala({
           label={orderStatusLabel(order.status)}
           peran="customer"
         />
-        <Text accessibilityRole="header" style={[styles.judul, { color: colors.text }]}>
-          {view.judul}
-        </Text>
+        <View style={styles.wadahJudul}>
+          <Animated.View
+            key={ganti.nomor}
+            entering={ganti.nomor > 0 ? MASUK_JUDUL : undefined}
+            testID="judul-baru"
+          >
+            <Text accessibilityRole="header" style={[styles.judul, { color: colors.text }]}>
+              {view.judul}
+            </Text>
+          </Animated.View>
+          {ganti.lama !== null ? (
+            <JudulLama
+              key={`lama-${ganti.nomor}`}
+              judul={ganti.lama}
+              nomor={ganti.nomor}
+              selesai={ganti.selesai}
+            />
+          ) : null}
+        </View>
       </View>
       <View style={styles.rute}>
         <TrackRoute langkah={view.langkah} />
@@ -244,21 +329,25 @@ function BarisLangkah({ view }: { view: CustomerTrackView }): React.JSX.Element 
   );
 }
 
-/** Baris orang: sedang mencari driver, atau driver yang sudah ada. */
-function BarisOrang({
-  order,
-  view,
-  onOpenChat,
-}: {
+/** Isi baris orang: avatar, keterangan, dan tombol chat. */
+interface IsiBarisOrangProps {
+  jenis: 'mencari' | 'driver';
+  bolehChat: boolean;
   order: Order;
-  view: CustomerTrackView;
   onOpenChat: (roomId: string) => void;
-}): React.JSX.Element {
+}
+
+function IsiBarisOrang({
+  jenis,
+  bolehChat,
+  order,
+  onOpenChat,
+}: IsiBarisOrangProps): React.JSX.Element {
   const { colors } = useTheme();
-  const mencari = view.barisOrang === 'mencari';
+  const mencari = jenis === 'mencari';
 
   return (
-    <View testID="baris-orang" style={styles.barisOrang}>
+    <>
       <View style={[styles.avatar, { backgroundColor: colors.fillNeutral }]}>
         <Icon
           name={mencari ? 'search' : 'two_wheeler'}
@@ -276,7 +365,7 @@ function BarisOrang({
             : 'Sudah menerima order ini'}
         </Text>
       </View>
-      {view.bolehChat ? (
+      {bolehChat ? (
         <Button
           title="Chat"
           icon="chat"
@@ -284,6 +373,182 @@ function BarisOrang({
           variant="primary"
           testID="tombol-chat"
           onPress={() => onOpenChat(order.id)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Isi baris orang yang sedang pudar keluar.
+ *
+ * Lapisan ini digambar absolute di atas isi baru, jadi tidak bisa diketuk dan
+ * tidak dibaca pembaca layar.
+ */
+interface OrangLamaProps {
+  isi: { jenis: 'mencari' | 'driver'; bolehChat: boolean };
+  order: Order;
+  onOpenChat: (roomId: string) => void;
+  /** Nomor pergantian yang sedang ditutup. */
+  nomor: number;
+  /** Dipanggil saat isi lama selesai pudar. */
+  selesai: (nomor: number) => void;
+}
+
+function OrangLama({
+  isi,
+  order,
+  onOpenChat,
+  nomor,
+  selesai,
+}: OrangLamaProps): React.JSX.Element {
+  const opasitas = useSharedValue(1);
+
+  useEffect(() => {
+    opasitas.value = withTiming(
+      0,
+      { duration: motion.duration.fadeOut, easing: exitEasing },
+      (habis) => {
+        if (habis) {
+          runOnJS(selesai)(nomor);
+        }
+      },
+    );
+  }, [nomor, opasitas, selesai]);
+
+  const gaya = useAnimatedStyle(() => ({ opacity: opasitas.value }));
+
+  return (
+    <Animated.View
+      testID="orang-lama"
+      style={[styles.orangLama, gaya]}
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <IsiBarisOrang
+        jenis={isi.jenis}
+        bolehChat={isi.bolehChat}
+        order={order}
+        onOpenChat={onOpenChat}
+      />
+    </Animated.View>
+  );
+}
+
+/**
+ * Lapisan sorot di belakang isi baris orang.
+ *
+ * Sorot muncul utuh lalu memudar habis, jadi mata sempat menangkap isi baru
+ * itu sebelum sorotannya hilang.
+ */
+function SorotanOrang({
+  nomor,
+  selesai,
+}: {
+  nomor: number;
+  selesai: (nomor: number) => void;
+}): React.JSX.Element {
+  const { colors } = useTheme();
+  const opasitas = useSharedValue(1);
+
+  useEffect(() => {
+    opasitas.value = withTiming(
+      0,
+      { duration: motion.duration.highlight, easing: exitEasing },
+      (habis) => {
+        if (habis) {
+          runOnJS(selesai)(nomor);
+        }
+      },
+    );
+  }, [nomor, opasitas, selesai]);
+
+  const gaya = useAnimatedStyle(() => ({ opacity: opasitas.value }));
+
+  return (
+    <Animated.View
+      testID="sorotan-orang"
+      pointerEvents="none"
+      style={[
+        styles.sorotanOrang,
+        { backgroundColor: colors.infoWash },
+        gaya,
+      ]}
+    />
+  );
+}
+
+/** Baris orang: sedang mencari driver, atau driver yang sudah ada. */
+interface BarisOrangProps {
+  jenis: 'mencari' | 'driver';
+  bolehChat: boolean;
+  asalPerubahan: AsalPerubahan;
+  order: Order;
+  onOpenChat: (roomId: string) => void;
+}
+
+function BarisOrang({
+  jenis,
+  bolehChat,
+  asalPerubahan,
+  order,
+  onOpenChat,
+}: BarisOrangProps): React.JSX.Element {
+  const ganti = useGantiIsi({ jenis, bolehChat }, `${jenis}|${bolehChat}`);
+  /** Sorotan yang sedang jalan, kalau ada. */
+  const [sorotan, setSorotan] = useState<{ nomor: number; selesai: boolean } | null>(
+    null,
+  );
+
+  // Keputusannya dihitung saat render, bukan di efek, jadi sorot langsung
+  // muncul bersama pergantian isinya. Kuncinya ikut nomor pergantian, jadi
+  // pergantian beruntun memulai sorot yang baru.
+  if (
+    ganti.nomor > 0 &&
+    ganti.nomor !== (sorotan?.nomor ?? 0) &&
+    asalPerubahan === 'pihak_lain'
+  ) {
+    setSorotan({ nomor: ganti.nomor, selesai: false });
+  }
+
+  const selesaiSorotan = useCallback((nomor: number) => {
+    setSorotan((sekarang) =>
+      sekarang !== null && sekarang.nomor === nomor
+        ? { ...sekarang, selesai: true }
+        : sekarang,
+    );
+  }, []);
+
+  return (
+    <View testID="baris-orang" style={styles.barisOrang}>
+      {sorotan !== null && !sorotan.selesai ? (
+        <SorotanOrang
+          key={`sorotan-${sorotan.nomor}`}
+          nomor={sorotan.nomor}
+          selesai={selesaiSorotan}
+        />
+      ) : null}
+      <Animated.View
+        key={ganti.nomor}
+        entering={ganti.nomor > 0 ? MASUK_ORANG : undefined}
+        style={styles.barisOrangIsi}
+      >
+        <IsiBarisOrang
+          jenis={jenis}
+          bolehChat={bolehChat}
+          order={order}
+          onOpenChat={onOpenChat}
+        />
+      </Animated.View>
+      {ganti.lama !== null ? (
+        <OrangLama
+          key={`lama-${ganti.nomor}`}
+          isi={ganti.lama}
+          order={order}
+          onOpenChat={onOpenChat}
+          nomor={ganti.nomor}
+          selesai={ganti.selesai}
         />
       ) : null}
     </View>
@@ -359,6 +624,7 @@ function Rincian({ order }: { order: Order }): React.JSX.Element {
 interface IsiOrderProps {
   order: Order;
   view: CustomerTrackView;
+  asalPerubahan: AsalPerubahan;
   onOpenChat: (roomId: string) => void;
   /** Banner hasil permintaan driver lain, kalau ada. */
   hasilCari: HasilCari | null;
@@ -373,6 +639,7 @@ interface IsiOrderProps {
 function IsiOrder({
   order,
   view,
+  asalPerubahan,
   onOpenChat,
   hasilCari,
   onTutupHasilCari,
@@ -381,6 +648,7 @@ function IsiOrder({
 }: IsiOrderProps): React.JSX.Element {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const dalamJendela = useInitialWindow();
 
   const aksiCariDriverLain: readonly [BannerAction] = [
     {
@@ -439,22 +707,57 @@ function IsiOrder({
           />
         ) : null}
         {view.barisOrang ? (
-          <BarisOrang order={order} view={view} onOpenChat={onOpenChat} />
+          <Animated.View
+            testID="anak-lembar"
+            layout={dalamJendela ? undefined : GESER}
+            exiting={dalamJendela ? undefined : KELUAR_PUDAR}
+          >
+            <BarisOrang
+              jenis={view.barisOrang}
+              bolehChat={view.bolehChat}
+              asalPerubahan={asalPerubahan}
+              order={order}
+              onOpenChat={onOpenChat}
+            />
+          </Animated.View>
         ) : null}
         {view.barisOrang ? (
-          <View
-            testID="garis-orang"
-            style={[styles.garis, { backgroundColor: colors.line }]}
-          />
+          <Animated.View
+            testID="anak-lembar"
+            layout={dalamJendela ? undefined : GESER}
+            exiting={dalamJendela ? undefined : KELUAR_PUDAR}
+          >
+            <View
+              testID="garis-orang"
+              style={[styles.garis, { backgroundColor: colors.line }]}
+            />
+          </Animated.View>
         ) : null}
-        <BarisAlamat order={order} />
+        <Animated.View
+          testID="anak-lembar"
+          layout={dalamJendela ? undefined : GESER}
+        >
+          <BarisAlamat order={order} />
+        </Animated.View>
         {view.kotakTunai ? (
-          <CashBox
-            variant={view.kotakTunai}
-            amountText={formatCurrency(order.totalCents, order.currency)}
-          />
+          <Animated.View
+            testID="anak-lembar"
+            layout={dalamJendela ? undefined : GESER}
+          >
+            <CashBox
+              variant={view.kotakTunai}
+              amountText={formatCurrency(order.totalCents, order.currency)}
+            />
+          </Animated.View>
         ) : null}
-        {order.items.length > 0 || order.notes ? <Rincian order={order} /> : null}
+        {order.items.length > 0 || order.notes ? (
+          <Animated.View
+            testID="anak-lembar"
+            layout={dalamJendela ? undefined : GESER}
+          >
+            <Rincian order={order} />
+          </Animated.View>
+        ) : null}
       </View>
     </ScrollView>
   );
@@ -472,6 +775,7 @@ export function OrderTrackingScreen({
     cobaLagi,
     terputus,
     tunaiDiterima,
+    asalPerubahan,
     memintaDriverLain,
     mintaDriverLain,
   } = useCustomerOrder(orderId, terlihat);
@@ -556,6 +860,7 @@ export function OrderTrackingScreen({
           <IsiOrder
             order={data.order}
             view={view}
+            asalPerubahan={asalPerubahan}
             onOpenChat={onOpenChat}
             hasilCari={hasilCari}
             onTutupHasilCari={tutupHasilCari}
@@ -601,11 +906,19 @@ const styles = StyleSheet.create({
     paddingTop: space[4],
     paddingHorizontal: space[6],
   },
+  wadahJudul: {
+    marginTop: space[3],
+  },
   judul: {
     ...type.headline,
-    marginTop: space[3],
     minHeight: 2 * type.headline.lineHeight,
     maxWidth: LEBAR_JUDUL,
+  },
+  judulLama: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
   },
   rute: {
     marginTop: space[4],
@@ -639,6 +952,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: space[3],
+  },
+  barisOrangIsi: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[3],
+    flex: 1,
+  },
+  orangLama: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+  },
+  sorotanOrang: {
+    position: 'absolute',
+    top: SOROTAN_ATAS,
+    bottom: SOROTAN_ATAS,
+    left: SOROTAN_SAMPING,
+    right: SOROTAN_SAMPING,
+    borderRadius: radius.lg,
   },
   avatar: {
     width: SISI_IKON,

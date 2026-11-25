@@ -11,6 +11,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react-n
 import { StyleSheet, Text } from 'react-native';
 import type { StyleProp, TextStyle } from 'react-native';
 import { LinearGradient, Rect, Stop } from 'react-native-svg';
+import * as reanimated from 'react-native-reanimated';
 
 import type {
   Order,
@@ -1098,5 +1099,200 @@ describe('layar status order customer', () => {
     });
 
     expect(urutan).toEqual(['terputus', 'hasil', 'hp-driver']);
+  });
+
+  /** Menunggu jendela awal selesai, jadi gerak isi boleh berjalan. */
+  async function lewatJendelaAwal(): Promise<void> {
+    await act(async () => {
+      jest.advanceTimersByTime(500);
+    });
+    await flush();
+  }
+
+  /** Timing ditiru tanpa memanggil callback, jadi lapisan lama tetap ada. */
+  function tahanLapisLama(): void {
+    jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+  }
+
+  it('judul lama pudar keluar sesudah order:accepted', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    tahanLapisLama();
+    try {
+      await tampilkan({ status: 'ASSIGNED' });
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        triggerAccepted({
+          orderId: ORDER.id,
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 2,
+        });
+      });
+      await flush();
+
+      const lama = screen.getByTestId('judul-lama', { includeHiddenElements: true });
+      expect(
+        within(lama).getByText('Order Anda sudah masuk', { includeHiddenElements: true }),
+      ).toBeTruthy();
+      expect(screen.getByTestId('judul-baru').props.entering).toBeDefined();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('judul lama tidak ada di dalam jendela awal', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    tahanLapisLama();
+    try {
+      await tampilkan({ status: 'ASSIGNED' });
+
+      await act(async () => {
+        triggerAccepted({
+          orderId: ORDER.id,
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 2,
+        });
+      });
+      await flush();
+
+      expect(screen.queryByTestId('judul-lama', { includeHiddenElements: true })).toBeNull();
+      expect(screen.getByTestId('judul-baru').props.entering).toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('baris orang lama dan sorotan muncul sesudah order:accepted', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    tahanLapisLama();
+    try {
+      await tampilkan({ status: 'ASSIGNED' });
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        triggerAccepted({
+          orderId: ORDER.id,
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 2,
+        });
+      });
+      await flush();
+
+      const lama = screen.getByTestId('orang-lama', { includeHiddenElements: true });
+      expect(
+        within(lama).getByText('Mencari driver', { includeHiddenElements: true }),
+      ).toBeTruthy();
+
+      const gaya = StyleSheet.flatten(screen.getByTestId('sorotan-orang').props.style);
+      expect(gaya.backgroundColor).toBe(themes.terang.infoWash);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('dengan kurangi gerakan tidak ada lapisan lama dan tidak ada sorotan', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+    tahanLapisLama();
+    try {
+      await tampilkan({ status: 'ASSIGNED' });
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        triggerAccepted({
+          orderId: ORDER.id,
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 2,
+        });
+      });
+      await flush();
+
+      expect(screen.queryByTestId('judul-lama', { includeHiddenElements: true })).toBeNull();
+      expect(screen.queryByTestId('orang-lama', { includeHiddenElements: true })).toBeNull();
+      expect(screen.queryByTestId('sorotan-orang')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('sesudah Cari driver lain sukses ada baris orang lama tapi tanpa sorotan', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    tahanLapisLama();
+    try {
+      await tampilkan(orderTerpisah());
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Cari driver lain'));
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+      });
+      await flush();
+
+      expect(screen.getByTestId('orang-lama', { includeHiddenElements: true })).toBeTruthy();
+      expect(screen.queryByTestId('sorotan-orang')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('perubahan status yang tidak mengganti isi baris orang tidak pasang sorotan', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    tahanLapisLama();
+    try {
+      await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        triggerStatusUpdated({
+          orderId: ORDER.id,
+          status: 'OUT_FOR_DELIVERY',
+          version: 2,
+          updatedAt: '2026-08-30T02:00:00.000Z',
+        });
+      });
+      await flush();
+
+      expect(screen.queryByTestId('orang-lama', { includeHiddenElements: true })).toBeNull();
+      expect(screen.queryByTestId('sorotan-orang')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('layout anak lembar kosong di dalam jendela awal dan terisi setelahnya', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    try {
+      await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+
+      const diJendela = screen.getAllByTestId('anak-lembar');
+      expect(diJendela.length).toBeGreaterThan(0);
+      diJendela.forEach((anak) => {
+        expect(anak.props.layout).toBeUndefined();
+      });
+
+      await lewatJendelaAwal();
+
+      const diLuar = screen.getAllByTestId('anak-lembar');
+      diLuar.forEach((anak) => {
+        expect(anak.props.layout).toBeDefined();
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
