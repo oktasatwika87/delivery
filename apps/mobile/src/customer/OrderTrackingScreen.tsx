@@ -1,515 +1,594 @@
 /**
- * Order Tracking Screen.
+ * Layar status order untuk customer.
  *
- * Customer-side real-time order tracking. Lifecycle:
- *   1. Mount -> fetch order state via GET /orders/:id (initial state)
- *   2. Subscribe OrdersSocketManager untuk event order:accepted/rejected/cancelled
- *   3. Display status, items, address, notes + connection banner
- *   4. Cleanup: unsubscribe semua listeners saat unmount
- *
- * Online-only, sama dengan OrderCreateScreen (online POST, no local DB).
- * Socket sudah connect di App.tsx saat customer login; tracking screen cuma
- * subscribe listener untuk orderId yang lagi dibuka.
- *
- * Status updates live (tanpa refresh manual):
- *   - order:accepted -> status PREPARING + driverId + CLEARED cancelReason
- *     (server clear dua-duanya, mobile mirror supaya fetch awal yang dapat
- *     cancelReason stale dari order yang melalui cron reassign sebelum
- *     accept juga langsung bersih)
- *   - order:rejected, status dari payload ('ASSIGNED' saat ini),
- *     driverId di-reset
- *   - order:cancelled, status dari payload ('ASSIGNED' saat ini) + cancelReason
- *     dari driver
- *   - order:cod_collected -> TIDAK mengubah status order (lihat catatan di
- *     PaymentsService.collectCod()/OrdersGateway.emitOrderCodCollected,
- *     status order memang tidak berubah saat COD di-collect). Ini murni
- *     live receipt: tampilkan banner konfirmasi pembayaran, dismissable,
- *     terpisah dari state `order` itu sendiri.
- *
- * Pool state adalah ASSIGNED + driverId null, bukan CONFIRMED lagi.
- * OrderTrackingScreen pakai payload.status langsung supaya kontrak type
- * literal di @delivery/shared jadi penjaga: backend tidak bisa switch status
- * tanpa compile error di sini juga.
- *
- * Connection banner muncul saat socket disconnect (network drop / airplane
- * mode / background). State order TIDAK hilang, banner hanya indikator.
- * Pattern paralel dengan OrderConflictBanner di OrderDetailScreen.
+ * Isi order datang dari server dan berubah sendiri kalau ada kabar baru lewat
+ * socket. Aturan tampilannya dihitung di customerTrackView, jadi layar ini
+ * cuma merangkai: kepala gelap berisi status dan rute, lalu lembar terang
+ * berisi rincian order.
  */
 
-import React, { useEffect, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Button,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import type { LayoutChangeEvent, TextStyle } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { LinearGradient, Rect, Stop } from 'react-native-svg';
 
-import type { Order, OrderStatus } from '@delivery/shared';
+import type { Order } from '@delivery/shared';
 
-import { orderStatusLabel } from '../orderStatusLabel';
+import { AppBar } from '../components/AppBar';
+import { Banner } from '../components/Banner';
+import { Button } from '../components/Button';
+import { Card } from '../components/Card';
+import { CashBox } from '../components/CashBox';
+import { ScreenFrame } from '../components/ScreenFrame';
+import { StatusLabel } from '../components/StatusLabel';
+import { TrackRoute } from '../components/TrackRoute';
+import type { LangkahRute } from '../components/TrackRoute';
+import { InitialWindowProvider } from '../components/motion/InitialWindow';
 import { formatCurrency } from '../formatCurrency';
-import { getOrderById, UnauthorizedError } from '../sync/client';
-import { ordersSocket } from '../sync/ordersSocket';
+import { formatOrderNumber } from '../formatOrderNumber';
+import { orderStatusLabel } from '../orderStatusLabel';
+import { useNetworkStatus } from '../map/useNetworkStatus';
+import { Icon } from '../theme/Icon';
+import { ThemeProvider, useTheme } from '../theme/ThemeProvider';
+import { radius, size, space, stroke, type } from '../theme/tokens';
+import { customerTrackView } from './customerTrackView';
+import type { CustomerTrackView } from './customerTrackView';
+import { useCustomerOrder } from './useCustomerOrder';
 
-interface OrderTrackingScreenProps {
+/** Tanda kali di rincian barang. */
+const TANDA_KALI = '\u00d7';
+/** Titik tengah di baris nama penerima. */
+const TITIK_TENGAH = '\u00b7';
+/** Tinggi pantulan di atas kepala, biar kepala sedikit melayang. */
+const TINGGI_PANTULAN = 1000;
+/** Jarak bawah kepala, biar lembar di bawahnya tidak menempel. */
+const PADDING_BAWAH_KEPALA = 32;
+/** Lebar maksimum judul, supaya tidak kepanjangan di layar lebar. */
+const LEBAR_JUDUL = 290;
+/** Sisi avatar dan lebar kolom ikon. */
+const SISI_IKON = 48;
+/** Jarak atas baris barang. */
+const ATAS_BARIS_ITEM = 10;
+/** Jarak antar isi baris barang. */
+const JARAK_BARIS_ITEM = 12;
+/** Jarak atas baris catatan. */
+const ATAS_CATATAN = 12;
+/** Jarak antar isi baris catatan. */
+const JARAK_CATATAN = 10;
+
+/** Empat langkah order, dari order dibuat sampai terkirim. */
+const LABEL_LANGKAH = [
+  'Order dibuat',
+  'Driver ditemukan',
+  'Dalam perjalanan',
+  'Terkirim',
+] as const;
+
+/** Keadaan satu label langkah di kepala. */
+type StatusLangkah = 'sekarang' | 'selesai' | 'belum';
+
+/** Gaya huruf tiap keadaan label langkah. */
+const GAYA_LABEL: Record<StatusLangkah, TextStyle> = {
+  sekarang: type.labelSm,
+  selesai: type.bodyXs,
+  belum: type.bodyXs,
+};
+
+/** Id gradasi dibuat unik supaya dua kepala tidak saling menimpa. */
+let hitunganGradasi = 0;
+
+export interface OrderTrackingScreenProps {
   orderId: string;
+  /** True kalau layar sedang terlihat, dipakai untuk mengatur ambil ulang. */
+  terlihat: boolean;
   onBack: () => void;
   onOpenChat: (roomId: string) => void;
 }
 
-const STATUS_COLORS: Record<OrderStatus, { bg: string; text: string }> = {
-  PENDING: { bg: '#fef3c7', text: '#92400e' },
-  CONFIRMED: { bg: '#dbeafe', text: '#1e40af' },
-  ASSIGNED: { bg: '#e0e7ff', text: '#3730a3' },
-  PREPARING: { bg: '#ede9fe', text: '#5b21b6' },
-  OUT_FOR_DELIVERY: { bg: '#fed7aa', text: '#c2410c' },
-  DELIVERED: { bg: '#d1fae5', text: '#065f46' },
-  CANCELLED: { bg: '#fee2e2', text: '#991b1b' },
-};
+/**
+ * Keadaan satu label langkah. Kalau order dibatalkan, langkah pertama
+ * dianggap sudah lewat, sisanya belum.
+ */
+function statusLangkah(nomor: number, langkah: LangkahRute): StatusLangkah {
+  if (langkah === null) return nomor === 1 ? 'selesai' : 'belum';
+  if (nomor < langkah) return 'selesai';
+  if (nomor === langkah) return 'sekarang';
+  return 'belum';
+}
 
-function StatusBadge({ status }: { status: OrderStatus }): React.JSX.Element {
-  const colors = STATUS_COLORS[status] ?? { bg: '#f3f4f6', text: '#374151' };
+/** Isi layar saat order gagal dimuat. */
+function IsiGalat({ onCobaLagi }: { onCobaLagi: () => void }): React.JSX.Element {
+  const { colors } = useTheme();
+
   return (
-    <View style={[styles.badge, { backgroundColor: colors.bg }]}>
-      <Text style={[styles.badgeText, { color: colors.text }]}>{orderStatusLabel(status)}</Text>
+    <View style={styles.galat}>
+      <Text style={[styles.judulGalat, { color: colors.text }]}>Gagal memuat order</Text>
+      <Text style={[styles.isiGalat, { color: colors.textMuted }]}>
+        Cek koneksi internet Anda lalu coba lagi.
+      </Text>
+      <Button title="Coba lagi" onPress={onCobaLagi} variant="secondary" size="md" />
     </View>
   );
 }
 
-interface CodReceipt {
-  amountCents: number;
-  currency: string;
-  collectedAt: string;
+/**
+ * Kepala layar: status, judul, rute, dan empat label langkah.
+ *
+ * Isi kepala memakai tema gelap, jadi teksnya tetap terbaca di atas gradasi
+ * kepala yang gelap.
+ */
+function KepalaStatus({
+  order,
+  view,
+}: {
+  order: Order;
+  view: CustomerTrackView;
+}): React.JSX.Element {
+  const { colors } = useTheme();
+  const [idGradasi] = useState(() => `gradasi-kepala-${hitunganGradasi++}`);
+  const [ukuran, setUkuran] = useState<{ lebar: number; tinggi: number } | null>(null);
+
+  const ukur = useCallback((event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setUkuran((sebelumnya) =>
+      sebelumnya !== null &&
+      sebelumnya.lebar === width &&
+      sebelumnya.tinggi === height
+        ? sebelumnya
+        : { lebar: width, tinggi: height },
+    );
+  }, []);
+
+  return (
+    <View
+      testID="kepala-status"
+      onLayout={ukur}
+      style={[styles.kepala, { backgroundColor: colors.header }]}
+    >
+      {ukuran ? (
+        <Svg style={StyleSheet.absoluteFill} width={ukuran.lebar} height={ukuran.tinggi}>
+          <LinearGradient id={idGradasi} x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor={colors.header} />
+            <Stop offset="1" stopColor={colors.headerEnd} />
+          </LinearGradient>
+          <Rect
+            x="0"
+            y="0"
+            width={ukuran.lebar}
+            height={ukuran.tinggi}
+            fill={`url(#${idGradasi})`}
+          />
+        </Svg>
+      ) : null}
+      <ThemeProvider name="gelap">
+        <IsiKepala order={order} view={view} />
+      </ThemeProvider>
+    </View>
+  );
 }
 
-export function OrderTrackingScreen({
-  orderId,
-  onBack,
-  onOpenChat,
-}: OrderTrackingScreenProps): React.JSX.Element {
-  const [order, setOrder] = useState<Order | null>(null);
-  const [connected, setConnected] = useState(ordersSocket.isConnected);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [retryTrigger, setRetryTrigger] = useState(0);
-  const [codReceipt, setCodReceipt] = useState<CodReceipt | null>(null);
+/** Isi kepala, selalu di dalam bungkus tema gelap. */
+function IsiKepala({
+  order,
+  view,
+}: {
+  order: Order;
+  view: CustomerTrackView;
+}): React.JSX.Element {
+  const { colors } = useTheme();
 
-  const unsubRef = useRef<Array<() => void>>([]);
-
-  // Initial fetch + socket subscriptions
-  useEffect(() => {
-    let cancelled = false;
-
-    // Initial fetch dari REST
-    (async () => {
-      try {
-        const fetched = await getOrderById(orderId);
-        if (!cancelled) {
-          setOrder(fetched);
-          setError(null);
-          setLoading(false);
-        }
-      } catch (err) {
-        if (cancelled) return;
-        if (err instanceof UnauthorizedError) {
-          // Token tidak berlaku: auth-expired dipancarkan lewat fetchWithAuth
-          // dengan sumber 'http'. Layar tidak menampilkan UI galat dan tidak
-          // memancarkan event sendiri, supaya pendengar di App.tsx yang
-          // menjadi satu-satunya pintu berakhirnya sesi.
-          return;
-        }
-        const message =
-          err instanceof Error ? err.message : 'Gagal mengambil data order';
-        setError(message);
-        setLoading(false);
-      }
-    })();
-
-    // Filter: hanya update kalau payload untuk order ini
-    // (room customerId mungkin deliver event dari order lain di future)
-    const matchesOrder = <T extends { orderId: string }>(payload: T): boolean =>
-      payload.orderId === orderId;
-
-    const unsubAccepted = ordersSocket.onOrderAccepted((payload) => {
-      if (!matchesOrder(payload)) return;
-      setOrder(
-        (prev) =>
-          (prev && {
-            ...prev,
-            status: 'PREPARING' as OrderStatus,
-            driverId: payload.driverId,
-            version: payload.version,
-            // Server clear cancelReason saat accept, mobile mirror supaya
-            // kalau fetch awal dapat cancelReason stale (mis. order
-            // cron-keluar ASSIGNED dengan system_timeout), banner
-            // "Alasan Pembatalan" hilang begitu driver accept.
-            cancelReason: undefined,
-          }) ||
-          prev,
-      );
-    });
-
-    const unsubRejected = ordersSocket.onOrderRejected((payload) => {
-      if (!matchesOrder(payload)) return;
-      setOrder(
-        (prev) =>
-          (prev && {
-            ...prev,
-            // Pakai payload.status langsung ('ASSIGNED'); kalau backend
-            // emit status lain di masa depan, type literal
-            // OrderRejectedPayload.status akan menolak payload sebelum
-            // sampai ke sini, jadi tidak ada silent drift.
-            status: payload.status as OrderStatus,
-            driverId: undefined,
-            version: payload.version,
-          }) ||
-          prev,
-      );
-    });
-
-    const unsubCancelled = ordersSocket.onOrderCancelled((payload) => {
-      if (!matchesOrder(payload)) return;
-      setOrder(
-        (prev) =>
-          (prev && {
-            ...prev,
-            // Pakai payload.status langsung ('ASSIGNED').
-            status: payload.status as OrderStatus,
-            driverId: undefined,
-            cancelReason: payload.reason,
-            version: payload.version,
-          }) ||
-          prev,
-      );
-    });
-
-    // Live payment receipt only, order status/version TIDAK berubah di sini
-    // (lihat doc comment di atas), jadi ini update state terpisah, bukan
-    // patch ke `order`.
-    const unsubCodCollected = ordersSocket.onOrderCodCollected((payload) => {
-      if (!matchesOrder(payload)) return;
-      setCodReceipt({
-        amountCents: payload.amountCents,
-        currency: payload.currency,
-        collectedAt: payload.collectedAt,
-      });
-    });
-
-    // order:status_updated, live status update dari driver yang pegang order.
-    // Payload dari OrderStatusUpdatedPayload (packages/shared).
-    const unsubStatusUpdated = ordersSocket.onOrderStatusUpdated((payload) => {
-      if (!matchesOrder(payload)) return;
-      setOrder(
-        (prev) =>
-          (prev && {
-            ...prev,
-            status: payload.status as OrderStatus,
-            version: payload.version,
-            updatedAt: payload.updatedAt,
-          }) ||
-          prev,
-      );
-    });
-
-    const unsubConnect = ordersSocket.on('connect', () => setConnected(true));
-    const unsubDisconnect = ordersSocket.on('disconnect', () =>
-      setConnected(false),
-    );
-
-    unsubRef.current = [
-      unsubAccepted,
-      unsubRejected,
-      unsubCancelled,
-      unsubCodCollected,
-      unsubStatusUpdated,
-      unsubConnect,
-      unsubDisconnect,
-    ];
-
-    return () => {
-      cancelled = true;
-      unsubRef.current.forEach((u) => u());
-      unsubRef.current = [];
-    };
-  }, [orderId, retryTrigger]);
-
-  // Loading state
-  if (loading) {
-    return (
-      <View style={[styles.container, styles.center]}>
-        <ActivityIndicator size="large" />
-        <Text style={styles.loadingText}>Memuat order...</Text>
-      </View>
-    );
-  }
-
-  // Error state
-  if (error) {
-    return (
-      <View style={[styles.container, styles.center]}>
-        <Text style={styles.errorTitle}>Gagal memuat order</Text>
-        <Text style={styles.errorText}>{error}</Text>
-        <Button
-          title="Coba Lagi"
-          onPress={() => {
-            setLoading(true);
-            setError(null);
-            setRetryTrigger((c) => c + 1);
-          }}
-        />
-        <Button title="Kembali" onPress={onBack} color="#666" />
-      </View>
-    );
-  }
-
-  if (!order) {
-    // Defensive, should never reach because loading/error branches cover all
-    return (
-      <View style={[styles.container, styles.center]}>
-        <Text>Order tidak ditemukan</Text>
-        <Button title="Kembali" onPress={onBack} />
-      </View>
-    );
-  }
-
-  // Main render
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
-      {!connected && (
-        <View style={styles.banner} testID="connection-banner">
-          <Text style={styles.bannerText}>
-            Koneksi terputus, mencoba reconnect...
-          </Text>
-        </View>
-      )}
-
-      {codReceipt && (
-        <View style={styles.codBanner} testID="cod-collected-banner">
-          <Text style={styles.codBannerTitle}>Pembayaran tunai diterima</Text>
-          <Text style={styles.codBannerText}>
-            Driver telah menerima pembayaran COD sebesar{' '}
-            {formatCurrency(codReceipt.amountCents, codReceipt.currency)}.
-          </Text>
-          <Button
-            title="Tutup"
-            onPress={() => setCodReceipt(null)}
-            color="#065f46"
-          />
-        </View>
-      )}
-
-      <Text style={styles.title}>Order #{order.id.slice(0, 8).toUpperCase()}</Text>
-
-      <View style={styles.statusSection}>
-        <Text style={styles.statusLabel}>Status:</Text>
-        <StatusBadge status={order.status} />
-      </View>
-
-      {order.driverId && order.status !== 'CANCELLED' && (
-        <View style={styles.chatButtonContainer}>
-          <Button
-            title="Chat dengan Kurir"
-            onPress={() => onOpenChat(order.id)}
-            testID="chat-button"
-          />
-        </View>
-      )}
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Detail Pengiriman</Text>
-        <Text style={styles.value}>{order.deliveryAddress.recipientName}</Text>
-        <Text style={styles.value}>{order.deliveryAddress.phone}</Text>
-        <Text style={styles.value}>{order.deliveryAddress.street}</Text>
-        <Text style={styles.value}>
-          {order.deliveryAddress.city}, {order.deliveryAddress.postalCode}
+    <>
+      <View style={styles.bagianStatus} accessibilityLiveRegion="polite">
+        <StatusLabel
+          status={order.status}
+          label={orderStatusLabel(order.status)}
+          peran="customer"
+        />
+        <Text accessibilityRole="header" style={[styles.judul, { color: colors.text }]}>
+          {view.judul}
         </Text>
       </View>
+      <View style={styles.rute}>
+        <TrackRoute langkah={view.langkah} />
+      </View>
+      <BarisLangkah view={view} />
+    </>
+  );
+}
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Barang</Text>
-        {order.items.map((item, idx) => (
-          <View key={`${item.productId}-${idx}`} style={styles.itemRow}>
-            <Text style={styles.itemName}>
-              {item.quantity}x {item.name}
+/** Empat label langkah di bawah rute. */
+function BarisLangkah({ view }: { view: CustomerTrackView }): React.JSX.Element {
+  const { colors } = useTheme();
+
+  return (
+    <View style={styles.barisLangkah}>
+      {LABEL_LANGKAH.map((label, urutan) => {
+        const nomor = urutan + 1;
+        const status = statusLangkah(nomor, view.langkah);
+        const warna =
+          status === 'sekarang'
+            ? colors.text
+            : status === 'selesai'
+              ? colors.textMuted
+              : colors.textSubtle;
+
+        return (
+          <View key={label} style={styles.satuLangkah}>
+            <Text style={[GAYA_LABEL[status], styles.teksLangkah, { color: warna }]}>
+              {label}
             </Text>
-            <Text style={styles.itemPrice}>
+            {nomor === 1 ? (
+              <Text style={[styles.jamDibuat, { color: colors.textSubtle }]}>
+                {view.jamDibuat}
+              </Text>
+            ) : null}
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+/** Baris orang: sedang mencari driver, atau driver yang sudah ada. */
+function BarisOrang({
+  order,
+  view,
+  onOpenChat,
+}: {
+  order: Order;
+  view: CustomerTrackView;
+  onOpenChat: (roomId: string) => void;
+}): React.JSX.Element {
+  const { colors } = useTheme();
+  const mencari = view.barisOrang === 'mencari';
+
+  return (
+    <View testID="baris-orang" style={styles.barisOrang}>
+      <View style={[styles.avatar, { backgroundColor: colors.fillNeutral }]}>
+        <Icon
+          name={mencari ? 'search' : 'two_wheeler'}
+          size={size.iconMd}
+          color={colors.text}
+        />
+      </View>
+      <View style={styles.kolomTeks}>
+        <Text style={[styles.judulOrang, { color: colors.text }]}>
+          {mencari ? 'Mencari driver' : 'Driver Anda'}
+        </Text>
+        <Text style={[styles.isiOrang, { color: colors.textMuted }]}>
+          {mencari
+            ? 'Halaman ini berubah sendiri begitu ada driver yang menerima'
+            : 'Sudah menerima order ini'}
+        </Text>
+      </View>
+      {view.bolehChat ? (
+        <Button
+          title="Chat"
+          icon="chat"
+          size="md"
+          variant="primary"
+          testID="tombol-chat"
+          onPress={() => onOpenChat(order.id)}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/** Baris alamat: jalan, kota dan kode pos, nama penerima dan telepon. */
+function BarisAlamat({ order }: { order: Order }): React.JSX.Element {
+  const { colors } = useTheme();
+  const alamat = order.deliveryAddress;
+  const kota = [alamat.city, alamat.postalCode]
+    .filter((bagian) => bagian.length > 0)
+    .join(' ');
+
+  return (
+    <View testID="baris-alamat" style={styles.barisAlamat}>
+      <View style={styles.kolomIkon}>
+        <Icon name="location_on" size={size.iconMd} color={colors.textMuted} />
+      </View>
+      <View style={styles.kolomTeks}>
+        <Text style={[styles.judulAlamat, { color: colors.text }]}>{alamat.street}</Text>
+        {kota ? (
+          <Text style={[styles.isiAlamat, { color: colors.textMuted }]}>{kota}</Text>
+        ) : null}
+        <Text style={[styles.isiAlamat, { color: colors.textMuted }]}>
+          {`${alamat.recipientName} ${TITIK_TENGAH} ${alamat.phone}`}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+/** Rincian order: barang yang dibeli dan catatan. */
+function Rincian({ order }: { order: Order }): React.JSX.Element {
+  const { colors } = useTheme();
+
+  return (
+    <View testID="rincian">
+      <Card accessibilityLabel="Rincian">
+        <Text
+          accessibilityRole="header"
+          style={[styles.judulRincian, { color: colors.textSubtle }]}
+        >
+          Rincian
+        </Text>
+        {order.items.map((item) => (
+          <View key={item.id} style={styles.barisItem}>
+            <Text style={[styles.namaBarang, { color: colors.text }]}>
+              {item.name}{' '}
+              <Text style={{ color: colors.textSubtle }}>
+                {`${TANDA_KALI} ${item.quantity}`}
+              </Text>
+            </Text>
+            <Text style={[styles.hargaBarang, { color: colors.text }]}>
               {formatCurrency(item.unitPriceCents * item.quantity, order.currency)}
             </Text>
           </View>
         ))}
-        <View style={styles.totalRow}>
-          <Text style={styles.totalLabel}>Total</Text>
-          <Text style={styles.totalValue}>
-            {formatCurrency(order.totalCents, order.currency)}
-          </Text>
-        </View>
-      </View>
+        {order.notes ? (
+          <View style={styles.barisCatatan}>
+            <Icon name="edit_note" size={size.iconMd} color={colors.textSubtle} />
+            <Text style={[styles.isiCatatan, { color: colors.textMuted }]}>
+              {order.notes}
+            </Text>
+          </View>
+        ) : null}
+      </Card>
+    </View>
+  );
+}
 
-      {order.notes && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Catatan</Text>
-          <Text style={styles.value}>{order.notes}</Text>
-        </View>
-      )}
+/** Isi layar: kepala gelap di atas, lembar terang di bawahnya. */
+function IsiOrder({
+  order,
+  view,
+  onOpenChat,
+}: {
+  order: Order;
+  view: CustomerTrackView;
+  onOpenChat: (roomId: string) => void;
+}): React.JSX.Element {
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
 
-      {order.cancelReason && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Alasan Pembatalan</Text>
-          <Text style={styles.value}>{order.cancelReason}</Text>
-        </View>
-      )}
-
-      <View style={styles.backButtonContainer}>
-        <Button title="Kembali" onPress={onBack} color="#666" />
+  return (
+    <ScrollView
+      style={[styles.gulir, { backgroundColor: colors.surface }]}
+      contentContainerStyle={styles.konten}
+    >
+      <View
+        testID="pantulan-kepala"
+        pointerEvents="none"
+        style={[styles.pantulan, { backgroundColor: colors.header }]}
+      />
+      <KepalaStatus order={order} view={view} />
+      <View
+        testID="lembar-status"
+        style={[
+          styles.lembar,
+          {
+            backgroundColor: colors.surface,
+            paddingBottom: space[6] + insets.bottom,
+          },
+        ]}
+      >
+        {view.bannerTerputus ? (
+          <Banner
+            tone="info"
+            icon="sync"
+            title={view.bannerTerputus.judul}
+            body={view.bannerTerputus.isi}
+          />
+        ) : null}
+        {view.bannerLepas ? <Banner tone="info" icon="info" body={view.bannerLepas} /> : null}
+        {view.barisOrang ? (
+          <BarisOrang order={order} view={view} onOpenChat={onOpenChat} />
+        ) : null}
+        {view.barisOrang ? (
+          <View
+            testID="garis-orang"
+            style={[styles.garis, { backgroundColor: colors.line }]}
+          />
+        ) : null}
+        <BarisAlamat order={order} />
+        {view.kotakTunai ? (
+          <CashBox
+            variant={view.kotakTunai}
+            amountText={formatCurrency(order.totalCents, order.currency)}
+          />
+        ) : null}
+        {order.items.length > 0 || order.notes ? <Rincian order={order} /> : null}
       </View>
     </ScrollView>
   );
 }
 
+export function OrderTrackingScreen({
+  orderId,
+  terlihat,
+  onBack,
+  onOpenChat,
+}: OrderTrackingScreenProps): React.JSX.Element {
+  const { data, gagalMemuat, cobaLagi, terputus, tunaiDiterima } = useCustomerOrder(
+    orderId,
+    terlihat,
+  );
+  const statusJaringan = useNetworkStatus();
+
+  const view = data
+    ? customerTrackView({
+        order: data.order,
+        tunaiDiterima,
+        terputus,
+        terakhirDiperbarui: data.terakhirDiperbarui,
+        sekarangMs: Date.now(),
+      })
+    : null;
+
+  return (
+    <ScreenFrame
+      header={
+        <AppBar
+          title="Status order"
+          subtitle={formatOrderNumber(orderId)}
+          onBack={onBack}
+        />
+      }
+      connection={{ status: statusJaringan, pendingCount: 0, failedCount: 0 }}
+    >
+      {data && view ? (
+        <InitialWindowProvider>
+          <IsiOrder order={data.order} view={view} onOpenChat={onOpenChat} />
+        </InitialWindowProvider>
+      ) : gagalMemuat ? (
+        <IsiGalat onCobaLagi={cobaLagi} />
+      ) : (
+        <View style={styles.kosong} />
+      )}
+    </ScreenFrame>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: {
+  gulir: {
     flex: 1,
-    backgroundColor: '#fff',
   },
-  scrollContent: {
-    padding: 24,
+  konten: {
+    flexGrow: 1,
   },
-  center: {
+  pantulan: {
+    position: 'absolute',
+    top: -TINGGI_PANTULAN,
+    height: TINGGI_PANTULAN,
+    left: 0,
+    right: 0,
+  },
+  kepala: {
+    paddingBottom: PADDING_BAWAH_KEPALA,
+  },
+  bagianStatus: {
+    paddingTop: space[4],
+    paddingHorizontal: space[6],
+  },
+  judul: {
+    ...type.headline,
+    marginTop: space[3],
+    minHeight: 2 * type.headline.lineHeight,
+    maxWidth: LEBAR_JUDUL,
+  },
+  rute: {
+    marginTop: space[4],
+  },
+  barisLangkah: {
+    flexDirection: 'row',
+    marginTop: space[3],
+    paddingHorizontal: space[6],
+  },
+  satuLangkah: {
     flex: 1,
+    alignItems: 'center',
+  },
+  teksLangkah: {
+    textAlign: 'center',
+  },
+  jamDibuat: {
+    ...type.bodyXs,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+  },
+  lembar: {
+    marginTop: -16,
+    borderTopLeftRadius: radius.sheet,
+    borderTopRightRadius: radius.sheet,
+    padding: space[6],
+    gap: space[5],
+    flexGrow: 1,
+  },
+  barisOrang: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[3],
+  },
+  avatar: {
+    width: SISI_IKON,
+    height: SISI_IKON,
+    borderRadius: SISI_IKON / 2,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
   },
-  loadingText: {
-    marginTop: 12,
-    color: '#666',
-  },
-  banner: {
-    backgroundColor: '#fef3c7',
-    borderColor: '#f59e0b',
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-  },
-  bannerText: {
-    color: '#92400e',
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  codBanner: {
-    backgroundColor: '#d1fae5',
-    borderColor: '#059669',
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-  },
-  codBannerTitle: {
-    color: '#065f46',
-    fontSize: 15,
-    fontWeight: '600',
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  codBannerText: {
-    color: '#065f46',
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#222',
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  statusSection: {
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  statusLabel: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 8,
-  },
-  badge: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 16,
-  },
-  badgeText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  section: {
-    backgroundColor: '#f9fafb',
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
-    marginBottom: 8,
-  },
-  value: {
-    fontSize: 14,
-    color: '#222',
-    marginBottom: 4,
-  },
-  itemRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  itemName: {
+  kolomTeks: {
     flex: 1,
-    fontSize: 14,
-    color: '#222',
   },
-  itemPrice: {
-    fontSize: 14,
-    color: '#666',
+  judulOrang: {
+    ...type.titleXs,
   },
-  totalRow: {
+  isiOrang: {
+    ...type.bodySm,
+  },
+  garis: {
+    height: stroke.hairline,
+  },
+  barisAlamat: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space[3],
+  },
+  kolomIkon: {
+    width: SISI_IKON,
+    alignItems: 'center',
+  },
+  judulAlamat: {
+    ...type.titleXs,
+  },
+  isiAlamat: {
+    ...type.bodySm,
+  },
+  judulRincian: {
+    ...type.labelSm,
+  },
+  barisItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e7eb',
+    alignItems: 'flex-start',
+    gap: JARAK_BARIS_ITEM,
+    marginTop: ATAS_BARIS_ITEM,
   },
-  totalLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#222',
+  namaBarang: {
+    ...type.bodyMd,
+    flex: 1,
   },
-  totalValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#222',
+  hargaBarang: {
+    ...type.bodyMd,
+    fontVariant: ['tabular-nums'],
   },
-  errorTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#991b1b',
-    marginBottom: 8,
+  barisCatatan: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: JARAK_CATATAN,
+    marginTop: ATAS_CATATAN,
   },
-  errorText: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 16,
+  isiCatatan: {
+    ...type.bodySm,
+    flex: 1,
   },
-  backButtonContainer: {
-    marginTop: 8,
+  galat: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: space[6],
+    gap: space[2],
   },
-  chatButtonContainer: {
-    marginBottom: 16,
+  judulGalat: {
+    ...type.titleSm,
+  },
+  isiGalat: {
+    ...type.bodyMd,
+  },
+  kosong: {
+    flex: 1,
   },
 });

@@ -1,71 +1,76 @@
 /**
- * Unit tests untuk OrderTrackingScreen.
+ * Tes layar status order customer.
  *
- * Coverage:
- * 1. Render -> loading spinner awal
- * 2. Fetch sukses -> render order detail
- * 3. Fetch gagal -> render error UI dengan tombol Coba Lagi
- * 4. order:accepted event -> update status PREPARING + driverId + clear cancelReason (filter by orderId)
- * 5. order:rejected event, pakai payload.status ('ASSIGNED' pool state)
- * 6. order:cancelled event -> pakai payload.status + cancelReason
- * 7. Disconnect -> tampil banner; Connect -> hilang
- * 8. Event untuk orderId lain di-ignore (filter)
- * 9. Cleanup: subscribers di-remove saat unmount
- * 10. order:cod_collected event -> tampil banner receipt dengan jumlah benar
- * 11. order:cod_collected untuk orderId lain di-ignore
- * 12. Tombol "Tutup" pada cod banner dismiss banner
- * 13. order:cod_collected TIDAK mengubah status order (bukan state-sync event)
- * 14. STATUS_DISPLAY.ASSIGNED = "Mencari driver" (pool state)
+ * Socket dan HTTP client ditiru supaya kejadian dan jawaban server bisa
+ * dikendalikan dari tes. Rute dan label langkah dibaca dari komponen tiruan,
+ * karena nilainya cuma ada di props dan tidak terlihat di layar.
  */
 
 import React from 'react';
-import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { StyleSheet, Text } from 'react-native';
+import type { StyleProp, TextStyle } from 'react-native';
+import { LinearGradient, Rect, Stop } from 'react-native-svg';
 
-import type { OrderStatusUpdatedPayload } from '@delivery/shared';
+import type {
+  Order,
+  OrderAcceptedPayload,
+  OrderCancelledPayload,
+  OrderCodCollectedPayload,
+  OrderStatus,
+  OrderStatusUpdatedPayload,
+} from '@delivery/shared';
 
 import { OrderTrackingScreen } from './OrderTrackingScreen';
+import { orderStatusLabel } from '../orderStatusLabel';
+import { syncEvents } from '../sync/syncEvents';
 import { UnauthorizedError } from '../sync/client';
+import { ThemeProvider } from '../theme/ThemeProvider';
+import { fontFamily, themes } from '../theme/tokens';
 
-// Mock ordersSocket (track subscribers di module-level arrays)
+var mockAcceptedSubscribers: Array<(p: OrderAcceptedPayload) => void> = [];
+var mockRejectedSubscribers: Array<
+  (p: { orderId: string; status: 'ASSIGNED'; version: number }) => void
+> = [];
+var mockCancelledSubscribers: Array<(p: OrderCancelledPayload) => void> = [];
+var mockCodSubscribers: Array<(p: OrderCodCollectedPayload) => void> = [];
+var mockStatusSubscribers: Array<(p: OrderStatusUpdatedPayload) => void> = [];
 var mockConnectSubscribers: Array<() => void> = [];
 var mockDisconnectSubscribers: Array<() => void> = [];
-var mockAcceptedSubscribers: Array<(p: any) => void> = [];
-var mockRejectedSubscribers: Array<(p: any) => void> = [];
-var mockCancelledSubscribers: Array<(p: any) => void> = [];
-var mockCodCollectedSubscribers: Array<(p: any) => void> = [];
-var mockStatusUpdatedSubscribers: Array<(p: OrderStatusUpdatedPayload) => void> = [];
 
 jest.mock('../sync/ordersSocket', () => ({
   ordersSocket: {
     isConnected: true,
-    onOrderAccepted: (cb: (p: any) => void): (() => void) => {
+    onOrderAccepted: (cb: (p: OrderAcceptedPayload) => void): (() => void) => {
       mockAcceptedSubscribers.push(cb);
       return () => {
         mockAcceptedSubscribers = mockAcceptedSubscribers.filter((s) => s !== cb);
       };
     },
-    onOrderRejected: (cb: (p: any) => void): (() => void) => {
+    onOrderRejected: (
+      cb: (p: { orderId: string; status: 'ASSIGNED'; version: number }) => void,
+    ): (() => void) => {
       mockRejectedSubscribers.push(cb);
       return () => {
         mockRejectedSubscribers = mockRejectedSubscribers.filter((s) => s !== cb);
       };
     },
-    onOrderCancelled: (cb: (p: any) => void): (() => void) => {
+    onOrderCancelled: (cb: (p: OrderCancelledPayload) => void): (() => void) => {
       mockCancelledSubscribers.push(cb);
       return () => {
         mockCancelledSubscribers = mockCancelledSubscribers.filter((s) => s !== cb);
       };
     },
-    onOrderCodCollected: (cb: (p: any) => void): (() => void) => {
-      mockCodCollectedSubscribers.push(cb);
+    onOrderCodCollected: (cb: (p: OrderCodCollectedPayload) => void): (() => void) => {
+      mockCodSubscribers.push(cb);
       return () => {
-        mockCodCollectedSubscribers = mockCodCollectedSubscribers.filter((s) => s !== cb);
+        mockCodSubscribers = mockCodSubscribers.filter((s) => s !== cb);
       };
     },
     onOrderStatusUpdated: (cb: (p: OrderStatusUpdatedPayload) => void): (() => void) => {
-      mockStatusUpdatedSubscribers.push(cb);
+      mockStatusSubscribers.push(cb);
       return () => {
-        mockStatusUpdatedSubscribers = mockStatusUpdatedSubscribers.filter((s) => s !== cb);
+        mockStatusSubscribers = mockStatusSubscribers.filter((s) => s !== cb);
       };
     },
     on: (event: string, cb: () => void): (() => void) => {
@@ -79,71 +84,57 @@ jest.mock('../sync/ordersSocket', () => ({
   },
 }));
 
-// Mock client.getOrderById + UnauthorizedError
-const mockGetOrderById = jest.fn();
+const mockGetOrderById = jest.fn<Promise<Order>, [string]>();
 
 jest.mock('../sync/client', () => {
-  // requireActual untuk preserve class identity, `instanceof UnauthorizedError`
-  // check di screen harus match dengan class yang di-throw dari test.
+  // requireActual supaya class UnauthorizedError tetap sama dengan yang
+  // dilempar hook, jadi instanceof di hook benar.
   const actual = jest.requireActual('../sync/client') as typeof import('../sync/client');
   return {
     ...actual,
-    getOrderById: (...args: any[]): Promise<any> => mockGetOrderById(...args),
+    getOrderById: (id: string): Promise<Order> => mockGetOrderById(id),
   };
 });
 
-// Mock syncEvents
-const mockAuthExpiredEmit = jest.fn();
-jest.mock('../sync/syncEvents', () => ({
-  syncEvents: {
-    emit: (...args: any[]) => mockAuthExpiredEmit(...args),
+var mockStatusJaringan = jest.fn<'online' | 'offline' | 'unknown', []>(
+  () => 'online',
+);
+
+jest.mock('../map/networkMonitor', () => ({
+  networkMonitor: {
+    getStatus: () => mockStatusJaringan(),
+    subscribe: (cb: () => void): (() => void) => {
+      cb();
+      return () => {};
+    },
   },
 }));
 
-// Test helpers
-function resetSubscribers(): void {
-  mockConnectSubscribers = [];
-  mockDisconnectSubscribers = [];
-  mockAcceptedSubscribers = [];
-  mockRejectedSubscribers = [];
-  mockCancelledSubscribers = [];
-  mockCodCollectedSubscribers = [];
-  mockStatusUpdatedSubscribers = [];
-}
+/** Langkah rute yang terakhir dirender, supaya tes bisa mengeceknya. */
+var mockLangkahRute: number | null = null;
 
-function triggerConnect(): void {
-  mockConnectSubscribers.forEach((cb) => cb());
-}
-function triggerDisconnect(): void {
-  mockDisconnectSubscribers.forEach((cb) => cb());
-}
-function triggerAccepted(payload: any): void {
-  mockAcceptedSubscribers.forEach((cb) => cb(payload));
-}
-function triggerRejected(payload: any): void {
-  mockRejectedSubscribers.forEach((cb) => cb(payload));
-}
-function triggerCancelled(payload: any): void {
-  mockCancelledSubscribers.forEach((cb) => cb(payload));
-}
-function triggerCodCollected(payload: any): void {
-  mockCodCollectedSubscribers.forEach((cb) => cb(payload));
-}
-function triggerStatusUpdated(payload: OrderStatusUpdatedPayload): void {
-  mockStatusUpdatedSubscribers.forEach((cb) => cb(payload));
-}
+jest.mock('../components/TrackRoute', () => {
+  const ReactLokal = require('react');
+  const ReactNative = require('react-native');
+  return {
+    TrackRoute: (props: { langkah: number | null }): React.ReactElement => {
+      mockLangkahRute = props.langkah;
+      return ReactLokal.createElement(ReactNative.View, { testID: 'rute-status' });
+    },
+  };
+});
 
-const MOCK_ORDER = {
+const ORDER: Order = {
   id: '12345678-0000-0000-0000-000000000000',
-  customerId: 'customer-xyz',
-  status: 'PENDING',
+  customerId: 'customer-1',
+  status: 'ASSIGNED',
   items: [
     {
       id: 'item-1',
-      productId: 'prod-1',
-      name: 'Nasi Goreng',
-      quantity: 2,
-      unitPriceCents: 25000,
+      productId: 'produk-1',
+      name: 'Mie Goreng',
+      quantity: 1,
+      unitPriceCents: 23000,
     },
   ],
   deliveryAddress: {
@@ -153,552 +144,638 @@ const MOCK_ORDER = {
     city: 'Denpasar',
     postalCode: '80111',
   },
-  totalCents: 50000,
+  totalCents: 23000,
   currency: 'IDR',
   notes: 'Tolong dibungkus rapi',
+  createdAt: '2026-08-30T00:00:00.000Z',
+  updatedAt: '2026-08-30T00:00:00.000Z',
   version: 1,
-  createdAt: '2026-08-30T10:00:00.000Z',
-  updatedAt: '2026-08-30T10:00:00.000Z',
 };
 
-describe('OrderTrackingScreen', () => {
-  beforeEach(() => {
-    mockGetOrderById.mockReset();
-    mockAuthExpiredEmit.mockReset();
-    resetSubscribers();
+const mockOnBack = jest.fn();
+const mockOnOpenChat = jest.fn();
+
+function orderDengan(ubah: Partial<Order>): Order {
+  return { ...ORDER, ...ubah };
+}
+
+function elemenLayar(terlihat: boolean): React.JSX.Element {
+  return (
+    <ThemeProvider name="terang">
+      <OrderTrackingScreen
+        orderId={ORDER.id}
+        terlihat={terlihat}
+        onBack={mockOnBack}
+        onOpenChat={mockOnOpenChat}
+      />
+    </ThemeProvider>
+  );
+}
+
+async function flush(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
   });
+}
 
-  it('initial render -> loading spinner', () => {
-    mockGetOrderById.mockResolvedValue(MOCK_ORDER);
+/** Render layar dengan order tiruan, lalu tunggu jawabannya selesai. */
+async function tampilkan(ubah: Partial<Order> = {}): Promise<void> {
+  mockGetOrderById.mockResolvedValue(orderDengan(ubah));
+  render(elemenLayar(true));
+  await flush();
+}
 
-    const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
+function resetSubscribers(): void {
+  mockAcceptedSubscribers = [];
+  mockRejectedSubscribers = [];
+  mockCancelledSubscribers = [];
+  mockCodSubscribers = [];
+  mockStatusSubscribers = [];
+  mockConnectSubscribers = [];
+  mockDisconnectSubscribers = [];
+}
 
-    expect(getByText('Memuat order...')).toBeTruthy();
-  });
+function triggerAccepted(payload: OrderAcceptedPayload): void {
+  mockAcceptedSubscribers.forEach((cb) => cb(payload));
+}
 
-  it('fetch sukses -> render order details + status badge', async () => {
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+function triggerCancelled(payload: OrderCancelledPayload): void {
+  mockCancelledSubscribers.forEach((cb) => cb(payload));
+}
 
-    const { getByText, queryByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
+function triggerCodCollected(payload: OrderCodCollectedPayload): void {
+  mockCodSubscribers.forEach((cb) => cb(payload));
+}
 
-    await waitFor(() => {
-      expect(getByText('Order #12345678')).toBeTruthy();
-      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
+function triggerStatusUpdated(payload: OrderStatusUpdatedPayload): void {
+  mockStatusSubscribers.forEach((cb) => cb(payload));
+}
+
+function triggerConnect(): void {
+  mockConnectSubscribers.forEach((cb) => cb());
+}
+
+function triggerDisconnect(): void {
+  mockDisconnectSubscribers.forEach((cb) => cb());
+}
+
+interface GayaTeks {
+  color?: TextStyle['color'];
+  fontFamily?: TextStyle['fontFamily'];
+  fontSize?: TextStyle['fontSize'];
+  textAlign?: TextStyle['textAlign'];
+}
+
+/** Gaya teks yang sudah diratakan, biar assertionnya enak dibaca. */
+function gayaTeks(elemen: { props: { style?: StyleProp<TextStyle> } }): GayaTeks {
+  const gaya = StyleSheet.flatten(elemen.props.style);
+  return {
+    color: gaya?.color,
+    fontFamily: gaya?.fontFamily,
+    fontSize: gaya?.fontSize,
+    textAlign: gaya?.textAlign,
+  };
+}
+
+/**
+ * Label langkah di kepala. Yang dicari lewat gaya, bukan lewat teks saja,
+ * karena sebagian teksnya sama dengan label status.
+ */
+function labelLangkah(nama: string): { props: { style?: StyleProp<TextStyle> } } {
+  const kepala = screen.getByTestId('kepala-status');
+  const kandidat = within(kepala)
+    .UNSAFE_getAllByType(Text)
+    .filter((elemen) => {
+      const gaya = gayaTeks(elemen);
+      return gaya.textAlign === 'center' && elemen.props.children === nama;
     });
+  if (kandidat.length !== 1) {
+    throw new Error(`label langkah ${nama} ditemukan ${kandidat.length} kali`);
+  }
+  return kandidat[0];
+}
 
-    // Detail pengiriman
-    expect(getByText('Budi Santoso')).toBeTruthy();
-    expect(getByText('081234567890')).toBeTruthy();
-    expect(getByText('Jl. Merdeka No. 1')).toBeTruthy();
-    expect(getByText('Denpasar, 80111')).toBeTruthy();
+function adalahRekaman(nilai: unknown): nilai is Record<string, unknown> {
+  return typeof nilai === 'object' && nilai !== null;
+}
 
-    // Items
-    expect(getByText('2x Nasi Goreng')).toBeTruthy();
-    expect(getByText('Tolong dibungkus rapi')).toBeTruthy();
+/** True kalau ada elemen yang punya prop entering, artinya ada gerak masuk. */
+function punyaEntering(node: unknown): boolean {
+  if (!adalahRekaman(node)) return false;
+  const props = node.props;
+  if (adalahRekaman(props) && props.entering !== undefined) return true;
+  const children = node.children;
+  if (Array.isArray(children)) {
+    return children.some((child) => punyaEntering(child));
+  }
+  return false;
+}
 
-    // Loading tidak lagi muncul
-    expect(queryByText('Memuat order...')).toBeNull();
+beforeEach(() => {
+  mockGetOrderById.mockReset();
+  mockGetOrderById.mockResolvedValue(ORDER);
+  mockOnBack.mockReset();
+  mockOnOpenChat.mockReset();
+  mockLangkahRute = null;
+  resetSubscribers();
+});
+
+describe('layar status order customer', () => {
+  it('saat memuat, kerangka tampil dengan judul dan nomor order', () => {
+    mockGetOrderById.mockReturnValue(new Promise<Order>(() => {}));
+    render(elemenLayar(true));
+
+    expect(screen.getByText('Status order')).toBeTruthy();
+    expect(screen.getByText('#12345678')).toBeTruthy();
+    expect(screen.queryByText('Order dibuat')).toBeNull();
   });
 
-  it('fetch gagal -> render error UI dengan tombol Coba Lagi', async () => {
-    mockGetOrderById.mockRejectedValueOnce(new Error('Network error'));
+  it('galat: tombol Coba lagi memanggil server lagi lalu isi tampil', async () => {
+    mockGetOrderById.mockRejectedValueOnce(new Error('Jaringan bermasalah'));
+    render(elemenLayar(true));
+    await flush();
 
-    const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
+    expect(screen.getByText('Gagal memuat order')).toBeTruthy();
+    expect(screen.getByText('Cek koneksi internet Anda lalu coba lagi.')).toBeTruthy();
+    expect(screen.queryByText('Jaringan bermasalah')).toBeNull();
 
-    await waitFor(() => {
-      expect(getByText('Gagal memuat order')).toBeTruthy();
-      expect(getByText('Network error')).toBeTruthy();
-      expect(getByText('Coba Lagi')).toBeTruthy();
+    mockGetOrderById.mockResolvedValueOnce(ORDER);
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Coba lagi'));
     });
+    await flush();
 
-    // Tombol Coba Lagi re-trigger fetch
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
-    fireEvent.press(getByText('Coba Lagi'));
+    expect(screen.getByText('Order dibuat')).toBeTruthy();
+    expect(screen.queryByText('Gagal memuat order')).toBeNull();
+  });
 
-    await waitFor(() => {
-      expect(getByText('Order #12345678')).toBeTruthy();
+  const KASUS_STATUS: Array<{
+    status: OrderStatus;
+    judul: string;
+    langkah: 1 | 2 | 3 | 4 | null;
+  }> = [
+    { status: 'PENDING', judul: 'Order Anda sudah masuk', langkah: 1 },
+    { status: 'ASSIGNED', judul: 'Order Anda sudah masuk', langkah: 1 },
+    { status: 'PREPARING', judul: 'Driver sudah ditemukan untuk order Anda', langkah: 2 },
+    { status: 'OUT_FOR_DELIVERY', judul: 'Driver sedang menuju alamat Anda', langkah: 3 },
+    { status: 'DELIVERED', judul: 'Order sudah sampai di alamat Anda', langkah: 4 },
+    { status: 'CANCELLED', judul: 'Order ini dibatalkan', langkah: null },
+  ];
+
+  KASUS_STATUS.forEach((kasus) => {
+    it(`status ${kasus.status}: judul, label status, dan langkah sesuai`, async () => {
+      await tampilkan({ status: kasus.status });
+
+      const pil = within(screen.getByTestId('pil-status'));
+      expect(pil.getByText(orderStatusLabel(kasus.status))).toBeTruthy();
+      expect(screen.getByText(kasus.judul)).toBeTruthy();
+      expect(mockLangkahRute).toBe(kasus.langkah);
     });
   });
 
-  it('fetch UnauthorizedError: tanpa UI galat dan layar tidak memancarkan auth-expired', async () => {
-    // Layar tidak boleh menampilkan UI galat untuk UnauthorizedError:
-    // 401 adalah kasus token-expired dan jalur penanganannya ada di
-    // App.tsx lewat syncEvents.emit('auth-expired', {source, token}).
-    // Layar tidak boleh memancarkan auth-expired (sumbernya hanya http).
-    mockGetOrderById.mockRejectedValueOnce(new UnauthorizedError());
+  it('gaya label langkah: selesai, sekarang, dan belum', async () => {
+    await tampilkan({ status: 'OUT_FOR_DELIVERY' });
 
-    const { queryByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
+    const selesai = gayaTeks(labelLangkah('Order dibuat'));
+    expect(selesai.fontFamily).toBe(fontFamily.regular);
+    expect(selesai.color).toBe(themes.gelap.textMuted);
 
-    // Tunggu beberapa saat supaya useEffect fetch selesai.
-    await new Promise<void>((resolve) => setTimeout(() => resolve(), 50));
+    const sekarang = gayaTeks(labelLangkah('Dalam perjalanan'));
+    expect(sekarang.fontFamily).toBe(fontFamily.semibold);
+    expect(sekarang.color).toBe(themes.gelap.text);
 
-    // Tidak ada UI galat yang tampil (loading tetap karena setLoading(false)
-    // tidak pernah dipanggil; cek tidak ada judul galat spesifik).
-    expect(queryByText('Gagal memuat order')).toBeNull();
-
-    // Tidak ada pemanggilan auth-expired dari layar.
-    expect(mockAuthExpiredEmit).not.toHaveBeenCalled();
+    const belum = gayaTeks(labelLangkah('Terkirim'));
+    expect(belum.fontFamily).toBe(fontFamily.regular);
+    expect(belum.color).toBe(themes.gelap.textSubtle);
   });
 
-  it('order:accepted event -> update status PREPARING + driverId + clear cancelReason (matching orderId)', async () => {
-    // Server clear cancelReason saat accept, mobile mirror. Start dengan
-    // order yang punya cancelReason stale (mis. cron-keluar ASSIGNED dengan
-    // system_timeout, customer buka tracking, lalu driver accept).
-    const orderWithStaleCancel = {
-      ...MOCK_ORDER,
-      cancelReason: 'system_timeout',
-      cancelledBy: 'SYSTEM',
-    };
-    mockGetOrderById.mockResolvedValueOnce(orderWithStaleCancel);
+  it('label langkah pertama selesai, sisanya belum, saat order dibatalkan', async () => {
+    await tampilkan({ status: 'CANCELLED' });
 
-    const { getByText, queryByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
+    const selesai = gayaTeks(labelLangkah('Order dibuat'));
+    expect(selesai.fontFamily).toBe(fontFamily.regular);
+    expect(selesai.color).toBe(themes.gelap.textMuted);
 
-    await waitFor(() => {
-      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
-    });
+    const belum = gayaTeks(labelLangkah('Driver ditemukan'));
+    expect(belum.fontFamily).toBe(fontFamily.regular);
+    expect(belum.color).toBe(themes.gelap.textSubtle);
+  });
 
-    act(() => {
-      triggerAccepted({
-        orderId: 'order-abc-123',
-        driverId: 'driver-456',
-        status: 'PREPARING',
-        version: 2,
+  it('kepala memakai tema gelap, jadi judulnya warna terang', async () => {
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+
+    const judul = screen.getByText('Driver sudah ditemukan untuk order Anda');
+    expect(gayaTeks(judul).color).toBe(themes.gelap.text);
+  });
+
+  it('kepala memakai gradasi tegak dari header ke headerEnd', async () => {
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+
+    const kepala = screen.getByTestId('kepala-status');
+    await act(async () => {
+      fireEvent(kepala, 'layout', {
+        nativeEvent: { layout: { x: 0, y: 0, width: 360, height: 240 } },
       });
     });
 
-    await waitFor(() => {
-      expect(getByText('Driver ditemukan')).toBeTruthy();
-    });
+    const gradien = within(kepala).UNSAFE_getAllByType(LinearGradient);
+    expect(gradien).toHaveLength(1);
+    const stops = within(kepala).UNSAFE_getAllByType(Stop);
+    expect(stops).toHaveLength(2);
+    expect(stops[0].props.stopColor).toBe(themes.terang.header);
+    expect(stops[1].props.stopColor).toBe(themes.terang.headerEnd);
 
-    // Status lama (PENDING) sudah tidak tampil
-    expect(queryByText('Menunggu konfirmasi')).toBeNull();
-    // cancelReason stale dari fetch harus hilang setelah accept
-    expect(queryByText('Alasan Pembatalan')).toBeNull();
+    const isi = within(kepala).UNSAFE_getAllByType(Rect);
+    expect(isi).toHaveLength(1);
+    expect(isi[0].props.fill).toBe(`url(#${gradien[0].props.id})`);
   });
 
-  it('order:rejected event, pakai payload.status ASSIGNED (pool state)', async () => {
-    // Backend emit status 'ASSIGNED' untuk reject, pool state. Type literal
-    // OrderRejectedPayload.status yang jamin compile-time.
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
-
-    const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
-
-    await waitFor(() => {
-      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
-    });
-
-    act(() => {
-      triggerRejected({
-        orderId: 'order-abc-123',
-        status: 'ASSIGNED',
-        version: 3,
+  it('gradasi kepala punya id sendiri per layar', async () => {
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+    const kepalaSatu = screen.getByTestId('kepala-status');
+    await act(async () => {
+      fireEvent(kepalaSatu, 'layout', {
+        nativeEvent: { layout: { x: 0, y: 0, width: 360, height: 240 } },
       });
     });
+    const idSatu = within(kepalaSatu).UNSAFE_getAllByType(LinearGradient)[0].props.id;
 
-    await waitFor(() => {
-      expect(getByText('Mencari driver')).toBeTruthy();
-    });
-  });
-
-  it('order:cancelled event -> pakai payload.status ASSIGNED + cancelReason', async () => {
-    // Status 'ASSIGNED' di payload, mobile pakai langsung dari payload.
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
-
-    const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
-
-    await waitFor(() => {
-      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
-    });
-
-    act(() => {
-      triggerCancelled({
-        orderId: 'order-abc-123',
-        status: 'ASSIGNED',
-        version: 4,
-        reason: 'Kendaraan mogok',
+    const tampilanLain = render(elemenLayar(true));
+    await flush();
+    const kepalaDua = tampilanLain.getByTestId('kepala-status');
+    await act(async () => {
+      fireEvent(kepalaDua, 'layout', {
+        nativeEvent: { layout: { x: 0, y: 0, width: 360, height: 240 } },
       });
     });
+    const idDua = within(kepalaDua).UNSAFE_getAllByType(LinearGradient)[0].props.id;
 
-    await waitFor(() => {
-      expect(getByText('Mencari driver')).toBeTruthy();
-      expect(getByText('Kendaraan mogok')).toBeTruthy();
-    });
+    expect(idSatu).not.toBe(idDua);
   });
 
-  it('event untuk orderId LAIN di-ignore (filter by route.params.orderId)', async () => {
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+  it('pantulan berwarna header tema layar dan berada di atas isi', async () => {
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
 
-    const { getByText, queryByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
-
-    await waitFor(() => {
-      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
-    });
-
-    // Event untuk orderId lain, HARUS di-ignore
-    act(() => {
-      triggerAccepted({
-        orderId: 'order-LAIN-999',
-        driverId: 'driver-456',
-        status: 'PREPARING',
-        version: 2,
-      });
-    });
-
-    // Status tidak berubah
-    expect(getByText('Menunggu konfirmasi')).toBeTruthy();
-    expect(queryByText('Driver ditemukan')).toBeNull();
+    const pantulan = screen.getByTestId('pantulan-kepala');
+    const gaya = StyleSheet.flatten(pantulan.props.style);
+    expect(gaya?.backgroundColor).toBe(themes.terang.header);
+    expect(gaya?.position).toBe('absolute');
+    expect(gaya?.top).toBe(-1000);
+    expect(gaya?.height).toBe(1000);
   });
 
-  it('order:cod_collected event -> tampil banner receipt dengan jumlah benar', async () => {
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+  it('baris orang saat order belum punya driver', async () => {
+    await tampilkan({ status: 'ASSIGNED' });
 
-    const { getByText, queryByTestId, getByTestId } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
+    const baris = within(screen.getByTestId('baris-orang'));
+    expect(baris.getByText('Mencari driver')).toBeTruthy();
+    expect(
+      baris.getByText('Halaman ini berubah sendiri begitu ada driver yang menerima'),
+    ).toBeTruthy();
+    expect(screen.queryByTestId('tombol-chat')).toBeNull();
+  });
+
+  it('baris orang saat order sudah punya driver', async () => {
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+
+    const baris = within(screen.getByTestId('baris-orang'));
+    expect(baris.getByText('Driver Anda')).toBeTruthy();
+    expect(baris.getByText('Sudah menerima order ini')).toBeTruthy();
+    expect(screen.getByTestId('tombol-chat')).toBeTruthy();
+  });
+
+  it('order dibatalkan: tanpa baris orang, garis pemisah, dan kotak tunai', async () => {
+    await tampilkan({ status: 'CANCELLED', cancelReason: 'kendaraan mogok' });
+
+    expect(screen.queryByTestId('baris-orang')).toBeNull();
+    expect(screen.queryByTestId('garis-orang')).toBeNull();
+    expect(screen.queryByTestId('kotak-tunai')).toBeNull();
+    expect(screen.queryByTestId('tombol-chat')).toBeNull();
+  });
+
+  it('baris alamat: jalan, kota dan kode pos, nama dan telepon', async () => {
+    await tampilkan({ status: 'ASSIGNED' });
+
+    const baris = within(screen.getByTestId('baris-alamat'));
+    expect(baris.getByText('Jl. Merdeka No. 1')).toBeTruthy();
+    expect(baris.getByText('Denpasar 80111')).toBeTruthy();
+    expect(baris.getByText('Budi Santoso \u00b7 081234567890')).toBeTruthy();
+  });
+
+  it('kotak tunai menyiapkan uang, lalu berubah jadi diterima', async () => {
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+
+    expect(screen.getByTestId('kotak-tunai').props.accessibilityLabel).toContain(
+      'Siapkan uang tunai',
     );
 
-    await waitFor(() => {
-      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
-    });
-
-    expect(queryByTestId('cod-collected-banner')).toBeNull();
-
-    act(() => {
+    await act(async () => {
       triggerCodCollected({
-        orderId: 'order-abc-123',
-        amountCents: 50000,
+        orderId: ORDER.id,
+        amountCents: 23000,
         currency: 'IDR',
-        collectedAt: '2026-09-02T08:00:00.000Z',
+        collectedAt: '2026-08-30T01:00:00.000Z',
       });
     });
+    await flush();
 
-    await waitFor(() => {
-      expect(getByTestId('cod-collected-banner')).toBeTruthy();
-      expect(getByText('Pembayaran tunai diterima')).toBeTruthy();
-    });
-
-    // Status order TIDAK berubah, event ini bukan state-sync, murni receipt
-    expect(getByText('Menunggu konfirmasi')).toBeTruthy();
+    expect(screen.getByTestId('kotak-tunai').props.accessibilityLabel).toContain(
+      'Pembayaran tunai diterima',
+    );
   });
 
-  it('order:cod_collected untuk orderId LAIN di-ignore', async () => {
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+  it('kotak tunai sudah diterima kalau order selesai', async () => {
+    await tampilkan({ status: 'DELIVERED', driverId: 'driver-1' });
 
-    const { getByText, queryByTestId } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
+    expect(screen.getByTestId('kotak-tunai').props.accessibilityLabel).toContain(
+      'Pembayaran tunai diterima',
     );
-
-    await waitFor(() => {
-      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
-    });
-
-    act(() => {
-      triggerCodCollected({
-        orderId: 'order-LAIN-999',
-        amountCents: 50000,
-        currency: 'IDR',
-        collectedAt: '2026-09-02T08:00:00.000Z',
-      });
-    });
-
-    expect(queryByTestId('cod-collected-banner')).toBeNull();
   });
 
-  it('tombol "Tutup" pada cod banner dismiss banner', async () => {
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+  it('rincian: barang, tanda kali, harga baris, dan catatan, tanpa total', async () => {
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
 
-    const { getByText, queryByTestId, getByTestId } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
-
-    await waitFor(() => {
-      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
-    });
-
-    act(() => {
-      triggerCodCollected({
-        orderId: 'order-abc-123',
-        amountCents: 50000,
-        currency: 'IDR',
-        collectedAt: '2026-09-02T08:00:00.000Z',
-      });
-    });
-
-    await waitFor(() => {
-      expect(getByTestId('cod-collected-banner')).toBeTruthy();
-    });
-
-    fireEvent.press(getByText('Tutup'));
-
-    expect(queryByTestId('cod-collected-banner')).toBeNull();
+    const rincian = within(screen.getByTestId('rincian'));
+    expect(rincian.getByText('Rincian')).toBeTruthy();
+    expect(rincian.getByText('Mie Goreng \u00d7 1')).toBeTruthy();
+    expect(rincian.getByText(/Rp\s23\.000/)).toBeTruthy();
+    expect(rincian.getByText('Tolong dibungkus rapi')).toBeTruthy();
+    expect(screen.queryByText('Total')).toBeNull();
   });
 
-  it('disconnect -> tampil banner; connect -> hilang', async () => {
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+  it('banner terputus muncul saat socket putus dan hilang setelah tersambung', async () => {
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
 
-    const { queryByText, getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
+    expect(screen.queryByText('Pembaruan langsung terputus')).toBeNull();
 
-    await waitFor(() => {
-      expect(queryByText('Koneksi terputus, mencoba reconnect...')).toBeNull();
-    });
-
-    act(() => {
+    await act(async () => {
       triggerDisconnect();
     });
+    expect(screen.getByText('Pembaruan langsung terputus')).toBeTruthy();
+    expect(screen.getByText(/Status terakhir dari/)).toBeTruthy();
 
-    await waitFor(() => {
-      expect(getByText('Koneksi terputus, mencoba reconnect...')).toBeTruthy();
-    });
-
-    act(() => {
+    await act(async () => {
       triggerConnect();
     });
-
-    await waitFor(() => {
-      expect(queryByText('Koneksi terputus, mencoba reconnect...')).toBeNull();
-    });
+    await flush();
+    expect(screen.queryByText('Pembaruan langsung terputus')).toBeNull();
   });
 
-  it('cleanup: subscribers di-remove saat unmount', async () => {
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
+  it('banner order dilepas: driver sebelumnya tidak aktif', async () => {
+    await tampilkan({ status: 'ASSIGNED', cancelReason: 'system_timeout' });
 
-    const { unmount } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
-
-    await waitFor(() => {
-      expect(mockAcceptedSubscribers.length).toBeGreaterThan(0);
-      expect(mockRejectedSubscribers.length).toBeGreaterThan(0);
-      expect(mockCancelledSubscribers.length).toBeGreaterThan(0);
-      expect(mockCodCollectedSubscribers.length).toBeGreaterThan(0);
-      expect(mockConnectSubscribers.length).toBeGreaterThan(0);
-      expect(mockDisconnectSubscribers.length).toBeGreaterThan(0);
-    });
-
-    const acceptedBefore = mockAcceptedSubscribers.length;
-    const rejectedBefore = mockRejectedSubscribers.length;
-    const cancelledBefore = mockCancelledSubscribers.length;
-    const codCollectedBefore = mockCodCollectedSubscribers.length;
-    const statusUpdatedBefore = mockStatusUpdatedSubscribers.length;
-    const connectBefore = mockConnectSubscribers.length;
-    const disconnectBefore = mockDisconnectSubscribers.length;
-
-    unmount();
-
-    expect(mockAcceptedSubscribers.length).toBe(acceptedBefore - 1);
-    expect(mockRejectedSubscribers.length).toBe(rejectedBefore - 1);
-    expect(mockCancelledSubscribers.length).toBe(cancelledBefore - 1);
-    expect(mockCodCollectedSubscribers.length).toBe(codCollectedBefore - 1);
-    expect(mockStatusUpdatedSubscribers.length).toBe(statusUpdatedBefore - 1);
-    expect(mockConnectSubscribers.length).toBe(connectBefore - 1);
-    expect(mockDisconnectSubscribers.length).toBe(disconnectBefore - 1);
+    expect(
+      screen.getByText('Driver sebelumnya tidak aktif. Sedang dicarikan driver lain.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('system_timeout')).toBeNull();
   });
 
-  it('order:status_updated untuk order ini -> update label status', async () => {
-    // Payload OUT_FOR_DELIVERY: PREPARING jadi OUT_FOR_DELIVERY
-    const preparingOrder = { ...MOCK_ORDER, status: 'PREPARING' as const };
-    mockGetOrderById.mockResolvedValueOnce(preparingOrder);
+  it('banner order dilepas: order lepas dari driver sebelumnya', async () => {
+    await tampilkan({ status: 'ASSIGNED', cancelReason: 'driver_unreachable' });
 
-    const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
-
-    await waitFor(() => {
-      expect(getByText('Driver ditemukan')).toBeTruthy();
-    });
-
-    act(() => {
-      triggerStatusUpdated({
-        orderId: 'order-abc-123',
-        status: 'OUT_FOR_DELIVERY',
-        version: 2,
-        updatedAt: '2026-09-25T12:00:00.000Z',
-      });
-    });
-
-    await waitFor(() => {
-      expect(getByText('Dalam perjalanan')).toBeTruthy();
-    });
-    // Status PREPARING sudah tidak tampil
-    expect(() => getByText('Driver ditemukan')).toThrow();
+    expect(
+      screen.getByText(
+        'Order sudah dilepas dari driver sebelumnya. Sedang dicarikan driver lain.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText('driver_unreachable')).toBeNull();
   });
 
-  it('order:status_updated untuk orderId LAIN diabaikan', async () => {
-    mockGetOrderById.mockResolvedValueOnce(MOCK_ORDER);
-
-    const { getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
-
-    await waitFor(() => {
-      expect(getByText('Menunggu konfirmasi')).toBeTruthy();
+  it('banner order dilepas: driver sebelumnya membatalkan', async () => {
+    await tampilkan({
+      status: 'ASSIGNED',
+      cancelReason: 'kendaraan mogok',
+      cancelledBy: 'driver-1',
     });
 
-    act(() => {
-      triggerStatusUpdated({
-        orderId: 'order-LAIN-999',
-        status: 'OUT_FOR_DELIVERY',
-        version: 2,
-        updatedAt: '2026-09-25T12:00:00.000Z',
-      });
-    });
-
-    // Status tidak berubah
-    expect(getByText('Menunggu konfirmasi')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Driver sebelumnya membatalkan order ini. Sedang dicarikan driver lain.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText('kendaraan mogok')).toBeNull();
   });
 
-  it('tampilan harga: totalCents 23000 dan item unitPriceCents 23000 tampil Rp 23.000, bukan 230', async () => {
-    // formatCurrency tanpa /100. Nilai dalam rupiah apa adanya.
-    // Bug lama, /100 menyebabkan 23000 muncul sebagai Rp 230 (sen).
-    // Pastikan tidak NaN, bukan Rp 230.
-    const orderRp23k = {
-      ...MOCK_ORDER,
-      totalCents: 23000,
-      currency: 'IDR',
-      items: [
-        {
-          id: 'item-price-1',
-          productId: 'prod-price-1',
-          name: 'Mie Goreng',
-          quantity: 1,
-          unitPriceCents: 23000,
-        },
-      ],
-    };
-    mockGetOrderById.mockResolvedValueOnce(orderRp23k);
+  it('banner order dilepas hilang setelah order diterima driver', async () => {
+    await tampilkan({ status: 'ASSIGNED', cancelReason: 'system_timeout' });
+    expect(
+      screen.getByText('Driver sebelumnya tidak aktif. Sedang dicarikan driver lain.'),
+    ).toBeTruthy();
 
-    const { getAllByText, getByText } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
-
-    await waitFor(() => {
-      expect(getByText('Order #12345678')).toBeTruthy();
-    });
-
-    // Total baris, Rp 23.000
-    const priceTexts = getAllByText(/Rp\s23\.000/);
-    expect(priceTexts).toHaveLength(2); // item + total
-    // Item harga, Rp 23.000 (bukan Rp 230 dari bug /100)
-    expect(getByText('1x Mie Goreng')).toBeTruthy();
-  });
-
-  it('PREPARING dengan driverId: tombol Chat dengan Kurir tampil, ketuk memanggil onOpenChat', async () => {
-    const preparingWithDriver = {
-      ...MOCK_ORDER,
-      status: 'PREPARING' as const,
-      driverId: 'driver-456',
-    };
-    mockGetOrderById.mockResolvedValueOnce(preparingWithDriver);
-
-    const onOpenChat = jest.fn();
-    const { getByTestId } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={onOpenChat} />,
-    );
-
-    await waitFor(() => {
-      expect(getByTestId('chat-button')).toBeTruthy();
-    });
-
-    fireEvent.press(getByTestId('chat-button'));
-
-    expect(onOpenChat).toHaveBeenCalledTimes(1);
-    expect(onOpenChat).toHaveBeenCalledWith('12345678-0000-0000-0000-000000000000');
-  });
-
-  it('ASSIGNED tanpa driverId: tombol Chat dengan Kurir tidak tampil', async () => {
-    const assignedNoDriver = {
-      ...MOCK_ORDER,
-      status: 'ASSIGNED' as const,
-      driverId: undefined,
-    };
-    mockGetOrderById.mockResolvedValueOnce(assignedNoDriver);
-
-    const { queryByTestId } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
-
-    await waitFor(() => {
-      expect(queryByTestId('chat-button')).toBeNull();
-    });
-  });
-
-  it('CANCELLED: tombol Chat dengan Kurir tidak tampil', async () => {
-    const cancelledOrder = {
-      ...MOCK_ORDER,
-      status: 'CANCELLED' as const,
-      driverId: 'driver-456',
-    };
-    mockGetOrderById.mockResolvedValueOnce(cancelledOrder);
-
-    const { queryByTestId } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
-
-    await waitFor(() => {
-      expect(queryByTestId('chat-button')).toBeNull();
-    });
-  });
-
-  it('setelah order:accepted tombol muncul, setelah order:cancelled tombol hilang', async () => {
-    // Start dengan ASSIGNED (pool state, no driver)
-    const assignedNoDriver = {
-      ...MOCK_ORDER,
-      status: 'ASSIGNED' as const,
-      driverId: undefined,
-    };
-    mockGetOrderById.mockResolvedValueOnce(assignedNoDriver);
-
-    const { queryByTestId } = render(
-      <OrderTrackingScreen orderId="order-abc-123" onBack={jest.fn()} onOpenChat={jest.fn()} />,
-    );
-
-    await waitFor(() => {
-      expect(queryByTestId('chat-button')).toBeNull();
-    });
-
-    // order:accepted -> driverId terisi -> tombol muncul
-    act(() => {
+    await act(async () => {
       triggerAccepted({
-        orderId: 'order-abc-123',
-        driverId: 'driver-789',
+        orderId: ORDER.id,
+        driverId: 'driver-1',
         status: 'PREPARING',
         version: 2,
       });
     });
+    await flush();
 
-    await waitFor(() => {
-      expect(queryByTestId('chat-button')).toBeTruthy();
-    });
+    expect(
+      screen.queryByText('Driver sebelumnya tidak aktif. Sedang dicarikan driver lain.'),
+    ).toBeNull();
+  });
 
-    // setelah order:cancelled, driverId kosong dan tombol hilang
-    act(() => {
-      triggerCancelled({
-        orderId: 'order-abc-123',
-        status: 'ASSIGNED',
-        version: 3,
-        reason: 'Kendaraan mogok',
+  it('order:accepted mengubah label, judul, dan baris orang', async () => {
+    await tampilkan({ status: 'ASSIGNED' });
+
+    expect(within(screen.getByTestId('pil-status')).getByText('Mencari driver')).toBeTruthy();
+    expect(screen.getByText('Order Anda sudah masuk')).toBeTruthy();
+    expect(within(screen.getByTestId('baris-orang')).getByText('Mencari driver')).toBeTruthy();
+
+    await act(async () => {
+      triggerAccepted({
+        orderId: ORDER.id,
+        driverId: 'driver-1',
+        status: 'PREPARING',
+        version: 2,
       });
     });
+    await flush();
 
-    await waitFor(() => {
-      expect(queryByTestId('chat-button')).toBeNull();
+    expect(within(screen.getByTestId('pil-status')).getByText('Driver ditemukan')).toBeTruthy();
+    expect(screen.getByText('Driver sudah ditemukan untuk order Anda')).toBeTruthy();
+    expect(within(screen.getByTestId('baris-orang')).getByText('Driver Anda')).toBeTruthy();
+  });
+
+  it('order:status_updated mengubah label, judul, dan baris orang', async () => {
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+
+    expect(within(screen.getByTestId('pil-status')).getByText('Driver ditemukan')).toBeTruthy();
+    expect(screen.getByText('Driver sudah ditemukan untuk order Anda')).toBeTruthy();
+    expect(within(screen.getByTestId('baris-orang')).getByText('Driver Anda')).toBeTruthy();
+
+    await act(async () => {
+      triggerStatusUpdated({
+        orderId: ORDER.id,
+        status: 'OUT_FOR_DELIVERY',
+        version: 2,
+        updatedAt: '2026-08-30T02:00:00.000Z',
+      });
     });
+    await flush();
+
+    expect(within(screen.getByTestId('pil-status')).getByText('Dalam perjalanan')).toBeTruthy();
+    expect(screen.getByText('Driver sedang menuju alamat Anda')).toBeTruthy();
+    expect(within(screen.getByTestId('baris-orang')).getByText('Driver Anda')).toBeTruthy();
+  });
+
+  it('kejadian untuk order lain diabaikan', async () => {
+    await tampilkan({ status: 'ASSIGNED' });
+
+    await act(async () => {
+      triggerAccepted({
+        orderId: 'order-lain',
+        driverId: 'driver-9',
+        status: 'PREPARING',
+        version: 9,
+      });
+    });
+    await flush();
+
+    expect(within(screen.getByTestId('pil-status')).getByText('Mencari driver')).toBeTruthy();
+    expect(screen.getByText('Order Anda sudah masuk')).toBeTruthy();
+  });
+
+  it('semua langganan dilepas saat layar ditutup', async () => {
+    const tampilan = render(elemenLayar(true));
+    await flush();
+
+    expect(mockAcceptedSubscribers.length).toBeGreaterThan(0);
+    expect(mockCancelledSubscribers.length).toBeGreaterThan(0);
+
+    tampilan.unmount();
+
+    expect(mockAcceptedSubscribers).toHaveLength(0);
+    expect(mockRejectedSubscribers).toHaveLength(0);
+    expect(mockCancelledSubscribers).toHaveLength(0);
+    expect(mockCodSubscribers).toHaveLength(0);
+    expect(mockStatusSubscribers).toHaveLength(0);
+    expect(mockConnectSubscribers).toHaveLength(0);
+    expect(mockDisconnectSubscribers).toHaveLength(0);
+  });
+
+  it('harga 23000 ditulis Rp 23.000, bukan 230', async () => {
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+
+    expect(screen.getAllByText(/Rp\s23\.000/)).toHaveLength(2);
+    expect(screen.queryByText(/Rp\s230(?![\d.])/)).toBeNull();
+  });
+
+  it('tombol Chat memanggil onOpenChat dengan id order dan hilang setelah dibatalkan', async () => {
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('tombol-chat'));
+    });
+    expect(mockOnOpenChat).toHaveBeenCalledWith(ORDER.id);
+
+    await act(async () => {
+      triggerCancelled({
+        orderId: ORDER.id,
+        status: 'ASSIGNED',
+        version: 2,
+        reason: 'kendaraan mogok',
+      });
+    });
+    await flush();
+
+    expect(screen.queryByTestId('tombol-chat')).toBeNull();
+  });
+
+  it('token kedaluwarsa: tanpa UI galat dan tanpa auth-expired dari layar', async () => {
+    const emit = jest.spyOn(syncEvents, 'emit');
+    mockGetOrderById.mockRejectedValue(new UnauthorizedError('token kedaluwarsa'));
+    render(elemenLayar(true));
+    await flush();
+
+    expect(screen.queryByText('Gagal memuat order')).toBeNull();
+    expect(screen.queryByText('Coba lagi')).toBeNull();
+    expect(emit).not.toHaveBeenCalled();
+    emit.mockRestore();
+  });
+
+  it('teks lama dari layar sebelumnya tidak tampil lagi', async () => {
+    await tampilkan({
+      status: 'CANCELLED',
+      cancelReason: 'kendaraan mogok',
+      notes: 'Tolong dibungkus rapi',
+    });
+
+    const teksLama = [
+      'Memuat order...',
+      'Status:',
+      'Detail Pengiriman',
+      'Catatan',
+      'Alasan Pembatalan',
+      'Order #',
+      'Chat dengan Kurir',
+      'Koneksi terputus, mencoba reconnect...',
+      'Coba Lagi',
+      'Kembali',
+    ];
+    teksLama.forEach((teks) => {
+      expect(screen.queryByText(teks)).toBeNull();
+    });
+    expect(screen.queryByTestId('cod-collected-banner')).toBeNull();
+    expect(screen.queryByTestId('connection-banner')).toBeNull();
+  });
+
+  it('terlihat diteruskan: tanpa tampil tidak ambil ulang, dengan tampil ambil ulang', async () => {
+    jest.useFakeTimers();
+    try {
+      mockGetOrderById.mockResolvedValue(orderDengan({ status: 'PREPARING' }));
+      const tampilan = render(elemenLayar(false));
+      await flush();
+      expect(mockGetOrderById).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        jest.advanceTimersByTime(60 * 1000);
+      });
+      await flush();
+      expect(mockGetOrderById).toHaveBeenCalledTimes(1);
+
+      tampilan.rerender(elemenLayar(true));
+      await act(async () => {
+        jest.advanceTimersByTime(60 * 1000);
+      });
+      await flush();
+      expect(mockGetOrderById).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('jendela awal dihitung dari isi pertama, banner yang muncul tidak punya gerak masuk', async () => {
+    jest.useFakeTimers();
+    try {
+      mockGetOrderById.mockImplementation(
+        () =>
+          new Promise<Order>((selesai) => {
+            setTimeout(() => selesai(ORDER), 800);
+          }),
+      );
+      render(elemenLayar(true));
+      await flush();
+
+      await act(async () => {
+        jest.advanceTimersByTime(100);
+      });
+      await act(async () => {
+        triggerDisconnect();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(700);
+      });
+      await flush();
+
+      expect(screen.getByText('Pembaruan langsung terputus')).toBeTruthy();
+      expect(punyaEntering(screen.toJSON())).toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

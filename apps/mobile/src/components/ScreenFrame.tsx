@@ -1,9 +1,9 @@
 /**
- * Kerangka layar driver.
+ * Kerangka layar driver dan customer.
  *
- * Kerangkanya sama untuk semua layar driver: latar layar, status bar, bilah
- * koneksi di atas, lalu isi layar. Isi layar tidak dibungkus, jadi layar
- * bisa menata anaknya sendiri.
+ * Kerangkanya sama untuk semua layar driver dan customer: latar layar,
+ * status bar, bilah koneksi di atas, lalu isi layar. Isi layar tidak
+ * dibungkus, jadi layar bisa menata anaknya sendiri.
  */
 
 import React from 'react';

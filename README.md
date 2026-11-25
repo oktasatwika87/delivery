@@ -136,8 +136,9 @@ dijalankan ke database yang datanya penting.
 - Titik antar selalu posisi GPS HP customer pas order dibuat, belum bisa dipilih di peta. Alamat
   diketik manual.
 - Customer belum bisa batalin order.
-- Layar tracking customer cuma berubah lewat event socket. Kalau sempat putus, statusnya bisa basi
-  sampai layar dibuka ulang, dan info pembayaran tunai diterima bisa kelewat.
+- Layar status order customer nggak dapet info pembayaran dari server. Kalau driver nerima tunai pas
+  layarnya ketutup atau socketnya lagi putus, kotaknya tetap "Siapkan uang tunai" sampai order
+  terkirim.
 - Wi-Fi putus baru ketahuan socket sekitar 45 detik. Chat yang dikirim di jeda itu nunggu sinkron
   berikutnya, tetap terkirim sekali.
 - Belum ada notifikasi chat di luar layar chat.

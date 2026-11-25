@@ -11,6 +11,7 @@
 
 import React from 'react';
 import { Platform } from 'react-native';
+import { useIsFocused } from '@react-navigation/native';
 import {
   createNativeStackNavigator,
   type NativeStackScreenProps,
@@ -49,20 +50,23 @@ type PropsStatusOrder = NativeStackScreenProps<
  * Layar status order.
  *
  * Layar ini memakai tema terang, jadi isinya perlu dibungkus sendiri.
+ * Jendela awal dibuat di dalam layar status order, jadi dihitung dari isi
+ * pertamanya.
  */
 function LayarStatusOrder({
   navigation,
   route,
 }: PropsStatusOrder): React.JSX.Element {
+  const terlihat = useIsFocused();
+
   return (
     <ThemeProvider name={TEMA_CUSTOMER}>
-      <InitialWindowProvider>
-        <OrderTrackingScreen
-          orderId={route.params.orderId}
-          onBack={() => navigation.goBack()}
-          onOpenChat={(roomId) => navigation.navigate('Chat', { roomId })}
-        />
-      </InitialWindowProvider>
+      <OrderTrackingScreen
+        orderId={route.params.orderId}
+        terlihat={terlihat}
+        onBack={() => navigation.goBack()}
+        onOpenChat={(roomId) => navigation.navigate('Chat', { roomId })}
+      />
     </ThemeProvider>
   );
 }

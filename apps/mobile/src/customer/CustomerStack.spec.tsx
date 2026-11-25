@@ -10,6 +10,10 @@
 // mock-prefix wajib karena diakses dari jest.mock factory (hoisting).
 const mockScreenComponents: Record<string, unknown> = {};
 
+// Fokus layar tiruan, supaya tes bisa membuat layar status order berubah dari
+// terlihat jadi tidak terlihat.
+var mockFokus = true;
+
 /** Opsi layar yang dipakai Navigator. */
 interface OpsiNavigator {
   headerShown?: boolean;
@@ -33,6 +37,7 @@ interface PropsLayarStatusOrder {
 /** Props layar status order yang diterima OrderTrackingScreen. */
 interface PropsStatusOrder {
   orderId: string;
+  terlihat: boolean;
   onBack: () => void;
   onOpenChat: (roomId: string) => void;
 }
@@ -91,6 +96,7 @@ jest.mock('@react-navigation/native', () => ({
   },
   useNavigation: () => ({ navigate: jest.fn(), goBack: jest.fn(), replace: jest.fn() }),
   useRoute: () => ({ params: { roomId: 'room-customer-1' } }),
+  useIsFocused: () => mockFokus,
 }));
 
 jest.mock('react-native-config', () => ({
@@ -253,6 +259,7 @@ describe('CustomerStack', () => {
     mockKomponenStatusOrder = null;
     mockStatusOrder.props = null;
     mockStatusOrder.namaTema = null;
+    mockFokus = true;
   });
 
   it('route Chat di customer stack memakai ChatScreen dari src/screens, bukan App', () => {
@@ -307,5 +314,37 @@ describe('CustomerStack', () => {
 
     props.onOpenChat('x');
     expect(navigate).toHaveBeenCalledWith('Chat', { roomId: 'x' });
+  });
+
+  it('layar status order tahu kalau sedang terlihat', () => {
+    render(<CustomerStack onLogout={jest.fn()} />);
+
+    const Layar = mockKomponenStatusOrder;
+    if (Layar === null) throw new Error('layar status order tidak terdaftar');
+
+    const navigate = jest.fn();
+    const goBack = jest.fn();
+    const tampilan = render(
+      <Layar
+        navigation={{ navigate, goBack }}
+        route={{ params: { orderId: 'order-customer-9' } }}
+      />,
+    );
+
+    const props = mockStatusOrder.props;
+    if (props === null) throw new Error('layar status order tidak dirender');
+    expect(props.terlihat).toBe(true);
+
+    mockFokus = false;
+    tampilan.rerender(
+      <Layar
+        navigation={{ navigate, goBack }}
+        route={{ params: { orderId: 'order-customer-9' } }}
+      />,
+    );
+
+    const propsBaru = mockStatusOrder.props;
+    if (propsBaru === null) throw new Error('layar status order tidak dirender');
+    expect(propsBaru.terlihat).toBe(false);
   });
 });
