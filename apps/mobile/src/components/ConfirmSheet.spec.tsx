@@ -199,6 +199,19 @@ describe('ConfirmSheet', () => {
     expect(pohon.UNSAFE_queryByType(Modal)).toBeNull();
   });
 
+  it('latar menutupi seluruh layar di belakang lembar', () => {
+    const pohon = render(lembar());
+
+    const gaya = StyleSheet.flatten(
+      pohon.getByTestId('pembungkus-latar').props.style,
+    );
+    expect(gaya.position).toBe('absolute');
+    expect(gaya.top).toBe(0);
+    expect(gaya.right).toBe(0);
+    expect(gaya.bottom).toBe(0);
+    expect(gaya.left).toBe(0);
+  });
+
   it('latar tidak bisa difokus pembaca layar', () => {
     const pohon = render(lembar());
 

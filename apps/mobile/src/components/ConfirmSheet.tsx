@@ -255,7 +255,8 @@ export function ConfirmSheet({
     >
       <View style={styles.akar}>
         <Animated.View
-          style={[styles.latar, gayaLatar]}
+          testID="pembungkus-latar"
+          style={[StyleSheet.absoluteFill, gayaLatar]}
           pointerEvents="box-none"
         >
           <Pressable
@@ -263,7 +264,7 @@ export function ConfirmSheet({
             onPress={pilihTidak}
             accessible={false}
             importantForAccessibility="no"
-            style={[styles.latar, { backgroundColor: colors.scrim }]}
+            style={[StyleSheet.absoluteFill, { backgroundColor: colors.scrim }]}
           />
         </Animated.View>
         <Animated.View
@@ -342,9 +343,6 @@ const styles = StyleSheet.create({
   akar: {
     flex: 1,
     justifyContent: 'flex-end',
-  },
-  latar: {
-    flex: 1,
   },
   lembar: {
     borderTopLeftRadius: radius.sheet,
