@@ -8,9 +8,10 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { render } from '@testing-library/react-native';
+import { useSharedValue } from 'react-native-reanimated';
 import Svg, { Circle, G, Path, Rect } from 'react-native-svg';
 
-import { RiderArt, UKURAN_RIDER } from './RiderArt';
+import { RiderArt, UKURAN_RIDER, sudutRoda } from './RiderArt';
 import { JALUR_CANGKANG, JALUR_KACA, JALUR_PET } from '../theme/Logo';
 import { ThemeProvider } from '../theme/ThemeProvider';
 import { themes } from '../theme/tokens';
@@ -54,6 +55,26 @@ function wadahJari(pohon: ReturnType<typeof render>) {
     const gaya = StyleSheet.flatten(el.props.style);
     return gaya?.position === 'absolute';
   });
+}
+
+/** Gambar dengan nilai bersama yang dibuat sendiri. */
+function Gambar({
+  geserAwal = 0,
+  arahAwal = 1,
+}: {
+  geserAwal?: number;
+  arahAwal?: number;
+}): React.JSX.Element {
+  const geser = useSharedValue(geserAwal);
+  const arah = useSharedValue(arahAwal);
+  return <RiderArt geser={geser} arah={arah} />;
+}
+
+/** Gaya gambar motor yang sedang dirender. */
+function gayaGambar(pohon: ReturnType<typeof render>) {
+  return StyleSheet.flatten(
+    pohon.getByTestId('gambar-motor', { includeHiddenElements: true }).props.style,
+  );
 }
 
 describe('RiderArt', () => {
@@ -197,5 +218,41 @@ describe('RiderArt', () => {
     const akar = pohon.getByTestId('gambar-motor', { includeHiddenElements: true });
     expect(akar.props.accessibilityElementsHidden).toBe(true);
     expect(akar.props.importantForAccessibility).toBe('no-hide-descendants');
+  });
+
+  it('gambar diam menghadap kanan', () => {
+    const pohon = render(gambar());
+
+    expect(gayaGambar(pohon).transform).toEqual([
+      { translateX: 0 },
+      { scaleX: 1 },
+    ]);
+  });
+
+  it('gambar bisa digeser dan dibalik', () => {
+    const pohon = render(<Gambar geserAwal={30} arahAwal={-1} />);
+
+    expect(gayaGambar(pohon).transform).toEqual([
+      { translateX: 30 },
+      { scaleX: -1 },
+    ]);
+  });
+
+  it('jari-jari roda berputar sesuai pergeseran gambar', () => {
+    const pohon = render(<Gambar geserAwal={30} />);
+
+    const wadah = wadahJari(pohon);
+    expect(wadah).toHaveLength(2);
+
+    const gaya = StyleSheet.flatten(wadah[0].props.style);
+    expect(gaya.transform).toEqual([
+      { rotate: `${sudutRoda(30, 1)}deg` },
+    ]);
+  });
+
+  it('sudut roda dihitung dari pergeseran dan dibalik saat cermin', () => {
+    expect(sudutRoda(0, 1)).toBe(0);
+    expect(sudutRoda(UKURAN_RIDER.jariJariRoda, 1)).toBeCloseTo(57.2958, 3);
+    expect(sudutRoda(UKURAN_RIDER.jariJariRoda, -1)).toBeCloseTo(-57.2958, 3);
   });
 });

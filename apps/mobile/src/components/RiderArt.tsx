@@ -7,7 +7,12 @@
  */
 
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  type SharedValue,
+} from 'react-native-reanimated';
 import Svg, { Circle, G, Path, Rect } from 'react-native-svg';
 
 import { JALUR_CANGKANG, JALUR_KACA, JALUR_PET } from '../theme/Logo';
@@ -66,13 +71,85 @@ const RODA: { x: number; y: number }[] = [
   { x: 124, y: 76 },
 ];
 
-export function RiderArt(): React.JSX.Element {
-  const { colors } = useTheme();
+export interface RiderArtProps {
+  /** Pergeseran gambar dari posisi diam, positif ke kanan. */
+  geser?: SharedValue<number>;
+  /** Arah hadap gambar: 1 ke kanan, -1 ke kiri. */
+  arah?: SharedValue<number>;
+}
+
+/**
+ * Sudut putaran roda dalam derajat.
+ *
+ * Pergeseran gambar dibagi jari-jari roda jadi radian putaran, lalu diubah
+ * jadi derajat. Kalau gambar dicerminkan, putaran yang sama terlihat terbalik,
+ * jadi tandanya dibalik supaya roda di layar selalu berputar searah jalannya.
+ */
+export function sudutRoda(geser: number, arah: number): number {
+  'worklet';
+  const sudut = (geser / UKURAN_RIDER.jariJariRoda) * (180 / Math.PI);
+  return arah < 0 ? -sudut : sudut;
+}
+
+interface JariRodaProps {
+  roda: { x: number; y: number };
+  geser: SharedValue<number>;
+  arah: SharedValue<number>;
+  warna: string;
+}
+
+/** Satu jari-jari roda, berputar mengikuti pergeseran gambar. */
+function JariRoda({ roda, geser, arah, warna }: JariRodaProps): React.JSX.Element {
+  const gaya = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${sudutRoda(geser.value, arah.value)}deg` }],
+  }));
 
   return (
-    <View
+    <Animated.View
+      style={[
+        styles.jari,
+        {
+          left: roda.x * SKALA - UKURAN_RIDER.jariJariRoda,
+          top: (roda.y + ATAS_VIEW_BOX) * SKALA - UKURAN_RIDER.jariJariRoda,
+        },
+        gaya,
+      ]}
+    >
+      <Svg
+        width={UKURAN_JARI * SKALA}
+        height={UKURAN_JARI * SKALA}
+        viewBox="-12 -12 24 24"
+      >
+        <Path
+          d={JALUR_JARI}
+          fill="none"
+          stroke={warna}
+          strokeWidth={TEBAL_JARI}
+          strokeLinecap="round"
+        />
+      </Svg>
+    </Animated.View>
+  );
+}
+
+export function RiderArt({ geser, arah }: RiderArtProps = {}): React.JSX.Element {
+  const { colors } = useTheme();
+  const geserBawaan = useSharedValue(0);
+  const arahBawaan = useSharedValue(1);
+  const nilaiGeser = geser ?? geserBawaan;
+  const nilaiArah = arah ?? arahBawaan;
+
+  const gayaGerak = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: nilaiGeser.value },
+      { scaleX: nilaiArah.value },
+    ],
+  }));
+
+  return (
+    <Animated.View
       testID="gambar-motor"
-      style={styles.akar}
+      style={[styles.akar, gayaGerak]}
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
     >
@@ -124,32 +201,15 @@ export function RiderArt(): React.JSX.Element {
         </G>
       </Svg>
       {RODA.map((roda) => (
-        <View
+        <JariRoda
           key={`jari-${roda.x}`}
-          style={[
-            styles.jari,
-            {
-              left: roda.x * SKALA - UKURAN_RIDER.jariJariRoda,
-              top: (roda.y + ATAS_VIEW_BOX) * SKALA - UKURAN_RIDER.jariJariRoda,
-            },
-          ]}
-        >
-          <Svg
-            width={UKURAN_JARI * SKALA}
-            height={UKURAN_JARI * SKALA}
-            viewBox="-12 -12 24 24"
-          >
-            <Path
-              d={JALUR_JARI}
-              fill="none"
-              stroke={colors.textMuted}
-              strokeWidth={TEBAL_JARI}
-              strokeLinecap="round"
-            />
-          </Svg>
-        </View>
+          roda={roda}
+          geser={nilaiGeser}
+          arah={nilaiArah}
+          warna={colors.textMuted}
+        />
       ))}
-    </View>
+    </Animated.View>
   );
 }
 

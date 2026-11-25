@@ -8,10 +8,12 @@
 import React from 'react';
 import { Modal, StyleSheet, View } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
+import * as reanimated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from './Button';
 import { ConfirmSheet } from './ConfirmSheet';
+import { exitEasing, standardEasing } from './motion/presets';
 import { ThemeProvider } from '../theme/ThemeProvider';
 import { elevation, themes } from '../theme/tokens';
 
@@ -49,7 +51,24 @@ function lembar({
   return tema ? <ThemeProvider name={tema}>{isi}</ThemeProvider> : isi;
 }
 
+/** Mengukur lembar, supaya geraknya bisa dimulai. */
+function ukur(
+  pohon: ReturnType<typeof render>,
+  lebar = 360,
+  tinggi = 300,
+): void {
+  fireEvent(pohon.getByTestId('lembar-konfirmasi'), 'layout', {
+    nativeEvent: {
+      layout: { x: 0, y: 0, width: lebar, height: tinggi },
+    },
+  });
+}
+
 describe('ConfirmSheet', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it('tidak terpasang tidak menggambar Modal', () => {
     const pohon = render(lembar({ visible: false }));
 
@@ -357,5 +376,123 @@ describe('ConfirmSheet', () => {
     );
     expect(gaya.height).toBe(80);
     expect(gaya.marginHorizontal).toBe(-24);
+  });
+
+  it('lembar transparan sampai ukurannya diketahui', () => {
+    const pohon = render(lembar());
+
+    const gaya = StyleSheet.flatten(
+      pohon.getByTestId('lembar-konfirmasi').props.style,
+    );
+    expect(gaya.opacity).toBe(0);
+  });
+
+  it('setelah diukur lembar muncul dan motornya jalan ke tempatnya', () => {
+    const timing = jest.spyOn(reanimated, 'withTiming');
+    const tunda = jest.spyOn(reanimated, 'withDelay');
+    const pohon = render(lembar());
+
+    ukur(pohon);
+
+    const gaya = StyleSheet.flatten(
+      pohon.getByTestId('lembar-konfirmasi').props.style,
+    );
+    expect(gaya.opacity).toBe(1);
+    expect(gaya.transform).toEqual([{ translateY: 0 }]);
+
+    const motor = StyleSheet.flatten(
+      pohon.getByTestId('gambar-motor', { includeHiddenElements: true }).props
+        .style,
+    );
+    expect(motor.transform).toEqual([{ translateX: 0 }, { scaleX: 1 }]);
+
+    expect(timing).toHaveBeenCalledWith(1, {
+      duration: 180,
+      easing: standardEasing,
+    });
+    expect(timing).toHaveBeenCalledWith(0, {
+      duration: 380,
+      easing: standardEasing,
+    });
+    expect(timing).toHaveBeenCalledWith(0, {
+      duration: 450,
+      easing: standardEasing,
+    });
+    expect(tunda).toHaveBeenCalledWith(60, expect.anything());
+  });
+
+  it('Ya membuat motor jalan ke kanan keluar dari tepi lembar', () => {
+    const timing = jest.spyOn(reanimated, 'withTiming');
+    const pohon = render(lembar());
+    ukur(pohon);
+
+    fireEvent.press(pohon.getByLabelText('Ya, batalkan'));
+
+    expect(timing).toHaveBeenCalledWith(348, {
+      duration: 260,
+      easing: exitEasing,
+    });
+    expect(timing).toHaveBeenCalledWith(300, {
+      duration: 260,
+      easing: exitEasing,
+    });
+    expect(timing).toHaveBeenCalledWith(
+      0,
+      {
+        duration: 120,
+        easing: exitEasing,
+      },
+      expect.any(Function),
+    );
+  });
+
+  it('Tidak membuat motor berbalik lalu jalan ke kiri', () => {
+    const timing = jest.spyOn(reanimated, 'withTiming');
+    const pohon = render(lembar());
+    ukur(pohon);
+
+    fireEvent.press(pohon.getByLabelText('Tidak'));
+
+    expect(timing).toHaveBeenCalledWith(-1, {
+      duration: 100,
+      easing: standardEasing,
+    });
+    expect(timing).toHaveBeenCalledWith(-134, {
+      duration: 360,
+      easing: exitEasing,
+    });
+  });
+
+  it('ditutup dari luar motor keluar tanpa memanggil apa pun', () => {
+    const timing = jest.spyOn(reanimated, 'withTiming');
+    const onCancel = jest.fn();
+    const pohon = render(
+      <ConfirmSheet
+        visible
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya, batalkan"
+        onConfirm={jest.fn()}
+        onCancel={onCancel}
+      />,
+    );
+    ukur(pohon);
+
+    pohon.rerender(
+      <ConfirmSheet
+        visible={false}
+        title="Batalkan order?"
+        message="Yakin?"
+        confirmLabel="Ya, batalkan"
+        onConfirm={jest.fn()}
+        onCancel={onCancel}
+      />,
+    );
+
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(timing).toHaveBeenCalledWith(-1, {
+      duration: 100,
+      easing: standardEasing,
+    });
   });
 });
