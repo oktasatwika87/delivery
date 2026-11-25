@@ -559,6 +559,27 @@ describe('useCustomerOrder', () => {
       expect(result.current.data?.order.status).toBe('PREPARING');
     });
 
+    it('tidak jalan sebelum order tampil, galat pertama tetap lewat cobaLagi', async () => {
+      mockGetOrderById.mockRejectedValue(new Error('jaringan mati'));
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      expect(result.current.gagalMemuat).toBe(true);
+      expect(result.current.data).toBeNull();
+
+      act(() => {
+        triggerDisconnect();
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(AMBIL_ULANG_MS * 2);
+      });
+
+      expect(mockGetOrderById).toHaveBeenCalledTimes(1);
+      expect(result.current.gagalMemuat).toBe(true);
+    });
+
     it('berhenti saat status bukan preparing dan tidak terputus', async () => {
       renderHook(() => useCustomerOrder('order-1', true));
       await flush();

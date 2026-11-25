@@ -359,6 +359,10 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
   useEffect(() => {
     if (!terlihat) return;
     if (!appAktif) return;
+    // Pewaktu baru jalan kalau order sudah tampil. Pemicu yang datang
+    // sebelum itu ditandai dan diambil ulang sekali sesudah GET pertama
+    // berhasil, jadi galat pertama tetap lewat cobaLagi.
+    if (statusOrder === undefined) return;
     if (statusOrder !== 'PREPARING' && !terputus) return;
 
     const timer = setInterval(() => {
