@@ -44,17 +44,17 @@ const PANJANG_GARIS_BIRU = MARGIN_GAMBAR + UKURAN_RIDER.ujungRodaDepanX;
 const DURASI_MASUK_GESER = 450;
 /** Jeda motor berjalan setelah lembar mulai naik. */
 const JEDA_MASUK_GESER = 60;
-/** Durasi gambar berbalik arah saat keluar. */
+/** Durasi gambar berbalik arah, saat keluar lewat Tidak dan saat dibuka lagi selagi keluar. */
 const DURASI_BALIK = 140;
-/** Jeda motor berjalan ke kiri setelah berbalik. */
+/** Jeda motor mulai jalan ke kiri, dihitung dari saat Tidak dipilih. */
 const JEDA_TIDAK_GESER = 100;
-/** Jeda lembar turun setelah motor berjalan ke kiri. */
+/** Jeda lembar mulai turun, dihitung dari saat Tidak dipilih. */
 const JEDA_TIDAK_LEMBAR = 180;
-/** Jeda latar pudar setelah lembar mulai turun. */
+/** Jeda latar mulai pudar, dihitung dari saat Tidak dipilih. */
 const JEDA_TIDAK_LATAR = 360;
-/** Jeda lembar turun saat keluar lewat Ya. */
+/** Jeda lembar mulai turun, dihitung dari saat Ya dipilih. */
 const JEDA_YA_LEMBAR = 140;
-/** Jeda latar pudar saat keluar lewat Ya. */
+/** Jeda latar mulai pudar, dihitung dari saat Ya dipilih. */
 const JEDA_YA_LATAR = 300;
 
 export type ConfirmSheetTone = 'primary' | 'danger';
@@ -65,7 +65,7 @@ export interface ConfirmSheetProps {
   title: string;
   message: string;
   confirmLabel: string;
-  /** Teks tombol batal. Bawaannya Tidak. */
+  /** Teks tombol bawah, pilihan untuk tidak jadi. Bawaannya Tidak. */
   cancelLabel?: string;
   /** Nada tombol Ya. Bawaannya primary. */
   tone?: ConfirmSheetTone;
@@ -196,7 +196,8 @@ export function ConfirmSheet({
   }, [geser, latar, naik, lebarLembar, tinggiLembar, lepas, kurangiGerak]);
 
   /**
-   * Membuka lembar: latar pudar masuk, lembar naik, motor berbalik lalu jalan.
+   * Membuka lembar: latar pudar masuk, lembar naik, motor menghadap kanan lalu
+   * jalan ke tempatnya.
    *
    * Fungsi ini dipakai dua kali: saat lembar diukur pertama kali, dan saat
    * lembar yang sedang keluar dibuka lagi. Bedanya cuma nilai awal yang

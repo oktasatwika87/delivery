@@ -82,7 +82,7 @@ interface BentukKotak {
 }
 
 /**
- * Warna kotak, tepinya, dan isi isinya untuk tiap bentuk.
+ * Warna kotak, tepinya, dan warna isinya untuk tiap bentuk.
  *
  * Bentuk siapkan memakai warna aksen untuk latar dan tepinya sekaligus, jadi
  * tepinya tidak terlihat tapi ukurannya sama dengan bentuk lain.
