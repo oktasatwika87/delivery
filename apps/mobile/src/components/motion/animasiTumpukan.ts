@@ -1,5 +1,5 @@
 /**
- * Animasi tumpukan layar driver.
+ * Animasi tumpukan layar driver dan customer.
  *
  * react-native-screens 3.37 menganggap 'slide_from_right' sebagai animasi
  * buatan, jadi gestur geser kembali dari tepi kiri tidak jalan di iOS.

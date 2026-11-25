@@ -10,6 +10,9 @@ import { themes, type ThemeColors, type ThemeName } from './tokens';
 /** Tema driver. Kalau uji terik gagal, cukup ganti nilai ini. */
 export const TEMA_DRIVER: ThemeName = 'gelap';
 
+/** Tema layar customer. */
+export const TEMA_CUSTOMER: ThemeName = 'terang';
+
 export interface Tema {
   name: ThemeName;
   colors: ThemeColors;

@@ -10,7 +10,12 @@
  */
 
 import React from 'react';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { Platform } from 'react-native';
+import {
+  createNativeStackNavigator,
+  type NativeStackScreenProps,
+} from '@react-navigation/native-stack';
+import { useReducedMotion } from 'react-native-reanimated';
 
 import { CustomerHomeScreen } from './CustomerHomeScreen';
 import { OrderCreateScreen } from './OrderCreateScreen';
@@ -20,6 +25,8 @@ import {
   InitialWindowProvider,
   withInitialWindow,
 } from '../components/motion/InitialWindow';
+import { animasiTumpukan } from '../components/motion/animasiTumpukan';
+import { TEMA_CUSTOMER, ThemeProvider } from '../theme/ThemeProvider';
 
 export type CustomerStackParamList = {
   CustomerHome: undefined;
@@ -33,13 +40,47 @@ const Stack = createNativeStackNavigator<CustomerStackParamList>();
 // Pembungkus layar dibuat sekali di tingkat modul.
 const ChatDenganJendela = withInitialWindow(ChatScreen);
 
+type PropsStatusOrder = NativeStackScreenProps<
+  CustomerStackParamList,
+  'OrderTracking'
+>;
+
+/**
+ * Layar status order.
+ *
+ * Layar ini memakai tema terang, jadi isinya perlu dibungkus sendiri.
+ */
+function LayarStatusOrder({
+  navigation,
+  route,
+}: PropsStatusOrder): React.JSX.Element {
+  return (
+    <ThemeProvider name={TEMA_CUSTOMER}>
+      <InitialWindowProvider>
+        <OrderTrackingScreen
+          orderId={route.params.orderId}
+          onBack={() => navigation.goBack()}
+          onOpenChat={(roomId) => navigation.navigate('Chat', { roomId })}
+        />
+      </InitialWindowProvider>
+    </ThemeProvider>
+  );
+}
+
 interface CustomerStackProps {
   onLogout: () => void;
 }
 
 export function CustomerStack({ onLogout }: CustomerStackProps): React.JSX.Element {
+  const kurangiGerak = useReducedMotion();
+
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator
+      screenOptions={{
+        headerShown: false,
+        animation: animasiTumpukan(kurangiGerak, Platform.OS),
+      }}
+    >
       <Stack.Screen name="CustomerHome">
         {({ navigation }) => (
           <InitialWindowProvider>
@@ -59,17 +100,7 @@ export function CustomerStack({ onLogout }: CustomerStackProps): React.JSX.Eleme
           </InitialWindowProvider>
         )}
       </Stack.Screen>
-      <Stack.Screen name="OrderTracking">
-        {({ navigation, route }) => (
-          <InitialWindowProvider>
-            <OrderTrackingScreen
-              orderId={route.params.orderId}
-              onBack={() => navigation.goBack()}
-              onOpenChat={(roomId) => navigation.navigate('Chat', { roomId })}
-            />
-          </InitialWindowProvider>
-        )}
-      </Stack.Screen>
+      <Stack.Screen name="OrderTracking" component={LayarStatusOrder} />
       <Stack.Screen name="Chat" component={ChatDenganJendela} />
     </Stack.Navigator>
   );

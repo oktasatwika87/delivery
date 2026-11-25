@@ -1,21 +1,49 @@
 /**
- * Tes untuk CustomerStack, verifikasi Chat route memakai ChatScreen dari
- * src/screens, bukan default-export App.tsx.
+ * Tes untuk CustomerStack.
  *
- * Pendekatan ringan: mock createNativeStackNavigator untuk merekam
- * komponen apa yang didaftarkan per nama route. Kita juga mock
- * '../screens/ChatScreen' dengan komponen penanda yang membawa identitas
- * (`__marker`). Setelah CustomerStack di-render, komponen yang
- * didaftarkan untuk 'Chat' HARUS punya identitas `__marker` yang sama
- * dengan mock kita, bukan identitas App.tsx default export.
- *
- * Pada kode lama (import ChatScreen dari App.tsx dengan path import
- * keliru), komponen untuk 'Chat' adalah App, yang TIDAK punya `__marker`
- * ini, jadi tes gagal.
+ * Tumpukan customer memakai animasi geser dari kanan, dan layar status order
+ * didaftarkan lewat komponen tingkat modul dengan tema terang. Tiruan
+ * Navigator merekam opsi layar dan komponen tiap route, lalu tes memanggil
+ * komponen status order secara langsung.
  */
 
 // mock-prefix wajib karena diakses dari jest.mock factory (hoisting).
-const mockScreenComponents: Record<string, (ComponentType<object> & { __marker?: string }) | null | undefined> = {};
+const mockScreenComponents: Record<string, unknown> = {};
+
+/** Opsi layar yang dipakai Navigator. */
+interface OpsiNavigator {
+  headerShown?: boolean;
+  animation?: string;
+}
+
+const mockOpsiNavigator: OpsiNavigator = {};
+
+/** Navigasi yang dipakai layar status order. */
+interface NavigasiStatusOrder {
+  navigate: (nama: string, params: { roomId: string }) => void;
+  goBack: () => void;
+}
+
+/** Props layar status order sesuai NativeStackScreenProps. */
+interface PropsLayarStatusOrder {
+  navigation: NavigasiStatusOrder;
+  route: { params: { orderId: string } };
+}
+
+/** Props layar status order yang diterima OrderTrackingScreen. */
+interface PropsStatusOrder {
+  orderId: string;
+  onBack: () => void;
+  onOpenChat: (roomId: string) => void;
+}
+
+let mockKomponenStatusOrder: ComponentType<PropsLayarStatusOrder> | null = null;
+
+/** Catatan props dan tema yang diterima layar status order. */
+const mockStatusOrder: { props: PropsStatusOrder | null; namaTema: string | null } = {
+  props: null,
+  namaTema: null,
+};
 
 // Simpan referensi ke React untuk dipakai di dalam factory jest.mock
 // (yang di-hoist ke atas modul). Nama berawalan `mock` agar boleh diakses.
@@ -23,7 +51,15 @@ const mockReact = jest.requireActual<typeof import('react')>('react');
 
 jest.mock('@react-navigation/native-stack', () => ({
   createNativeStackNavigator: () => ({
-    Navigator: ({ children }: { children: ReactNode }): React.ReactElement => {
+    Navigator: ({
+      children,
+      screenOptions,
+    }: {
+      children: ReactNode;
+      screenOptions?: OpsiNavigator;
+    }): React.ReactElement => {
+      mockOpsiNavigator.headerShown = screenOptions?.headerShown;
+      mockOpsiNavigator.animation = screenOptions?.animation;
       return mockReact.createElement(
         mockReact.Fragment,
         null,
@@ -33,9 +69,15 @@ jest.mock('@react-navigation/native-stack', () => ({
     Screen: ({
       name: routeName,
       component,
-    }: { name: string; component?: ComponentType<object> }): null => {
+    }: {
+      name: string;
+      component?: ComponentType<PropsLayarStatusOrder>;
+    }): null => {
       if (component !== undefined) {
         mockScreenComponents[routeName] = component;
+        if (routeName === 'OrderTracking') {
+          mockKomponenStatusOrder = component;
+        }
       }
       return null;
     },
@@ -54,6 +96,21 @@ jest.mock('@react-navigation/native', () => ({
 jest.mock('react-native-config', () => ({
   default: { API_BASE_URL: 'http://localhost:3000' },
 }));
+
+// Layar status order ditiru jadi komponen yang merekam props dan nama tema
+// yang berlaku di dalamnya.
+jest.mock('./OrderTrackingScreen', () => {
+  const tema = jest.requireActual<typeof import('../theme/ThemeProvider')>(
+    '../theme/ThemeProvider',
+  );
+  return {
+    OrderTrackingScreen: (props: PropsStatusOrder): null => {
+      mockStatusOrder.props = props;
+      mockStatusOrder.namaTema = tema.useTheme().name;
+      return null;
+    },
+  };
+});
 
 // Komponen penanda dengan `__marker` supaya bisa dibandingkan identitasnya.
 // Kalau CustomerStack import ChatScreen dari '../screens/ChatScreen',
@@ -82,7 +139,7 @@ jest.mock('../components/motion/InitialWindow', () => ({
 // Impor identitas marker yang sebenarnya, lewat require agar referensi
 // sama dengan yang dipakai factory. Pakai helper untuk komparasi.
 const mockChatScreenMarkerModule = jest.requireMock<{
-  ChatScreen: (props: object) => null & { __marker: string };
+  ChatScreen: ((props: object) => null) & { __marker: string };
 }>('../screens/ChatScreen');
 const mockChatScreenMarker = mockChatScreenMarkerModule.ChatScreen;
 
@@ -182,13 +239,20 @@ jest.mock('../map/networkMonitor', () => ({
 
 import type { ComponentType, ReactNode } from 'react';
 import { render } from '@testing-library/react-native';
+import * as reanimated from 'react-native-reanimated';
+
 import { CustomerStack } from './CustomerStack';
 
-describe('CustomerStack Chat route', () => {
+describe('CustomerStack', () => {
   beforeEach(() => {
     for (const key of Object.keys(mockScreenComponents)) {
       delete mockScreenComponents[key];
     }
+    mockOpsiNavigator.headerShown = undefined;
+    mockOpsiNavigator.animation = undefined;
+    mockKomponenStatusOrder = null;
+    mockStatusOrder.props = null;
+    mockStatusOrder.namaTema = null;
   });
 
   it('route Chat di customer stack memakai ChatScreen dari src/screens, bukan App', () => {
@@ -199,6 +263,49 @@ describe('CustomerStack Chat route', () => {
     // Komponen untuk 'Chat' haruslah mockChatScreenMarker yang kita mock
     // untuk '../screens/ChatScreen', bukan default-export App.tsx.
     expect(chatComponent).toBe(mockChatScreenMarker);
-    expect(chatComponent?.__marker).toBe('CHATSCREEN_FROM_SCREENS_FOLDER');
+    expect(mockChatScreenMarker.__marker).toBe('CHATSCREEN_FROM_SCREENS_FOLDER');
+  });
+
+  it('tumpukan customer memakai animasi geser dari kanan', () => {
+    render(<CustomerStack onLogout={jest.fn()} />);
+
+    expect(mockOpsiNavigator.headerShown).toBe(false);
+    expect(mockOpsiNavigator.animation).toBe('slide_from_right');
+  });
+
+  it('kurangi gerakan mematikan animasi tumpukan customer', () => {
+    const spy = jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+
+    render(<CustomerStack onLogout={jest.fn()} />);
+
+    expect(mockOpsiNavigator.animation).toBe('none');
+    spy.mockRestore();
+  });
+
+  it('layar status order terdaftar lewat komponen dengan tema terang', () => {
+    render(<CustomerStack onLogout={jest.fn()} />);
+
+    const Layar = mockKomponenStatusOrder;
+    if (Layar === null) throw new Error('layar status order tidak terdaftar');
+
+    const navigate = jest.fn();
+    const goBack = jest.fn();
+    render(
+      <Layar
+        navigation={{ navigate, goBack }}
+        route={{ params: { orderId: 'order-customer-9' } }}
+      />,
+    );
+
+    expect(mockStatusOrder.namaTema).toBe('terang');
+    const props = mockStatusOrder.props;
+    if (props === null) throw new Error('layar status order tidak dirender');
+    expect(props.orderId).toBe('order-customer-9');
+
+    props.onBack();
+    expect(goBack).toHaveBeenCalled();
+
+    props.onOpenChat('x');
+    expect(navigate).toHaveBeenCalledWith('Chat', { roomId: 'x' });
   });
 });
