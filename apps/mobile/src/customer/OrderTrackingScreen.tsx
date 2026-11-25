@@ -7,7 +7,7 @@
  * berisi rincian order.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { LayoutChangeEvent, TextStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,9 +17,11 @@ import type { Order } from '@delivery/shared';
 
 import { AppBar } from '../components/AppBar';
 import { Banner } from '../components/Banner';
+import type { BannerAction } from '../components/Banner';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { CashBox } from '../components/CashBox';
+import { ConfirmSheet } from '../components/ConfirmSheet';
 import { ScreenFrame } from '../components/ScreenFrame';
 import { StatusLabel } from '../components/StatusLabel';
 import { TrackRoute } from '../components/TrackRoute';
@@ -28,11 +30,12 @@ import { InitialWindowProvider } from '../components/motion/InitialWindow';
 import { formatCurrency } from '../formatCurrency';
 import { formatOrderNumber } from '../formatOrderNumber';
 import { orderStatusLabel } from '../orderStatusLabel';
+import { hapticError } from '../haptics';
 import { useNetworkStatus } from '../map/useNetworkStatus';
 import { Icon } from '../theme/Icon';
 import { ThemeProvider, useTheme } from '../theme/ThemeProvider';
 import { radius, size, space, stroke, type } from '../theme/tokens';
-import { customerTrackView } from './customerTrackView';
+import { customerTrackView, teksHasilCariDriverLain } from './customerTrackView';
 import type { CustomerTrackView } from './customerTrackView';
 import { useCustomerOrder } from './useCustomerOrder';
 
@@ -67,6 +70,16 @@ const LABEL_LANGKAH = [
 
 /** Keadaan satu label langkah di kepala. */
 type StatusLangkah = 'sekarang' | 'selesai' | 'belum';
+
+/** Banner hasil permintaan driver lain. */
+interface HasilCari {
+  /** Nada banner, ikut dari hasil permintaannya. */
+  nada: 'info' | 'danger';
+  /** Isi banner. */
+  teks: string;
+  /** Nomor permintaan, jadi banner baru masuk lagi tiap kali. */
+  nomor: number;
+}
 
 /** Gaya huruf tiap keadaan label langkah. */
 const GAYA_LABEL: Record<StatusLangkah, TextStyle> = {
@@ -343,17 +356,39 @@ function Rincian({ order }: { order: Order }): React.JSX.Element {
 }
 
 /** Isi layar: kepala gelap di atas, lembar terang di bawahnya. */
+interface IsiOrderProps {
+  order: Order;
+  view: CustomerTrackView;
+  onOpenChat: (roomId: string) => void;
+  /** Banner hasil permintaan driver lain, kalau ada. */
+  hasilCari: HasilCari | null;
+  /** Menutup banner hasil. */
+  onTutupHasilCari: () => void;
+  /** Membuka lembar konfirmasi cari driver lain. */
+  onBukaCariDriverLain: () => void;
+  /** True kalau permintaan driver lain sedang jalan. */
+  memintaDriverLain: boolean;
+}
+
 function IsiOrder({
   order,
   view,
   onOpenChat,
-}: {
-  order: Order;
-  view: CustomerTrackView;
-  onOpenChat: (roomId: string) => void;
-}): React.JSX.Element {
+  hasilCari,
+  onTutupHasilCari,
+  onBukaCariDriverLain,
+  memintaDriverLain,
+}: IsiOrderProps): React.JSX.Element {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+
+  const aksiCariDriverLain: readonly [BannerAction] = [
+    {
+      label: 'Cari driver lain',
+      onPress: onBukaCariDriverLain,
+      loading: memintaDriverLain,
+    },
+  ];
 
   return (
     <ScrollView
@@ -384,7 +419,25 @@ function IsiOrder({
             body={view.bannerTerputus.isi}
           />
         ) : null}
+        {hasilCari ? (
+          <Banner
+            key={hasilCari.nomor}
+            tone={hasilCari.nada}
+            icon={hasilCari.nada === 'info' ? 'info' : undefined}
+            body={hasilCari.teks}
+            onClose={onTutupHasilCari}
+          />
+        ) : null}
         {view.bannerLepas ? <Banner tone="info" icon="info" body={view.bannerLepas} /> : null}
+        {view.bannerHpDriver ? (
+          <Banner
+            tone="warning"
+            icon="cloud_off"
+            title={view.bannerHpDriver.judul}
+            body={view.bannerHpDriver.isi}
+            actions={aksiCariDriverLain}
+          />
+        ) : null}
         {view.barisOrang ? (
           <BarisOrang order={order} view={view} onOpenChat={onOpenChat} />
         ) : null}
@@ -413,11 +466,21 @@ export function OrderTrackingScreen({
   onBack,
   onOpenChat,
 }: OrderTrackingScreenProps): React.JSX.Element {
-  const { data, gagalMemuat, cobaLagi, terputus, tunaiDiterima } = useCustomerOrder(
-    orderId,
-    terlihat,
-  );
+  const {
+    data,
+    gagalMemuat,
+    cobaLagi,
+    terputus,
+    tunaiDiterima,
+    memintaDriverLain,
+    mintaDriverLain,
+  } = useCustomerOrder(orderId, terlihat);
   const statusJaringan = useNetworkStatus();
+
+  const [lembarCari, setLembarCari] = useState(false);
+  const [hasilCari, setHasilCari] = useState<HasilCari | null>(null);
+  /** Nomor permintaan, dipakai sebagai kunci banner hasilnya. */
+  const hitunganCari = useRef(0);
 
   const view = data
     ? customerTrackView({
@@ -428,6 +491,54 @@ export function OrderTrackingScreen({
         sekarangMs: Date.now(),
       })
     : null;
+
+  const bolehCariDriverLain = view !== null && view.bolehCariDriverLain;
+
+  // Kalau banner HP driver hilang selagi lembar terbuka, lembarnya ditutup
+  // dan keadaan lembar dikosongkan, jadi lembar tidak terbuka sendiri kalau
+  // banner itu muncul lagi.
+  useEffect(() => {
+    if (!bolehCariDriverLain) {
+      setLembarCari(false);
+    }
+  }, [bolehCariDriverLain]);
+
+  const bukaLembarCari = useCallback(() => {
+    if (memintaDriverLain) return;
+    setLembarCari(true);
+  }, [memintaDriverLain]);
+
+  const tutupLembarCari = useCallback(() => {
+    setLembarCari(false);
+  }, []);
+
+  /** Menutup banner hasil permintaan driver lain. */
+  const tutupHasilCari = useCallback(() => {
+    setHasilCari(null);
+  }, []);
+
+  /**
+   * Customer memastikan minta driver lain. Lembar ditutup dulu, lalu
+   * permintaan langsung dikirim tanpa menunggu gerak keluar.
+   */
+  const konfirmasiCariDriverLain = useCallback(() => {
+    setLembarCari(false);
+    setHasilCari(null);
+
+    void mintaDriverLain().then((hasil) => {
+      if (hasil === null) return;
+      const teks = teksHasilCariDriverLain(hasil);
+      if (teks === null) return;
+
+      hapticError();
+      hitunganCari.current += 1;
+      setHasilCari({
+        nada: teks.nada,
+        teks: teks.teks,
+        nomor: hitunganCari.current,
+      });
+    });
+  }, [mintaDriverLain]);
 
   return (
     <ScreenFrame
@@ -442,13 +553,29 @@ export function OrderTrackingScreen({
     >
       {data && view ? (
         <InitialWindowProvider>
-          <IsiOrder order={data.order} view={view} onOpenChat={onOpenChat} />
+          <IsiOrder
+            order={data.order}
+            view={view}
+            onOpenChat={onOpenChat}
+            hasilCari={hasilCari}
+            onTutupHasilCari={tutupHasilCari}
+            onBukaCariDriverLain={bukaLembarCari}
+            memintaDriverLain={memintaDriverLain}
+          />
         </InitialWindowProvider>
       ) : gagalMemuat ? (
         <IsiGalat onCobaLagi={cobaLagi} />
       ) : (
         <View style={styles.kosong} />
       )}
+      <ConfirmSheet
+        visible={lembarCari && bolehCariDriverLain}
+        title="Cari driver lain?"
+        message="Order dilepas dari driver ini dan ditawarkan lagi ke driver lain."
+        confirmLabel="Ya, cari driver lain"
+        onConfirm={konfirmasiCariDriverLain}
+        onCancel={tutupLembarCari}
+      />
     </ScreenFrame>
   );
 }

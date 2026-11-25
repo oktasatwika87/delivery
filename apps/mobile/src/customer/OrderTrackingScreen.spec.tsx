@@ -22,9 +22,11 @@ import type {
 } from '@delivery/shared';
 
 import { OrderTrackingScreen } from './OrderTrackingScreen';
+import { Banner } from '../components/Banner';
 import { orderStatusLabel } from '../orderStatusLabel';
+import { formatOrderTime } from '../formatOrderTime';
 import { syncEvents } from '../sync/syncEvents';
-import { UnauthorizedError } from '../sync/client';
+import { ApiError, UnauthorizedError } from '../sync/client';
 import { ThemeProvider } from '../theme/ThemeProvider';
 import { fontFamily, themes } from '../theme/tokens';
 
@@ -85,6 +87,10 @@ jest.mock('../sync/ordersSocket', () => ({
 }));
 
 const mockGetOrderById = jest.fn<Promise<Order>, [string]>();
+const mockRequestNewDriver = jest.fn<Promise<Order>, [string, number]>();
+
+/** Getar tanda galat, dicatat biar tes bisa menghitungnya. */
+var mockHapticError = jest.fn();
 
 jest.mock('../sync/client', () => {
   // requireActual supaya class UnauthorizedError tetap sama dengan yang
@@ -93,8 +99,16 @@ jest.mock('../sync/client', () => {
   return {
     ...actual,
     getOrderById: (id: string): Promise<Order> => mockGetOrderById(id),
+    requestNewDriver: (id: string, version: number): Promise<Order> =>
+      mockRequestNewDriver(id, version),
   };
 });
+
+jest.mock('../haptics', () => ({
+  hapticError: (): void => {
+    mockHapticError();
+  },
+}));
 
 var mockStatusJaringan = jest.fn<'online' | 'offline' | 'unknown', []>(
   () => 'online',
@@ -155,8 +169,21 @@ const ORDER: Order = {
 const mockOnBack = jest.fn();
 const mockOnOpenChat = jest.fn();
 
+/** Waktu terakhir driver tersambung, dipakai order yang driverinya hilang. */
+const TERPISAH_SINCE = '2026-08-30T00:10:00.000Z';
+
 function orderDengan(ubah: Partial<Order>): Order {
   return { ...ORDER, ...ubah };
+}
+
+/** Order yang dipegang driver yang HP-nya tidak tersambung lagi. */
+function orderTerpisah(ubah: Partial<Order> = {}): Order {
+  return orderDengan({
+    status: 'PREPARING',
+    driverId: 'driver-1',
+    driverUnreachableSince: TERPISAH_SINCE,
+    ...ubah,
+  });
 }
 
 function elemenLayar(terlihat: boolean): React.JSX.Element {
@@ -273,9 +300,46 @@ function punyaEntering(node: unknown): boolean {
   return false;
 }
 
+/** Semua banner di lembar status, sesuai urutan tampilnya. */
+function semuaBanner() {
+  return within(screen.getByTestId('lembar-status')).UNSAFE_queryAllByType(Banner);
+}
+
+/** Banner HP driver, cuma dia yang ikonnya awan terputus. */
+function bannerHpDriver() {
+  return semuaBanner().find((elemen) => elemen.props.icon === 'cloud_off');
+}
+
+/** Banner hasil permintaan driver lain, cuma dia yang punya tombol tutup. */
+function bannerHasil() {
+  return semuaBanner().find((elemen) => elemen.props.onClose !== undefined);
+}
+
+/**
+ * Pasang permintaan driver lain yang belum selesai, biar tes bisa menahan
+ * jawabannya. Fungsi yang dikembalikan menyelesaikan permintaan itu.
+ */
+function pasangPermintaanTertunda(): (nilai: Order) => void {
+  let selesai: (nilai: Order) => void = () => {};
+  const janji = new Promise<Order>((res) => {
+    selesai = res;
+  });
+  mockRequestNewDriver.mockImplementation(() => janji);
+  return selesai;
+}
+
 beforeEach(() => {
   mockGetOrderById.mockReset();
   mockGetOrderById.mockResolvedValue(ORDER);
+  mockRequestNewDriver.mockReset();
+  mockRequestNewDriver.mockResolvedValue(
+    orderDengan({
+      status: 'ASSIGNED',
+      cancelReason: 'driver_unreachable',
+      version: 2,
+    }),
+  );
+  mockHapticError.mockReset();
   mockOnBack.mockReset();
   mockOnOpenChat.mockReset();
   mockLangkahRute = null;
@@ -777,5 +841,262 @@ describe('layar status order customer', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('banner HP driver tampil untuk PREPARING dengan driverUnreachableSince', async () => {
+    jest.useFakeTimers({ now: new Date('2026-08-30T02:00:00.000Z') });
+    try {
+      await tampilkan(orderTerpisah());
+
+      const banner = bannerHpDriver();
+      expect(banner).toBeTruthy();
+      expect(banner?.props.title).toBe(
+        `HP driver belum tersambung sejak ${formatOrderTime(
+          new Date(TERPISAH_SINCE).getTime(),
+          Date.now(),
+        )}`,
+      );
+      expect(banner?.props.body).toBe(
+        'Order tetap dipegang driver. Kalau tidak mau menunggu, Anda bisa minta driver lain.',
+      );
+      expect(banner?.props.icon).toBe('cloud_off');
+      expect(banner?.props.actions?.[0]?.label).toBe('Cari driver lain');
+      expect(banner?.props.onClose).toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('banner HP driver tidak tampil untuk order yang belum punya driver', async () => {
+    await tampilkan(orderTerpisah({ status: 'ASSIGNED' }));
+
+    expect(bannerHpDriver()).toBeUndefined();
+  });
+
+  it('banner HP driver tidak tampil tanpa driverUnreachableSince', async () => {
+    await tampilkan(orderTerpisah({ driverUnreachableSince: undefined }));
+
+    expect(bannerHpDriver()).toBeUndefined();
+  });
+
+  it('aksi Cari driver lain membuka lembar konfirmasi', async () => {
+    await tampilkan(orderTerpisah());
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+
+    expect(screen.getByText('Cari driver lain?')).toBeTruthy();
+    expect(
+      screen.getByText('Order dilepas dari driver ini dan ditawarkan lagi ke driver lain.'),
+    ).toBeTruthy();
+    const gaya = StyleSheet.flatten(
+      screen.getByTestId('lembar-konfirmasi').props.style,
+    );
+    expect(gaya?.backgroundColor).toBe(themes.terang.surface);
+  });
+
+  it('tombol Tidak menutup lembar tanpa meminta driver lain', async () => {
+    await tampilkan(orderTerpisah());
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+    expect(screen.getByText('Cari driver lain?')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Tidak'));
+    });
+
+    expect(screen.queryByText('Cari driver lain?')).toBeNull();
+    expect(mockRequestNewDriver).not.toHaveBeenCalled();
+  });
+
+  it('Ya meminta driver lain sekali', async () => {
+    await tampilkan(orderTerpisah());
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+    });
+
+    expect(mockRequestNewDriver).toHaveBeenCalledTimes(1);
+    expect(mockRequestNewDriver).toHaveBeenCalledWith(ORDER.id, 1);
+  });
+
+  it('sambil menunggu aksi banner memuat dan ketukan kedua diabaikan', async () => {
+    const selesai = pasangPermintaanTertunda();
+    await tampilkan(orderTerpisah());
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+    });
+
+    expect(bannerHpDriver()?.props.actions?.[0]?.loading).toBe(true);
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+
+    expect(mockRequestNewDriver).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Cari driver lain?')).toBeNull();
+
+    await act(async () => {
+      selesai(orderDengan({ status: 'ASSIGNED', cancelReason: 'driver_unreachable', version: 2 }));
+    });
+    await flush();
+  });
+
+  it('berhasil: layar jadi mencari dengan banner lepas, tanpa banner hasil ' +
+    'dan tanpa getar', async () => {
+    await tampilkan(orderTerpisah());
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+    });
+    await flush();
+
+    expect(within(screen.getByTestId('baris-orang')).getByText('Mencari driver')).toBeTruthy();
+    expect(
+      screen.getByText('Order sudah dilepas dari driver sebelumnya. Sedang dicarikan driver lain.'),
+    ).toBeTruthy();
+    expect(bannerHasil()).toBeUndefined();
+    expect(mockHapticError).not.toHaveBeenCalled();
+  });
+
+  const KASUS_DITOLAK: Array<{ kode: string; teks: string }> = [
+    {
+      kode: 'DRIVER_STILL_REACHABLE',
+      teks: 'Driver baru saja tersambung lagi, jadi order tetap dipegang driver.',
+    },
+    {
+      kode: 'ORDER_NOT_RELEASABLE',
+      teks: 'Order ini sudah tidak bisa dialihkan ke driver lain.',
+    },
+    {
+      kode: 'VERSION_CONFLICT',
+      teks: 'Order baru saja berubah. Coba lagi kalau masih perlu.',
+    },
+  ];
+
+  KASUS_DITOLAK.forEach((kasus) => {
+    it(`server menolak dengan ${kasus.kode}: banner info, getar, dan order ` +
+      `diambil ulang`, async () => {
+      mockRequestNewDriver.mockRejectedValue(
+        new ApiError('ditolak server', 409, kasus.kode),
+      );
+      await tampilkan(orderTerpisah());
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Cari driver lain'));
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+      });
+      await flush();
+
+      const banner = bannerHasil();
+      expect(banner?.props.tone).toBe('info');
+      expect(banner?.props.icon).toBe('info');
+      expect(banner?.props.body).toBe(kasus.teks);
+      expect(mockHapticError).toHaveBeenCalledTimes(1);
+      expect(mockGetOrderById).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Tutup'));
+      });
+      expect(bannerHasil()).toBeUndefined();
+    });
+  });
+
+  it('galat jaringan: banner danger dan getar sekali', async () => {
+    mockRequestNewDriver.mockRejectedValue(new Error('jaringan bermasalah'));
+    await tampilkan(orderTerpisah());
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+    });
+    await flush();
+
+    const banner = bannerHasil();
+    expect(banner?.props.tone).toBe('danger');
+    expect(banner?.props.icon).toBeUndefined();
+    expect(banner?.props.body).toBe(
+      'Tidak bisa meminta driver lain. Cek koneksi internet Anda lalu coba lagi.',
+    );
+    expect(mockHapticError).toHaveBeenCalledTimes(1);
+  });
+
+  it('sesi berakhir: tanpa banner hasil dan tanpa getar', async () => {
+    mockRequestNewDriver.mockRejectedValue(new UnauthorizedError('token kedaluwarsa'));
+    await tampilkan(orderTerpisah());
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+    });
+    await flush();
+
+    expect(bannerHasil()).toBeUndefined();
+    expect(mockHapticError).not.toHaveBeenCalled();
+  });
+
+  it('banner HP driver hilang selagi lembar terbuka menutup lembar dan tidak ' +
+    'dibuka lagi', async () => {
+    await tampilkan(orderTerpisah());
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+    expect(screen.getByText('Cari driver lain?')).toBeTruthy();
+
+    mockGetOrderById.mockResolvedValue(
+      orderTerpisah({ driverUnreachableSince: undefined }),
+    );
+    await act(async () => {
+      triggerConnect();
+    });
+    await flush();
+
+    expect(screen.queryByText('Cari driver lain?')).toBeNull();
+    expect(mockRequestNewDriver).not.toHaveBeenCalled();
+
+    mockGetOrderById.mockResolvedValue(orderTerpisah());
+    await act(async () => {
+      triggerConnect();
+    });
+    await flush();
+
+    expect(screen.getByText(/HP driver belum tersambung sejak/)).toBeTruthy();
+    expect(screen.queryByText('Cari driver lain?')).toBeNull();
+  });
+
+  it('urutan banner di lembar: terputus, hasil, lalu HP driver', async () => {
+    mockRequestNewDriver.mockRejectedValue(new Error('jaringan bermasalah'));
+    await tampilkan(orderTerpisah());
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+    });
+    await flush();
+    await act(async () => {
+      triggerDisconnect();
+    });
+
+    const urutan = semuaBanner().map((elemen) => {
+      if (elemen.props.title === 'Pembaruan langsung terputus') return 'terputus';
+      if (elemen.props.icon === 'cloud_off') return 'hp-driver';
+      return 'hasil';
+    });
+
+    expect(urutan).toEqual(['terputus', 'hasil', 'hp-driver']);
   });
 });

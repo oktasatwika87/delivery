@@ -41,8 +41,10 @@ ditolak server, dan jumlah COD diambil dari total order di server, bukan dari ap
 
 Order baru langsung masuk daftar Tersedia. Order yang dibatalin driver dibalikin ke daftar itu, lalu
 driver lain dan customer dikabarin lewat socket. Order yang udah diterima nggak pernah diambil balik
-sama server walau HP drivernya lama nggak nyambung, soalnya di jalan itu biasa. Order yang COD-nya
-udah tercatat nggak pernah dibalikin, biar uang tunainya nggak bisa ditagih dua kali.
+sama server walau HP drivernya lama nggak nyambung, soalnya di jalan itu biasa. Tapi kalau udah
+lebih dari 30 menit nggak nyambung dan barangnya belum diambil, customer bisa minta driver lain dari
+layar status order. Order yang COD-nya udah tercatat nggak pernah dibalikin, biar uang tunainya
+nggak bisa ditagih dua kali.
 
 Data di HP cuma punya satu pemilik. Keluar ngosongin database lokal kalau semua udah terkirim. Kalau
 masih ada yang antre, datanya tetap disimpan dan akun lain nggak bisa masuk di HP itu sampai akun
