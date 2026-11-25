@@ -18,6 +18,7 @@ import {
 import Animated, {
   runOnJS,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withDelay,
   withTiming,
@@ -92,6 +93,7 @@ export function ConfirmSheet({
 }: ConfirmSheetProps): React.JSX.Element | null {
   const { name, colors } = useTheme();
   const inset = useSafeAreaInsets();
+  const kurangiGerak = useReducedMotion();
 
   const latar = useSharedValue(0);
   const naik = useSharedValue(0);
@@ -121,6 +123,11 @@ export function ConfirmSheet({
     if (sedangKeluar.current) return;
     sedangKeluar.current = true;
 
+    if (kurangiGerak) {
+      lepas();
+      return;
+    }
+
     arah.value = withTiming(-1, {
       duration: DURASI_BALIK,
       easing: standardEasing,
@@ -149,12 +156,17 @@ export function ConfirmSheet({
         },
       ),
     );
-  }, [arah, geser, latar, naik, tinggiLembar, lepas]);
+  }, [arah, geser, latar, naik, tinggiLembar, lepas, kurangiGerak]);
 
   /** Keluar karena Ya: motor jalan ke kanan sampai keluar dari tepi lembar. */
   const keluarYa = useCallback(() => {
     if (sedangKeluar.current) return;
     sedangKeluar.current = true;
+
+    if (kurangiGerak) {
+      lepas();
+      return;
+    }
 
     geser.value = withTiming(lebarLembar - MARGIN_GAMBAR, {
       duration: motion.duration.exit,
@@ -177,7 +189,7 @@ export function ConfirmSheet({
         },
       ),
     );
-  }, [geser, latar, naik, lebarLembar, tinggiLembar, lepas]);
+  }, [geser, latar, naik, lebarLembar, tinggiLembar, lepas, kurangiGerak]);
 
   /**
    * Membuka lembar: latar pudar masuk, lembar naik, motor berbalik lalu jalan.
@@ -187,6 +199,13 @@ export function ConfirmSheet({
    * diisi saat pengukuran.
    */
   const bukaLembar = useCallback(() => {
+    if (kurangiGerak) {
+      latar.value = 1;
+      naik.value = 0;
+      geser.value = 0;
+      arah.value = 1;
+      return;
+    }
     latar.value = withTiming(1, {
       duration: motion.duration.fadeIn,
       easing: standardEasing,
@@ -206,7 +225,7 @@ export function ConfirmSheet({
         easing: standardEasing,
       }),
     );
-  }, [arah, geser, latar, naik]);
+  }, [arah, geser, latar, naik, kurangiGerak]);
 
   const pilihYa = useCallback(() => {
     if (sudahPilih.current || sedangKeluar.current) return;
@@ -258,6 +277,10 @@ export function ConfirmSheet({
       sudahTerukur.current = true;
 
       opasitasLembar.value = 1;
+      if (kurangiGerak) {
+        bukaLembar();
+        return;
+      }
       naik.value = height;
       geser.value = -(MARGIN_GAMBAR + UKURAN_RIDER.lebar);
       arah.value = 1;
@@ -265,7 +288,7 @@ export function ConfirmSheet({
 
       bukaLembar();
     },
-    [arah, geser, latar, naik, opasitasLembar, bukaLembar],
+    [arah, geser, latar, naik, opasitasLembar, bukaLembar, kurangiGerak],
   );
 
   const gayaLatar = useAnimatedStyle(() => ({ opacity: latar.value }));
