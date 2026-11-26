@@ -52,6 +52,10 @@ type Pohon = ReturnType<typeof render>;
 
 const LEBAR = 360;
 const TINGGI = 88;
+/** Lebar gambar di dalam viewBox, sama dengan lebar gambar di layar. */
+const LEBAR_VB = 360;
+/** Diameter motor dalam piksel, tidak ikut skala gambar. */
+const UKURAN_MOTOR = 36;
 /** Lama satu denyutan riak. */
 const SIKLUS_RIAK = 1400;
 /** Jeda cincin riak kedua. */
@@ -130,6 +134,36 @@ function transformMotor(pohon: Pohon): TransformMotor {
     (gabungan, bagian) => ({ ...gabungan, ...bagian }),
     {},
   );
+}
+
+/** Cek apakah nilai itu objek yang punya properti bernama tertentu. */
+function adaProperti(nilai: unknown, nama: string): boolean {
+  return typeof nilai === 'object' && nilai !== null && nama in nilai;
+}
+
+/** Transform dari sebuah gaya animasi. */
+function transformGaya(gaya: unknown): unknown[] {
+  if (typeof gaya !== 'object' || gaya === null) return [];
+  if (!('transform' in gaya)) return [];
+  const transform = gaya.transform;
+  if (!Array.isArray(transform)) return [];
+  return transform;
+}
+
+/** Cari bagian transform yang punya properti tertentu. */
+function bagianTransform(
+  transform: unknown[],
+  nama: string,
+): TransformMotor | undefined {
+  return transform.find(
+    (item): item is TransformMotor =>
+      typeof item === 'object' && item !== null && nama in item,
+  );
+}
+
+/** Gaya ini gaya motor, kalau transformnya berisi kemiringan. */
+function punyaKemiringan(gaya: unknown): boolean {
+  return transformGaya(gaya).some((item) => adaProperti(item, 'rotate'));
 }
 
 describe('TrackRoute', () => {
@@ -663,5 +697,33 @@ describe('TrackRoute', () => {
     });
     expect(spyTiming).not.toHaveBeenCalledWith(PANJANG_SAMPAI[1], expect.anything());
     expect(transformMotor(pohon).translateX).toBe(207);
+  });
+
+  it('gaya awal motor sudah di titiknya', () => {
+    jest.restoreAllMocks();
+    const gayaAsli = reanimated.useAnimatedStyle;
+    const gayaTercatat: unknown[] = [];
+
+    // Reanimated asli memakai hasil pertama hook sebagai gaya awal view.
+    jest
+      .spyOn(reanimated, 'useAnimatedStyle')
+      .mockImplementation((updater, dependencies) => {
+        const gaya = gayaAsli(updater, dependencies);
+        if (punyaKemiringan(gaya)) {
+          gayaTercatat.push(gaya);
+        }
+        return gaya;
+      });
+
+    const pohon = render(rute(2));
+    ukur(pohon);
+
+    expect(gayaTercatat.length).toBeGreaterThan(0);
+    const transform = transformGaya(gayaTercatat[0]);
+    const geserX = bagianTransform(transform, 'translateX');
+    const geserY = bagianTransform(transform, 'translateY');
+    const skala = LEBAR / LEBAR_VB;
+    expect(geserX?.translateX).toBe(135 * skala - UKURAN_MOTOR / 2);
+    expect(geserY?.translateY).toBe(32 * skala - UKURAN_MOTOR / 2);
   });
 });

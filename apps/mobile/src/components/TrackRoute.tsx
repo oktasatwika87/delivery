@@ -382,6 +382,76 @@ function CahayaMotor({
   );
 }
 
+interface MotorRuteProps {
+  /** Skala gambar, yaitu lebar dibagi lebar viewBox. */
+  skala: number;
+  /** Nomor lengkung yang dilalui motor. */
+  kurva: SharedValue<number>;
+  /** Posisi motor di lengkung, 1 kalau motor sudah diam di titik. */
+  t: SharedValue<number>;
+  /** True kalau motor ini baru masuk, jadi pakai gerak pudar. */
+  masuk: boolean;
+  /** True kalau motor ini keluar, jadi pakai gerak pudar. */
+  keluar: boolean;
+  /** Warna isi motor. */
+  warna: string;
+}
+
+/**
+ * Motor di rute.
+ *
+ * Komponen ini baru dipasang sesudah lebar diukur, jadi gaya awalnya
+ * dihitung dari skala yang benar.
+ */
+function MotorRute({
+  skala,
+  kurva,
+  t,
+  masuk,
+  keluar,
+  warna,
+}: MotorRuteProps): React.JSX.Element {
+  const { colors } = useTheme();
+
+  /**
+   * Gaya motor: posisi dan kemiringannya mengikuti lengkung yang dilalui.
+   *
+   * Motor diam di t 1, jadi posisinya tepat di titik langkah dan tegak.
+   */
+  const gaya = useAnimatedStyle(() => {
+    'worklet';
+    const nomorKurva = kurva.value;
+    const titik = posisiMotor(nomorKurva, t.value);
+    const sudut = Math.round(sudutMotor(nomorKurva, t.value) * 100) / 100;
+    return {
+      transform: [
+        { translateX: titik.x * skala - UKURAN_MOTOR / 2 },
+        { translateY: titik.y * skala - UKURAN_MOTOR / 2 },
+        { rotate: `${sudut}deg` },
+      ],
+    };
+  }, [skala]);
+
+  return (
+    <Animated.View
+      testID="motor-rute"
+      entering={
+        masuk ? fadeIn(motion.duration.drawLine - motion.duration.fadeIn) : undefined
+      }
+      exiting={keluar ? fadeOut() : undefined}
+      style={[
+        styles.motor,
+        {
+          backgroundColor: warna,
+        },
+        gaya,
+      ]}
+    >
+      <Icon name="two_wheeler" size={size.iconMd} color={colors.onInfoFill} />
+    </Animated.View>
+  );
+}
+
 /** Riwayat perubahan langkah, dipakai untuk menentukan jenis geraknya. */
 interface RiwayatGerak {
   /** Langkah sebelum perubahan. */
@@ -513,25 +583,6 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
   const motorKiri = titikMotor ? titikMotor.x * skala - UKURAN_MOTOR / 2 : 0;
   const motorAtas = titikMotor ? titikMotor.y * skala - UKURAN_MOTOR / 2 : 0;
 
-  /**
-   * Gaya motor: posisi dan kemiringannya mengikuti lengkung yang dilalui.
-   *
-   * Motor diam di t 1, jadi posisinya tepat di titik langkah dan tegak.
-   */
-  const gayaMotor = useAnimatedStyle(() => {
-    'worklet';
-    const kurva = kurvaMotor.value;
-    const titik = posisiMotor(kurva, tMotor.value);
-    const sudut = Math.round(sudutMotor(kurva, tMotor.value) * 100) / 100;
-    return {
-      transform: [
-        { translateX: titik.x * skala - UKURAN_MOTOR / 2 },
-        { translateY: titik.y * skala - UKURAN_MOTOR / 2 },
-        { rotate: `${sudut}deg` },
-      ],
-    };
-  }, [skala]);
-
   return (
     <View
       testID="rute-status"
@@ -583,25 +634,15 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
           {titikMotor ? (
             <>
               <CahayaMotor kiri={motorKiri} atas={motorAtas} nilai={cahaya} />
-              <Animated.View
+              <MotorRute
                 key={riwayat.nomorMotor}
-                testID="motor-rute"
-                entering={
-                  riwayat.motorMasuk
-                    ? fadeIn(motion.duration.drawLine - motion.duration.fadeIn)
-                    : undefined
-                }
-                exiting={bolehGerak ? fadeOut() : undefined}
-                style={[
-                  styles.motor,
-                  {
-                    backgroundColor: colors.info,
-                  },
-                  gayaMotor,
-                ]}
-              >
-                <Icon name="two_wheeler" size={size.iconMd} color={colors.onInfoFill} />
-              </Animated.View>
+                skala={skala}
+                kurva={kurvaMotor}
+                t={tMotor}
+                masuk={riwayat.motorMasuk}
+                keluar={bolehGerak}
+                warna={colors.info}
+              />
             </>
           ) : null}
         </>
