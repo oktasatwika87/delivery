@@ -379,6 +379,10 @@ interface RiwayatGerak {
   jenis: JenisGerak;
   /** True kalau geraknya boleh jalan waktu perubahan itu terjadi. */
   boleh: boolean;
+  /** Nomor motor, naik setiap kali motor baru masuk. */
+  nomorMotor: number;
+  /** True kalau motor yang baru masuk pakai gerak pudar. */
+  motorMasuk: boolean;
 }
 
 export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
@@ -394,11 +398,9 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
     baru: langkah,
     jenis: 'langsung',
     boleh: false,
+    nomorMotor: 0,
+    motorMasuk: false,
   });
-  /** Nomor motor, naik setiap kali motor baru masuk. */
-  const [nomorMotor, setNomorMotor] = useState(0);
-  /** True kalau motor yang baru masuk pakai gerak pudar. */
-  const [motorMasuk, setMotorMasuk] = useState(false);
   /** Posisi motor di lengkung, 1 kalau motor sudah diam di titik. */
   const tMotor = useSharedValue(1);
 
@@ -420,11 +422,15 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
     if (jenis === 'luncur' && bolehGerak) {
       tMotor.value = 0;
     }
+    // Motor baru hanya masuk kalau geraknya 'muncul' dan geraknya boleh jalan.
+    const motorBaru = jenis === 'muncul' && bolehGerak;
     setRiwayat({
       lama: riwayat.baru,
       baru: langkah,
       jenis,
       boleh: bolehGerak,
+      nomorMotor: motorBaru ? riwayat.nomorMotor + 1 : riwayat.nomorMotor,
+      motorMasuk: motorBaru,
     });
   }
 
@@ -435,7 +441,6 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
       panjang.value = target;
       cahaya.value = 1;
       tMotor.value = 1;
-      setMotorMasuk(false);
       return;
     }
 
@@ -467,8 +472,6 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
         motion.duration.drawLine,
         withTiming(1, { duration: DURASI_CAHAYA, easing: standardEasing }),
       );
-      setNomorMotor((nomor) => nomor + 1);
-      setMotorMasuk(true);
       return;
     }
 
@@ -478,7 +481,6 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
     });
     cahaya.value = 1;
     tMotor.value = 1;
-    setMotorMasuk(false);
   }, [cahaya, panjang, riwayat, tMotor]);
 
   const propsProgres = useAnimatedProps<PathProps>(() => ({
@@ -569,10 +571,10 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
             <>
               <CahayaMotor kiri={motorKiri} atas={motorAtas} nilai={cahaya} />
               <Animated.View
-                key={nomorMotor}
+                key={riwayat.nomorMotor}
                 testID="motor-rute"
                 entering={
-                  motorMasuk
+                  riwayat.motorMasuk
                     ? fadeIn(motion.duration.drawLine - motion.duration.fadeIn)
                     : undefined
                 }

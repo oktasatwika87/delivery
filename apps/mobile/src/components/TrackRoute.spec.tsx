@@ -27,6 +27,26 @@ import { InitialWindowProvider } from './motion/InitialWindow';
 import * as presets from './motion/presets';
 import { themes } from '../theme/tokens';
 
+// Ikon ditiru jadi komponen yang menggambar View. Kalau namanya two_wheeler,
+// ikon menambah pencatat di efek, jadi tes bisa menghitung berapa kali motor
+// dipasang.
+const mockJumlahMotor = { dipasang: 0 };
+
+jest.mock('../theme/Icon', () => {
+  const mockReact = jest.requireActual<typeof import('react')>('react');
+  const mockTampilan = jest.requireActual<typeof import('react-native')>('react-native');
+  return {
+    Icon: ({ name }: { name: string }) => {
+      mockReact.useEffect(() => {
+        if (name === 'two_wheeler') {
+          mockJumlahMotor.dipasang += 1;
+        }
+      }, []);
+      return mockReact.createElement(mockTampilan.View, null);
+    },
+  };
+});
+
 type Pohon = ReturnType<typeof render>;
 
 const LEBAR = 360;
@@ -112,6 +132,10 @@ function transformMotor(pohon: Pohon): TransformMotor {
 }
 
 describe('TrackRoute', () => {
+  beforeEach(() => {
+    mockJumlahMotor.dipasang = 0;
+  });
+
   it('panjang tiap lengkung sudah dihitung', () => {
     expect(PANJANG_LENGKUNG[0]).toBeCloseTo(92.9, 1);
     expect(PANJANG_LENGKUNG[1]).toBeCloseTo(95.4, 1);
@@ -438,6 +462,26 @@ describe('TrackRoute', () => {
 
     expect(motor(pohon)).toBe(motorLama);
     expect(motor(pohon).props.entering).toBeUndefined();
+  });
+
+  it('langkah satu ke dua memasang motor tepat sekali', () => {
+    const pohon = render(rute(1));
+    ukur(pohon);
+    mockJumlahMotor.dipasang = 0;
+
+    pohon.rerender(rute(2));
+
+    expect(mockJumlahMotor.dipasang).toBe(1);
+  });
+
+  it('langkah satu ke tiga memasang motor tepat sekali', () => {
+    const pohon = render(rute(1));
+    ukur(pohon);
+    mockJumlahMotor.dipasang = 0;
+
+    pohon.rerender(rute(3));
+
+    expect(mockJumlahMotor.dipasang).toBe(1);
   });
 
   it('di dalam jendela awal perubahan langkah langsung tanpa gerak', () => {
