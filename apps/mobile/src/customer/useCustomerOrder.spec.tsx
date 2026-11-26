@@ -77,6 +77,9 @@ jest.mock('../sync/ordersSocket', () => ({
 const mockGetOrderById = jest.fn<Promise<Order>, [string]>();
 const mockRequestNewDriver = jest.fn<Promise<Order>, [string, number]>();
 
+/** Lama socket harus putus terus sebelum status terputus ditampilkan. */
+const TENGGANG = 2000;
+
 jest.mock('../sync/client', () => {
   // requireActual supaya class UnauthorizedError tetap sama dengan yang
   // dilempar hook, jadi instanceof di hook benar.
@@ -504,6 +507,9 @@ describe('useCustomerOrder', () => {
       act(() => {
         triggerDisconnect();
       });
+      await act(async () => {
+        jest.advanceTimersByTime(TENGGANG);
+      });
       expect(result.current.terputus).toBe(true);
 
       act(() => {
@@ -523,6 +529,9 @@ describe('useCustomerOrder', () => {
       act(() => {
         triggerDisconnect();
       });
+      await act(async () => {
+        jest.advanceTimersByTime(TENGGANG);
+      });
       expect(result.current.terputus).toBe(true);
 
       mockGetOrderById.mockReturnValueOnce(lambat.janji);
@@ -539,6 +548,140 @@ describe('useCustomerOrder', () => {
         lambat.selesai(ORDER);
       });
 
+      expect(result.current.terputus).toBe(true);
+    });
+  });
+
+  describe('tenggang terputus', () => {
+    it('putus sebentar tidak pernah jadi terputus', async () => {
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        triggerDisconnect();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(TENGGANG - 100);
+      });
+      act(() => {
+        triggerConnect();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(TENGGANG);
+      });
+      await flush();
+
+      expect(result.current.terputus).toBe(false);
+    });
+
+    it('tetap putus jadi terputus tepat setelah dua detik', async () => {
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        triggerDisconnect();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(TENGGANG - 1);
+      });
+      expect(result.current.terputus).toBe(false);
+
+      await act(async () => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(result.current.terputus).toBe(true);
+    });
+
+    it('putus saat latar lalu aktif dan tersambung lagi tidak jadi terputus', async () => {
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        pendengarAppState()('background');
+      });
+      act(() => {
+        triggerDisconnect();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(TENGGANG * 3);
+      });
+      expect(result.current.terputus).toBe(false);
+
+      act(() => {
+        pendengarAppState()('active');
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(800);
+      });
+      act(() => {
+        triggerConnect();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(TENGGANG);
+      });
+      await flush();
+
+      expect(result.current.terputus).toBe(false);
+    });
+
+    it('putus saat latar jadi terputus dua detik setelah aplikasi aktif', async () => {
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        pendengarAppState()('background');
+      });
+      act(() => {
+        triggerDisconnect();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(TENGGANG * 3);
+      });
+      expect(result.current.terputus).toBe(false);
+
+      act(() => {
+        pendengarAppState()('active');
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(TENGGANG - 1);
+      });
+      expect(result.current.terputus).toBe(false);
+
+      await act(async () => {
+        jest.advanceTimersByTime(1);
+      });
+      expect(result.current.terputus).toBe(true);
+    });
+
+    it('pergi ke latar di tengah hitungan, hitungan mulai lagi setelah aktif', async () => {
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        triggerDisconnect();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(1500);
+      });
+      act(() => {
+        pendengarAppState()('background');
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(TENGGANG);
+      });
+      expect(result.current.terputus).toBe(false);
+
+      act(() => {
+        pendengarAppState()('active');
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(TENGGANG - 1);
+      });
+      expect(result.current.terputus).toBe(false);
+
+      await act(async () => {
+        jest.advanceTimersByTime(1);
+      });
       expect(result.current.terputus).toBe(true);
     });
   });

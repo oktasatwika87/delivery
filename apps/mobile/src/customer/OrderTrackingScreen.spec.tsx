@@ -620,22 +620,32 @@ describe('layar status order customer', () => {
     expect(screen.queryByText('Total')).toBeNull();
   });
 
-  it('banner terputus muncul saat socket putus dan hilang setelah tersambung', async () => {
-    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+  it('banner terputus muncul setelah socket terus putus dan hilang setelah tersambung', async () => {
+    jest.useFakeTimers();
+    try {
+      await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
 
-    expect(screen.queryByText('Pembaruan langsung terputus')).toBeNull();
+      expect(screen.queryByText('Pembaruan langsung terputus')).toBeNull();
 
-    await act(async () => {
-      triggerDisconnect();
-    });
-    expect(screen.getByText('Pembaruan langsung terputus')).toBeTruthy();
-    expect(screen.getByText(/Status terakhir dari/)).toBeTruthy();
+      await act(async () => {
+        triggerDisconnect();
+      });
+      expect(screen.queryByText('Pembaruan langsung terputus')).toBeNull();
 
-    await act(async () => {
-      triggerConnect();
-    });
-    await flush();
-    expect(screen.queryByText('Pembaruan langsung terputus')).toBeNull();
+      await act(async () => {
+        jest.advanceTimersByTime(2000);
+      });
+      expect(screen.getByText('Pembaruan langsung terputus')).toBeTruthy();
+      expect(screen.getByText(/Status terakhir dari/)).toBeTruthy();
+
+      await act(async () => {
+        triggerConnect();
+      });
+      await flush();
+      expect(screen.queryByText('Pembaruan langsung terputus')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('banner order dilepas: driver sebelumnya tidak aktif', async () => {
@@ -868,23 +878,22 @@ describe('layar status order customer', () => {
     + 'banner yang muncul tidak punya gerak masuk', async () => {
     jest.useFakeTimers();
     try {
+      // Isi baru muncul setelah tenggang terputus lewat, jadi banner
+      // terputus keluar bersamaan dengan isi pertama.
       mockGetOrderById.mockImplementation(
         () =>
           new Promise<Order>((selesai) => {
-            setTimeout(() => selesai(ORDER), 800);
+            setTimeout(() => selesai(ORDER), 2500);
           }),
       );
       render(elemenLayar(true));
       await flush();
 
       await act(async () => {
-        jest.advanceTimersByTime(100);
-      });
-      await act(async () => {
         triggerDisconnect();
       });
       await act(async () => {
-        jest.advanceTimersByTime(700);
+        jest.advanceTimersByTime(2500);
       });
       await flush();
 
@@ -1130,26 +1139,34 @@ describe('layar status order customer', () => {
   });
 
   it('urutan banner di lembar: terputus, hasil, lalu HP driver', async () => {
-    mockRequestNewDriver.mockRejectedValue(new Error('jaringan bermasalah'));
-    await tampilkan(orderTerpisah());
-    await act(async () => {
-      fireEvent.press(screen.getByLabelText('Cari driver lain'));
-    });
-    await act(async () => {
-      fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
-    });
-    await flush();
-    await act(async () => {
-      triggerDisconnect();
-    });
+    jest.useFakeTimers();
+    try {
+      mockRequestNewDriver.mockRejectedValue(new Error('jaringan bermasalah'));
+      await tampilkan(orderTerpisah());
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Cari driver lain'));
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+      });
+      await flush();
+      await act(async () => {
+        triggerDisconnect();
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(2000);
+      });
 
-    const urutan = semuaBanner().map((elemen) => {
-      if (elemen.props.title === 'Pembaruan langsung terputus') return 'terputus';
-      if (elemen.props.icon === 'cloud_off') return 'hp-driver';
-      return 'hasil';
-    });
+      const urutan = semuaBanner().map((elemen) => {
+        if (elemen.props.title === 'Pembaruan langsung terputus') return 'terputus';
+        if (elemen.props.icon === 'cloud_off') return 'hp-driver';
+        return 'hasil';
+      });
 
-    expect(urutan).toEqual(['terputus', 'hasil', 'hp-driver']);
+      expect(urutan).toEqual(['terputus', 'hasil', 'hp-driver']);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   /** Menunggu jendela awal selesai, jadi gerak isi boleh berjalan. */

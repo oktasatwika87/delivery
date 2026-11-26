@@ -22,6 +22,14 @@ import type { HasilCariDriverLain } from './customerTrackView';
 /** Jeda antar ambil ulang berkala, dalam milidetik. */
 export const AMBIL_ULANG_MS = 60 * 1000;
 
+/**
+ * Lama socket harus putus terus sebelum status terputus ditampilkan.
+ *
+ * Putus sesaat sering terjadi di jaringan seluler, jadi status terputus baru
+ * muncul setelah socket putus terus selama tenggang ini.
+ */
+export const TENGGANG_TERPUTUS_MS = 2000;
+
 /** Dari mana perubahan data terakhir berasal. */
 export type AsalPerubahan = 'awal' | 'pihak_lain' | 'sendiri';
 
@@ -41,7 +49,9 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
   const [order, setOrder] = useState<Order | null>(null);
   const [memuat, setMemuat] = useState(true);
   const [gagalMemuat, setGagalMemuat] = useState(false);
-  const [terputus, setTerputus] = useState(!ordersSocket.isConnected);
+  const [terputus, setTerputus] = useState(false);
+  /** Socket putus seketika, tanpa tenggang. Dipakai pemicu ambil ulang berkala. */
+  const [putusSegera, setPutusSegera] = useState(!ordersSocket.isConnected);
   const [tunaiDiterima, setTunaiDiterima] = useState(false);
   const [asalPerubahan, setAsalPerubahan] = useState<AsalPerubahan>('awal');
   const [terakhirDiperbarui, setTerakhirDiperbarui] = useState(0);
@@ -328,13 +338,14 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
 
     const unsubConnect = ordersSocket.on('connect', () => {
       socketTersambungRef.current = true;
+      setPutusSegera(false);
       pemicuAmbilUlang();
     });
 
     const unsubDisconnect = ordersSocket.on('disconnect', () => {
       socketTersambungRef.current = false;
       putusCounterRef.current += 1;
-      setTerputus(true);
+      setPutusSegera(true);
       // Sampai detik ini data yang tampil masih yang benar, jadi waktunya
       // diperbarui biar banner terputus tidak berbohong.
       setTerakhirDiperbarui(Date.now());
@@ -363,6 +374,24 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
 
   const statusOrder = order?.status;
 
+  /**
+   * Status terputus baru muncul setelah socket putus terus selama tenggang.
+   *
+   * Hitungan mulai dari saat yang lebih akhir antara socket putus dan
+   * aplikasi aktif lagi. Kalau aplikasi ke latar di tengah hitungan,
+   * hitungan dihentikan dan dimulai lagi dari aplikasi aktif.
+   */
+  useEffect(() => {
+    if (!putusSegera) return undefined;
+    if (!appAktif) return undefined;
+
+    const timer = setTimeout(() => {
+      setTerputus(true);
+    }, TENGGANG_TERPUTUS_MS);
+
+    return () => clearTimeout(timer);
+  }, [appAktif, putusSegera]);
+
   useEffect(() => {
     if (!terlihat) return;
     if (!appAktif) return;
@@ -370,14 +399,16 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
     // sebelum itu ditandai dan diambil ulang sekali sesudah GET pertama
     // berhasil, jadi galat pertama tetap lewat cobaLagi.
     if (statusOrder === undefined) return;
-    if (statusOrder !== 'PREPARING' && !terputus) return;
+    // Ambil ulang berkala memakai keadaan putus seketika, tanpa tenggang,
+    // jadi data tetap segar walau putusnya cuma sesaat.
+    if (statusOrder !== 'PREPARING' && !putusSegera) return;
 
     const timer = setInterval(() => {
       void ambilUlang();
     }, AMBIL_ULANG_MS);
 
     return () => clearInterval(timer);
-  }, [terlihat, appAktif, statusOrder, terputus, ambilUlang]);
+  }, [terlihat, appAktif, statusOrder, putusSegera, ambilUlang]);
 
   return {
     data: order ? { order, terakhirDiperbarui } : null,
