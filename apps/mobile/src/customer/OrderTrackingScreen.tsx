@@ -301,7 +301,7 @@ function BarisLangkah({ view }: { view: CustomerTrackView }): React.JSX.Element 
   const { colors } = useTheme();
 
   return (
-    <View style={styles.barisLangkah}>
+    <View testID="baris-label-langkah" style={styles.barisLangkah}>
       {LABEL_LANGKAH.map((label, urutan) => {
         const nomor = urutan + 1;
         const status = statusLangkah(nomor, view.langkah);
@@ -318,7 +318,7 @@ function BarisLangkah({ view }: { view: CustomerTrackView }): React.JSX.Element 
               {label}
             </Text>
             {nomor === 1 ? (
-              <Text style={[styles.jamDibuat, { color: colors.textSubtle }]}>
+              <Text style={[GAYA_LABEL[status], styles.jamDibuat, { color: warna }]}>
                 {view.jamDibuat}
               </Text>
             ) : null}
@@ -939,8 +939,6 @@ const styles = StyleSheet.create({
   },
   barisLangkah: {
     flexDirection: 'row',
-    marginTop: space[3],
-    paddingHorizontal: space[6],
   },
   satuLangkah: {
     flex: 1,
@@ -950,7 +948,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   jamDibuat: {
-    ...type.bodyXs,
     textAlign: 'center',
     fontVariant: ['tabular-nums'],
   },
@@ -1008,7 +1005,7 @@ const styles = StyleSheet.create({
   },
   barisAlamat: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: space[3],
   },
   kolomIkon: {

@@ -285,6 +285,21 @@ function labelLangkah(nama: string): { props: { style?: StyleProp<TextStyle> } }
   return kandidat[0];
 }
 
+/**
+ * Jam order dibuat di kepala, dicari lewat teksnya.
+ */
+function jamDibuat(): { props: { style?: StyleProp<TextStyle> } } {
+  const kepala = screen.getByTestId('kepala-status');
+  const teks = formatOrderTime(new Date(ORDER.createdAt).getTime(), Date.now());
+  const kandidat = within(kepala)
+    .UNSAFE_getAllByType(Text)
+    .filter((elemen) => elemen.props.children === teks);
+  if (kandidat.length !== 1) {
+    throw new Error(`jam order dibuat ditemukan ${kandidat.length} kali`);
+  }
+  return kandidat[0];
+}
+
 function adalahRekaman(nilai: unknown): nilai is Record<string, unknown> {
   return typeof nilai === 'object' && nilai !== null;
 }
@@ -416,6 +431,33 @@ describe('layar status order customer', () => {
     expect(belum.color).toBe(themes.gelap.textSubtle);
   });
 
+  it('baris label langkah tanpa jarak atas dan tanpa padding samping', async () => {
+    await tampilkan({ status: 'ASSIGNED' });
+
+    const gaya = StyleSheet.flatten(screen.getByTestId('baris-label-langkah').props.style);
+    expect(gaya?.marginTop).toBeUndefined();
+    expect(gaya?.paddingHorizontal).toBeUndefined();
+  });
+
+  it('jam order dibuat ikut gaya label pertama', async () => {
+    jest.useFakeTimers({ now: new Date('2026-08-30T00:05:00.000Z') });
+    try {
+      await tampilkan({ status: 'ASSIGNED' });
+
+      const jamPertama = gayaTeks(jamDibuat());
+      expect(jamPertama.fontFamily).toBe(fontFamily.semibold);
+      expect(jamPertama.color).toBe(themes.gelap.text);
+
+      await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+
+      const jamKedua = gayaTeks(jamDibuat());
+      expect(jamKedua.fontFamily).toBe(fontFamily.regular);
+      expect(jamKedua.color).toBe(themes.gelap.textMuted);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('label langkah pertama selesai, sisanya belum, saat order dibatalkan', async () => {
     await tampilkan({ status: 'CANCELLED' });
 
@@ -527,6 +569,13 @@ describe('layar status order customer', () => {
     expect(baris.getByText('Jl. Merdeka No. 1')).toBeTruthy();
     expect(baris.getByText('Denpasar 80111')).toBeTruthy();
     expect(baris.getByText('Budi Santoso \u00b7 081234567890')).toBeTruthy();
+  });
+
+  it('baris alamat isinya rata tengah', async () => {
+    await tampilkan({ status: 'ASSIGNED' });
+
+    const gaya = StyleSheet.flatten(screen.getByTestId('baris-alamat').props.style);
+    expect(gaya?.alignItems).toBe('center');
   });
 
   it('kotak tunai menyiapkan uang, lalu berubah jadi diterima', async () => {
