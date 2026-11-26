@@ -356,6 +356,7 @@ beforeEach(() => {
     }),
   );
   mockHapticError.mockReset();
+  mockStatusJaringan.mockReturnValue('online');
   mockOnBack.mockReset();
   mockOnOpenChat.mockReset();
   mockLangkahRute = null;
@@ -1355,6 +1356,14 @@ describe('layar status order customer', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('bilah koneksi customer menampilkan Offline saja', async () => {
+    mockStatusJaringan.mockReturnValue('offline');
+    await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+
+    expect(screen.getByText('Offline')).toBeTruthy();
+    expect(screen.queryByText(/perubahan disimpan di HP/)).toBeNull();
   });
 
   it('layout anak lembar kosong di dalam jendela awal dan terisi setelahnya', async () => {

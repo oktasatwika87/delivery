@@ -12,7 +12,7 @@ import Animated, { LayoutAnimationConfig } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ConnectionBar } from './ConnectionBar';
-import type { ConnectionBarProps } from './ConnectionBar';
+import type { ConnectionBarProps, PeranKoneksi } from './ConnectionBar';
 import { shift } from './motion/presets';
 import { useInitialWindow } from './motion/InitialWindow';
 import { ThemeProvider, useTheme } from '../theme/ThemeProvider';
@@ -34,6 +34,8 @@ export interface ScreenFrameProps {
   children: React.ReactNode;
   /** Isi bilah bawah. Kalau tidak diisi, bilah tidak dipasang. */
   bottomBar?: React.ReactNode;
+  /** Peran layar, diteruskan ke bilah koneksi. Bawaannya driver. */
+  peran?: PeranKoneksi;
 }
 
 export function ScreenFrame({
@@ -41,6 +43,7 @@ export function ScreenFrame({
   connection,
   children,
   bottomBar,
+  peran = 'driver',
 }: ScreenFrameProps): React.JSX.Element {
   const { colors } = useTheme();
   const dalamJendela = useInitialWindow();
@@ -67,6 +70,7 @@ export function ScreenFrame({
               status={connection.status}
               pendingCount={connection.pendingCount}
               failedCount={connection.failedCount ?? 0}
+              peran={peran}
             />
           </LayoutAnimationConfig>
         </ThemeProvider>

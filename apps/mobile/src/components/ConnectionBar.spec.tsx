@@ -82,6 +82,23 @@ describe('ConnectionBar', () => {
   });
 });
 
+describe('ConnectionBar per peran', () => {
+  it('peran driver bawaan menampilkan teks offline lengkap', () => {
+    const { getByText } = render(<ConnectionBar status="offline" pendingCount={0} />);
+
+    expect(getByText(`Offline ${TITIK_TENGAH} perubahan disimpan di HP`)).toBeTruthy();
+  });
+
+  it('peran customer menampilkan Offline saja', () => {
+    const { getByText, queryByText } = render(
+      <ConnectionBar status="offline" pendingCount={0} peran="customer" />,
+    );
+
+    expect(getByText('Offline')).toBeTruthy();
+    expect(queryByText(`Offline ${TITIK_TENGAH} perubahan disimpan di HP`)).toBeNull();
+  });
+});
+
 describe('ConnectionBar yang menahan selesai', () => {
   beforeEach(() => {
     jest.useFakeTimers();

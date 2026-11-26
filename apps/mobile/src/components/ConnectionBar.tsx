@@ -26,6 +26,8 @@ import { useInitialWindow } from './motion/InitialWindow';
 
 const TITIK_TENGAH = '\u00b7';
 const TEKS_OFFLINE = `Offline ${TITIK_TENGAH} perubahan disimpan di HP`;
+/** Teks offline untuk customer, yang antrean sinkronnya tidak disebut. */
+const TEKS_OFFLINE_CUSTOMER = 'Offline';
 const JARAK_KATA = 4;
 
 /** Masuk bilah dari atas. */
@@ -33,17 +35,23 @@ const MASUK = enterFromAbove();
 /** Keluar bilah ke atas. */
 const KELUAR = exitUp();
 
+/** Peran layar pemakai bilah. Bawaannya driver. */
+export type PeranKoneksi = 'driver' | 'customer';
+
 export interface ConnectionBarProps {
   status: NetworkStatus;
   pendingCount: number;
   /** Jumlah aksi yang ditolak server atau COD yatim. */
   failedCount?: number;
+  /** Peran layar pemanggil. Bawaannya driver. */
+  peran?: PeranKoneksi;
 }
 
 export function ConnectionBar({
   status,
   pendingCount,
   failedCount = 0,
+  peran = 'driver',
 }: ConnectionBarProps): React.JSX.Element | null {
   const { colors } = useTheme();
   const dalamJendela = useInitialWindow();
@@ -70,6 +78,7 @@ export function ConnectionBar({
   }));
 
   const offline = status === 'offline';
+  const teksOffline = peran === 'customer' ? TEKS_OFFLINE_CUSTOMER : TEKS_OFFLINE;
   // Bilah tidak memberi centang kalau masih ada aksi yang ditolak server,
   // karena antrean belum benar-benar bersih.
   const selesai = !offline && fase === 'done' && failedCount === 0;
@@ -98,7 +107,7 @@ export function ConnectionBar({
       {offline ? (
         <>
           <Icon name="cloud_off" size={size.iconSm} color={colors.textMuted} />
-          <Text style={[styles.teksOffline, { color: colors.text }]}>{TEKS_OFFLINE}</Text>
+          <Text style={[styles.teksOffline, { color: colors.text }]}>{teksOffline}</Text>
         </>
       ) : (
         <>

@@ -871,6 +871,7 @@ export function OrderTrackingScreen({
         />
       }
       connection={{ status: statusJaringan, pendingCount: 0, failedCount: 0 }}
+      peran="customer"
     >
       {data && view ? (
         <InitialWindowProvider>
