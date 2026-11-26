@@ -50,8 +50,8 @@ type PropsStatusOrder = NativeStackScreenProps<
  * Layar status order.
  *
  * Layar ini memakai tema terang, jadi isinya perlu dibungkus sendiri.
- * Jendela awal dibuat di dalam layar status order, jadi dihitung dari isi
- * pertamanya.
+ * Kerangka layar mendapat jendela awal dari sini, sejak layar dibuka. Isi
+ * layar punya jendela sendiri yang dihitung dari isi pertamanya.
  */
 function LayarStatusOrder({
   navigation,
@@ -61,12 +61,14 @@ function LayarStatusOrder({
 
   return (
     <ThemeProvider name={TEMA_CUSTOMER}>
-      <OrderTrackingScreen
-        orderId={route.params.orderId}
-        terlihat={terlihat}
-        onBack={() => navigation.goBack()}
-        onOpenChat={(roomId) => navigation.navigate('Chat', { roomId })}
-      />
+      <InitialWindowProvider>
+        <OrderTrackingScreen
+          orderId={route.params.orderId}
+          terlihat={terlihat}
+          onBack={() => navigation.goBack()}
+          onOpenChat={(roomId) => navigation.navigate('Chat', { roomId })}
+        />
+      </InitialWindowProvider>
     </ThemeProvider>
   );
 }

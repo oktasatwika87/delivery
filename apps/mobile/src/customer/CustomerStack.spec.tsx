@@ -135,10 +135,17 @@ jest.mock('../screens/ChatScreen', () => {
   return { ChatScreen: createMarker() };
 });
 
+// Penhitung jendela awal, supaya tes bisa tahu berapa kali penyedia jendela
+// awal dirender.
+const mockJumlahJendela = { dipasang: 0 };
+
 // Jendela awal ditiru jadi pembungkus kosong, karena tes di bawah memeriksa
 // route 'Chat' memakai ChatScreen itu sendiri.
 jest.mock('../components/motion/InitialWindow', () => ({
-  InitialWindowProvider: ({ children }: { children: ReactNode }): ReactNode => children,
+  InitialWindowProvider: ({ children }: { children: ReactNode }): ReactNode => {
+    mockJumlahJendela.dipasang += 1;
+    return children;
+  },
   withInitialWindow: (Layar: ComponentType<object>): ComponentType<object> => Layar,
 }));
 
@@ -260,6 +267,7 @@ describe('CustomerStack', () => {
     mockStatusOrder.props = null;
     mockStatusOrder.namaTema = null;
     mockFokus = true;
+    mockJumlahJendela.dipasang = 0;
   });
 
   it('route Chat di customer stack memakai ChatScreen dari src/screens, bukan App', () => {
@@ -314,6 +322,22 @@ describe('CustomerStack', () => {
 
     props.onOpenChat('x');
     expect(navigate).toHaveBeenCalledWith('Chat', { roomId: 'x' });
+  });
+
+  it('layar status order memasang jendela awal untuk kerangkanya', () => {
+    render(<CustomerStack onLogout={jest.fn()} />);
+
+    const Layar = mockKomponenStatusOrder;
+    if (Layar === null) throw new Error('layar status order tidak terdaftar');
+
+    render(
+      <Layar
+        navigation={{ navigate: jest.fn(), goBack: jest.fn() }}
+        route={{ params: { orderId: 'order-customer-9' } }}
+      />,
+    );
+
+    expect(mockJumlahJendela.dipasang).toBeGreaterThan(0);
   });
 
   it('layar status order tahu kalau sedang terlihat', () => {
