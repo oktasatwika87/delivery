@@ -1248,6 +1248,40 @@ describe('layar status order customer', () => {
     }
   });
 
+  it('ambil ulang dengan versi baru tanpa ganti isi baris tidak pasang sorotan', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    tahanLapisLama();
+    try {
+      await tampilkan(orderTerpisah());
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Cari driver lain'));
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+      });
+      await flush();
+
+      mockGetOrderById.mockResolvedValue(
+        orderDengan({
+          status: 'ASSIGNED',
+          cancelReason: 'driver_unreachable',
+          version: 3,
+        }),
+      );
+      await act(async () => {
+        triggerConnect();
+      });
+      await flush();
+
+      expect(screen.queryByTestId('sorotan-orang')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('perubahan status yang tidak mengganti isi baris orang tidak pasang sorotan', async () => {
     jest.useFakeTimers();
     jest.restoreAllMocks();

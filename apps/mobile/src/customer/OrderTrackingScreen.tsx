@@ -488,6 +488,20 @@ interface BarisOrangProps {
   onOpenChat: (roomId: string) => void;
 }
 
+/**
+ * Keputusan sorotan baris orang.
+ *
+ * NomorDiputuskan adalah nomor pergantian terakhir yang sudah diputuskan,
+ * jadi keputusan baru diambil hanya kalau nomornya beda. Aktif adalah nomor
+ * pergantian yang sorotannya masih jalan.
+ */
+interface SorotanBaris {
+  /** Nomor pergantian terakhir yang sudah diputuskan. */
+  nomorDiputuskan: number;
+  /** Nomor pergantian yang sorotannya masih jalan, null kalau tidak ada. */
+  aktif: number | null;
+}
+
 function BarisOrang({
   jenis,
   bolehChat,
@@ -496,36 +510,36 @@ function BarisOrang({
   onOpenChat,
 }: BarisOrangProps): React.JSX.Element {
   const ganti = useGantiIsi({ jenis, bolehChat }, `${jenis}|${bolehChat}`);
-  /** Sorotan yang sedang jalan, kalau ada. */
-  const [sorotan, setSorotan] = useState<{ nomor: number; selesai: boolean } | null>(
-    null,
-  );
+  /** Keputusan sorotan, dihitung dari nomor pergantian isinya. */
+  const [sorotan, setSorotan] = useState<SorotanBaris>({
+    nomorDiputuskan: ganti.nomor,
+    aktif: null,
+  });
 
   // Keputusannya dihitung saat render, bukan di efek, jadi sorot langsung
-  // muncul bersama pergantian isinya. Kuncinya ikut nomor pergantian, jadi
-  // pergantian beruntun memulai sorot yang baru.
-  if (
-    ganti.nomor > 0 &&
-    ganti.nomor !== (sorotan?.nomor ?? 0) &&
-    asalPerubahan === 'pihak_lain'
-  ) {
-    setSorotan({ nomor: ganti.nomor, selesai: false });
+  // muncul bersama pergantian isinya. Satu nomor pergantian hanya diputuskan
+  // sekali, jadi isi baris yang tidak berubah tidak memasang sorot baru.
+  // Pergantian karena tindakan sendiri juga menghentikan sorotan yang
+  // masih jalan.
+  if (ganti.nomor !== sorotan.nomorDiputuskan) {
+    setSorotan({
+      nomorDiputuskan: ganti.nomor,
+      aktif: asalPerubahan === 'pihak_lain' ? ganti.nomor : null,
+    });
   }
 
   const selesaiSorotan = useCallback((nomor: number) => {
     setSorotan((sekarang) =>
-      sekarang !== null && sekarang.nomor === nomor
-        ? { ...sekarang, selesai: true }
-        : sekarang,
+      sekarang.aktif === nomor ? { ...sekarang, aktif: null } : sekarang,
     );
   }, []);
 
   return (
     <View testID="baris-orang" style={styles.barisOrang}>
-      {sorotan !== null && !sorotan.selesai ? (
+      {sorotan.aktif !== null ? (
         <SorotanOrang
-          key={`sorotan-${sorotan.nomor}`}
-          nomor={sorotan.nomor}
+          key={`sorotan-${sorotan.aktif}`}
+          nomor={sorotan.aktif}
           selesai={selesaiSorotan}
         />
       ) : null}
