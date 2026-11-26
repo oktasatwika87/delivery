@@ -20,6 +20,7 @@ import {
   jenisGerakRute,
   opasitasCahaya,
   posisiMotor,
+  skalaCahaya,
   sudutMotor,
   type LangkahRute,
 } from './TrackRoute';
@@ -550,6 +551,13 @@ describe('TrackRoute', () => {
     expect(opasitasCahaya(0)).toBe(0);
     expect(opasitasCahaya(1)).toBe(0);
     expect(opasitasCahaya(0.5)).toBeCloseTo(0.3, 5);
+  });
+
+  it('fungsi yang dipanggil di UI thread ditandai worklet', () => {
+    const fungsi = [posisiMotor, sudutMotor, opasitasCahaya, skalaCahaya];
+    fungsi.forEach((fn) => {
+      expect(fn.toString()).toMatch(/['"]worklet['"]/);
+    });
   });
 
   it('posisi motor di lengkung: awal di titik awal, akhir di titik akhir', () => {

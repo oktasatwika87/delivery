@@ -255,12 +255,14 @@ function kurvaMotorAwal(langkah: LangkahRute): number {
  * bagian tengah denyutannya.
  */
 export function opasitasCahaya(c: number): number {
+  'worklet';
   if (c <= 0 || c >= 1) return 0;
   return CAHAYA_TERANG * (1 - c);
 }
 
 /** Ukuran cahaya motor, dikali skala denyutannya. */
 export function skalaCahaya(c: number): number {
+  'worklet';
   return 1 + CAHAYA_SKALA * c;
 }
 
