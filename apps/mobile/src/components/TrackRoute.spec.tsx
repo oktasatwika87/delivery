@@ -469,6 +469,46 @@ describe('TrackRoute', () => {
     expect(riak(pohon)).toHaveLength(2);
   });
 
+  it('langkah satu ke dua: progres digambar sekali dengan durasi dan kurva token', () => {
+    jest.restoreAllMocks();
+    const spyTiming = jest.spyOn(reanimated, 'withTiming');
+
+    const pohon = render(rute(1));
+    ukur(pohon);
+    spyTiming.mockClear();
+
+    pohon.rerender(rute(2));
+    pohon.rerender(rute(2));
+
+    const progres = spyTiming.mock.calls.filter(
+      (panggilan) => panggilan[0] === PANJANG_SAMPAI[0],
+    );
+    expect(progres).toHaveLength(1);
+    expect(progres[0][1]).toEqual({
+      duration: DURASI_GARIS,
+      easing: presets.standardEasing,
+    });
+  });
+
+  it('langkah dua ke satu: progres memendek sekali dengan durasi dan kurva token', () => {
+    jest.restoreAllMocks();
+    const spyTiming = jest.spyOn(reanimated, 'withTiming');
+
+    const pohon = render(rute(2));
+    ukur(pohon);
+    spyTiming.mockClear();
+
+    pohon.rerender(rute(1));
+    pohon.rerender(rute(1));
+
+    const progres = spyTiming.mock.calls.filter((panggilan) => panggilan[0] === 0);
+    expect(progres).toHaveLength(1);
+    expect(progres[0][1]).toEqual({
+      duration: DURASI_GARIS,
+      easing: presets.standardEasing,
+    });
+  });
+
   it('langkah satu ke tiga dan langkah dua ke empat digerakkan muncul', () => {
     expect(jenisGerakRute(1, 3)).toBe('muncul');
     expect(jenisGerakRute(2, 4)).toBe('muncul');
