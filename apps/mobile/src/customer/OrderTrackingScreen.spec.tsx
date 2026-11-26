@@ -1160,6 +1160,43 @@ describe('layar status order customer', () => {
     expect(bannerHasil()).toBeUndefined();
   });
 
+  it('banner danger tidak muncul lagi setelah cari driver lain boleh lagi', async () => {
+    mockRequestNewDriver.mockRejectedValue(new Error('jaringan bermasalah'));
+    await tampilkan(orderTerpisah());
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+    });
+    await flush();
+
+    expect(bannerHasil()?.props.tone).toBe('danger');
+    expect(bannerHpDriver()).toBeTruthy();
+
+    // Driver tersambung lagi, jadi cari driver lain tidak lagi boleh.
+    mockGetOrderById.mockResolvedValue(
+      orderTerpisah({ driverUnreachableSince: undefined }),
+    );
+    await act(async () => {
+      triggerConnect();
+    });
+    await flush();
+
+    expect(bannerHpDriver()).toBeUndefined();
+    expect(bannerHasil()).toBeUndefined();
+
+    // Driver tidak tersambung lagi, jadi cari driver lain boleh lagi.
+    mockGetOrderById.mockResolvedValue(orderTerpisah());
+    await act(async () => {
+      triggerConnect();
+    });
+    await flush();
+
+    expect(bannerHpDriver()).toBeTruthy();
+    expect(bannerHasil()).toBeUndefined();
+  });
+
   it('banner info dari penolakan server tetap tampil walau cari driver lain tidak lagi boleh', async () => {
     mockRequestNewDriver.mockRejectedValue(
       new ApiError('ditolak server', 409, 'DRIVER_STILL_REACHABLE'),

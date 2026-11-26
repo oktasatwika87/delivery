@@ -675,15 +675,6 @@ function IsiOrder({
     },
   ];
 
-  /**
-   * Banner galat dari cari driver lain ikut hilang bareng banner kuning
-   * waktu cari driver lain tidak lagi boleh. Banner info dari penolakan
-   * server tetap tampil sampai ditutup sendiri.
-   */
-  const bolehTampil =
-    hasilCari !== null &&
-    (hasilCari.nada !== 'danger' || view.bolehCariDriverLain);
-
   return (
     <ScrollView
       style={[styles.gulir, { backgroundColor: colors.surface }]}
@@ -713,7 +704,7 @@ function IsiOrder({
             body={view.bannerTerputus.isi}
           />
         ) : null}
-        {hasilCari && bolehTampil ? (
+        {hasilCari ? (
           <Banner
             key={hasilCari.nomor}
             tone={hasilCari.nada}
@@ -823,6 +814,13 @@ export function OrderTrackingScreen({
     : null;
 
   const bolehCariDriverLain = view !== null && view.bolehCariDriverLain;
+
+  // Hasil bernada danger dibuang begitu cari driver lain tidak lagi boleh,
+  // jadi banner galat lamanya tidak muncul lagi waktu cari driver lain
+  // boleh lagi. Hasil bernada info tetap tampil sampai ditutup sendiri.
+  if (!bolehCariDriverLain && hasilCari !== null && hasilCari.nada === 'danger') {
+    setHasilCari(null);
+  }
 
   // Kalau banner HP driver hilang selagi lembar terbuka, lembarnya ditutup
   // dan keadaan lembar dikosongkan, jadi lembar tidak terbuka sendiri kalau
