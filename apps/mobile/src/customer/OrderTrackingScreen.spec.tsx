@@ -1094,6 +1094,59 @@ describe('layar status order customer', () => {
     expect(mockHapticError).toHaveBeenCalledTimes(1);
   });
 
+  it('banner danger ikut hilang saat cari driver lain tidak lagi boleh', async () => {
+    mockRequestNewDriver.mockRejectedValue(new Error('jaringan bermasalah'));
+    await tampilkan(orderTerpisah());
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+    });
+    await flush();
+
+    expect(bannerHasil()?.props.tone).toBe('danger');
+    expect(bannerHpDriver()).toBeTruthy();
+
+    // Driver tersambung lagi, jadi cari driver lain tidak lagi boleh.
+    mockGetOrderById.mockResolvedValue(
+      orderTerpisah({ driverUnreachableSince: undefined }),
+    );
+    await act(async () => {
+      triggerConnect();
+    });
+    await flush();
+
+    expect(bannerHpDriver()).toBeUndefined();
+    expect(bannerHasil()).toBeUndefined();
+  });
+
+  it('banner info dari penolakan server tetap tampil walau cari driver lain tidak lagi boleh', async () => {
+    mockRequestNewDriver.mockRejectedValue(
+      new ApiError('ditolak server', 409, 'DRIVER_STILL_REACHABLE'),
+    );
+    await tampilkan(orderTerpisah());
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Cari driver lain'));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+    });
+    await flush();
+
+    // Driver tersambung lagi, jadi cari driver lain tidak lagi boleh.
+    mockGetOrderById.mockResolvedValue(
+      orderTerpisah({ driverUnreachableSince: undefined }),
+    );
+    await act(async () => {
+      triggerConnect();
+    });
+    await flush();
+
+    expect(bannerHpDriver()).toBeUndefined();
+    expect(bannerHasil()?.props.tone).toBe('info');
+  });
+
   it('sesi berakhir: tanpa banner hasil dan tanpa getar', async () => {
     mockRequestNewDriver.mockRejectedValue(new UnauthorizedError('token kedaluwarsa'));
     await tampilkan(orderTerpisah());

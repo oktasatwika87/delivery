@@ -675,6 +675,15 @@ function IsiOrder({
     },
   ];
 
+  /**
+   * Banner galat dari cari driver lain ikut hilang bareng banner kuning
+   * waktu cari driver lain tidak lagi boleh. Banner info dari penolakan
+   * server tetap tampil sampai ditutup sendiri.
+   */
+  const bolehTampil =
+    hasilCari !== null &&
+    (hasilCari.nada !== 'danger' || view.bolehCariDriverLain);
+
   return (
     <ScrollView
       style={[styles.gulir, { backgroundColor: colors.surface }]}
@@ -704,7 +713,7 @@ function IsiOrder({
             body={view.bannerTerputus.isi}
           />
         ) : null}
-        {hasilCari ? (
+        {hasilCari && bolehTampil ? (
           <Banner
             key={hasilCari.nomor}
             tone={hasilCari.nada}
