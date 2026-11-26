@@ -209,7 +209,7 @@ describe('TrackRoute', () => {
     const pohon = render(rute(1));
     ukur(pohon);
 
-    expect(pohon.queryByTestId('motor-rute')).toBeNull();
+    expect(pohon.queryByTestId('motor-rute', { includeHiddenElements: true })).toBeNull();
   });
 
   it('titik langkah pada langkah satu', () => {
@@ -326,7 +326,7 @@ describe('TrackRoute', () => {
 
     expect(panjangProgres(pohon)).toBeCloseTo(0, 5);
     expect(riak(pohon)).toHaveLength(0);
-    expect(pohon.queryByTestId('motor-rute')).toBeNull();
+    expect(pohon.queryByTestId('motor-rute', { includeHiddenElements: true })).toBeNull();
   });
 
   it('titik langkah pada order yang dibatalkan', () => {

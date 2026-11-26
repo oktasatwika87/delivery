@@ -863,7 +863,8 @@ describe('layar status order customer', () => {
     }
   });
 
-  it('jendela awal dihitung dari isi pertama, banner yang muncul tidak punya gerak masuk', async () => {
+  it('jendela awal dihitung dari isi pertama, '
+    + 'banner yang muncul tidak punya gerak masuk', async () => {
     jest.useFakeTimers();
     try {
       mockGetOrderById.mockImplementation(

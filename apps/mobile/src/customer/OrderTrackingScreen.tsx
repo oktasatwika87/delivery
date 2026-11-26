@@ -52,7 +52,10 @@ import type { AsalPerubahan } from './useCustomerOrder';
 const TANDA_KALI = '\u00d7';
 /** Titik tengah di baris nama penerima. */
 const TITIK_TENGAH = '\u00b7';
-/** Tinggi pantulan di atas kepala, biar kepala sedikit melayang. */
+/**
+ * Tinggi lapisan berwarna kepala di atas isi, supaya pantulan gulir iOS di
+ * atas kepala tetap gelap.
+ */
 const TINGGI_PANTULAN = 1000;
 /** Jarak bawah kepala, biar lembar di bawahnya tidak menempel. */
 const PADDING_BAWAH_KEPALA = 32;

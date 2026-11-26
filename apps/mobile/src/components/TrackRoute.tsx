@@ -4,7 +4,7 @@
  * Menempatkan order di antara empat langkah yang dihubungkan lewat satu rute
  * melengkung. Yang bergerak di sini: riak berdenyut selama order masih
  * mencari driver, garis biru menunjukkan bagian rute yang sudah dilalui, dan
- * motor muncul di titik langkah yang sedang berjalan.
+ * motor muncul atau meluncur ke titik langkah yang sedang berjalan.
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -140,7 +140,7 @@ const TITIK_RIAK = TITIK[3];
 const RADIUS_RIAK = [15, 24];
 /** Transparansi riak diam, dipakai kalau gerakan dikurangi. */
 const OPASITAS_RIAK = [0.5, 0.22];
-/** Jari-jari riak paling kecil saat denyutannya hampir habis. */
+/** Jari-jari riak saat denyutannya mulai. */
 const RIAK_AWAL = 7;
 /** Selisih jari-jari riak antara awal dan akhir denyutan. */
 const RIAK_SELISIH = 21;
@@ -189,7 +189,7 @@ export function jenisGerakRute(lama: LangkahRute, baru: LangkahRute): JenisGerak
 /**
  * Posisi motor di lengkung ke-k.
  *
- * Panjang lengkung dihitung dari 0 sampai 2, dan t dari 0 sampai 1. Di t 0
+ * Nomor lengkung k dari 0 sampai 2, dan t dari 0 sampai 1. Di t 0
  * motor masih di awal lengkung, di t 1 sudah di titik akhirnya.
  */
 export function posisiMotor(k: number, t: number): Titik {
