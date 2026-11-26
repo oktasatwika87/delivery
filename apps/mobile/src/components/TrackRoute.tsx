@@ -238,6 +238,17 @@ function panjangDiam(langkah: LangkahRute): number {
 }
 
 /**
+ * Nomor lengkung yang dilalui motor untuk suatu langkah.
+ *
+ * Langkah dua sampai empat punya lengkung, jadi nomornya langkah dikurangi
+ * dua. Langkah lainnya motor tidak digambar.
+ */
+function kurvaMotorAwal(langkah: LangkahRute): number {
+  if (langkah === null || langkah < 2) return 0;
+  return langkah - 2;
+}
+
+/**
  * Transparansi cahaya motor.
  *
  * Cahaya mulai dan selesai dengan tidak terlihat, jadi yang kelihatan hanya
@@ -401,6 +412,14 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
     nomorMotor: 0,
     motorMasuk: false,
   });
+  /**
+   * Nomor lengkung yang dilalui motor.
+   *
+   * Lengkung dan t berganti bersamaan di efek. Sampai efek jalan, motor
+   * masih di ujung lengkung lama, yang sama dengan awal lengkung baru, jadi
+   * tidak loncat.
+   */
+  const kurvaMotor = useSharedValue(kurvaMotorAwal(langkah));
   /** Posisi motor di lengkung, 1 kalau motor sudah diam di titik. */
   const tMotor = useSharedValue(1);
 
@@ -417,11 +436,6 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
   // selalu memakai perubahan yang baru saja terjadi.
   if (riwayat.baru !== langkah) {
     const jenis = jenisGerakRute(riwayat.baru, langkah);
-    // Motor yang meluncur diisi ke awal lengkung lebih dulu, supaya frame
-    // pertamanya sudah di titik asal dan tidak loncat ke titik tujuan.
-    if (jenis === 'luncur' && bolehGerak) {
-      tMotor.value = 0;
-    }
     // Motor baru hanya masuk kalau geraknya 'muncul' dan geraknya boleh jalan.
     const motorBaru = jenis === 'muncul' && bolehGerak;
     setRiwayat({
@@ -436,6 +450,8 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
 
   useEffect(() => {
     const target = panjangDiam(riwayat.baru);
+
+    kurvaMotor.value = kurvaMotorAwal(riwayat.baru);
 
     if (!riwayat.boleh || riwayat.jenis === 'langsung') {
       panjang.value = target;
@@ -463,6 +479,7 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
     }
 
     if (riwayat.jenis === 'muncul') {
+      tMotor.value = 1;
       panjang.value = withTiming(target, {
         duration: motion.duration.drawLine,
         easing: standardEasing,
@@ -481,7 +498,7 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
     });
     cahaya.value = 1;
     tMotor.value = 1;
-  }, [cahaya, panjang, riwayat, tMotor]);
+  }, [cahaya, kurvaMotor, panjang, riwayat, tMotor]);
 
   const propsProgres = useAnimatedProps<PathProps>(() => ({
     strokeDashoffset: PANJANG_TOTAL - panjang.value,
@@ -493,8 +510,6 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
   const titikMotor = langkahMotor ? TITIK[langkahMotor - 1] : null;
   const motorKiri = titikMotor ? titikMotor.x * skala - UKURAN_MOTOR / 2 : 0;
   const motorAtas = titikMotor ? titikMotor.y * skala - UKURAN_MOTOR / 2 : 0;
-  /** Lengkung yang dilalui motor, dihitung dari langkah sekarang. */
-  const kurva = langkahMotor !== null ? langkahMotor - 2 : -1;
 
   /**
    * Gaya motor: posisi dan kemiringannya mengikuti lengkung yang dilalui.
@@ -503,11 +518,7 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
    */
   const gayaMotor = useAnimatedStyle(() => {
     'worklet';
-    if (kurva < 0) {
-      return {
-        transform: [{ translateX: 0 }, { translateY: 0 }, { rotate: '0deg' }],
-      };
-    }
+    const kurva = kurvaMotor.value;
     const titik = posisiMotor(kurva, tMotor.value);
     const sudut = Math.round(sudutMotor(kurva, tMotor.value) * 100) / 100;
     return {
@@ -517,7 +528,7 @@ export function TrackRoute({ langkah }: TrackRouteProps): React.JSX.Element {
         { rotate: `${sudut}deg` },
       ],
     };
-  }, [kurva, skala]);
+  }, [skala]);
 
   return (
     <View
