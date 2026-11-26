@@ -986,6 +986,45 @@ describe('layar status order customer', () => {
     expect(mockRequestNewDriver).toHaveBeenCalledWith(ORDER.id, 1);
   });
 
+  it('status order berubah ke ASSIGNED tidak menggagalkan gerak keluar lembar', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    const selesaikanGerak = tahanLapisLama();
+    try {
+      await tampilkan(orderTerpisah());
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Cari driver lain'));
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+      });
+      await flush();
+
+      // Gerak keluar belum selesai, jadi Modalnya masih ada.
+      expect(screen.getByTestId('lembar-konfirmasi')).toBeTruthy();
+
+      // Jawaban server sudah mengubah status order jadi ASSIGNED.
+      expect(mockRequestNewDriver).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Order Anda sudah masuk')).toBeTruthy();
+
+      // Modalnya tetap ada, jadi lembar tidak dilepas lalu dipasang ulang.
+      expect(screen.getByTestId('lembar-konfirmasi')).toBeTruthy();
+
+      await act(async () => {
+        selesaikanGerak();
+      });
+      await flush();
+
+      // Modalnya baru dilepas sesudah gerak keluar selesai.
+      expect(screen.queryByTestId('lembar-konfirmasi')).toBeNull();
+    } finally {
+      jest.restoreAllMocks();
+      jest.useRealTimers();
+    }
+  });
+
   it('sambil menunggu aksi banner memuat dan ketukan kedua diabaikan', async () => {
     const selesai = pasangPermintaanTertunda();
     await tampilkan(orderTerpisah());
@@ -1231,10 +1270,19 @@ describe('layar status order customer', () => {
   }
 
   /** Timing ditiru tanpa memanggil callback, jadi lapisan lama tetap ada. */
-  function tahanLapisLama(): void {
+  function tahanLapisLama(): () => void {
+    const tertunda: Array<() => void> = [];
     jest
       .spyOn(reanimated, 'withTiming')
-      .mockImplementation((nilaiAkhir) => nilaiAkhir);
+      .mockImplementation((nilaiAkhir, _konfigurasi, callback) => {
+        if (callback) {
+          tertunda.push(() => callback(true));
+        }
+        return nilaiAkhir;
+      });
+    return () => {
+      tertunda.forEach((panggil) => panggil());
+    };
   }
 
   it('judul lama pudar keluar sesudah order:accepted', async () => {
