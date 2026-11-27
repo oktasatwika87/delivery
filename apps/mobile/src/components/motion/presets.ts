@@ -62,7 +62,43 @@ export function fadeOut() {
   return FadeOut.duration(motion.duration.fadeOut).easing(exitEasing);
 }
 
-/** Keluar sambil mengecil. */
+/**
+ * Masuk sambil membesar: pudar masuk dan skala naik ke satu.
+ *
+ * Dipakai untuk tombol yang muncul saat isi baris berubah, jadi tombolnya
+ * tumbuh bareng dengan isi baris itu.
+ */
+export function masukSkala(
+  dari = 0.9,
+): (values: EntryAnimationsValues) => LayoutAnimation {
+  return () => {
+    'worklet';
+    return {
+      initialValues: {
+        opacity: 0,
+        transform: [{ scale: dari }],
+      },
+      animations: {
+        opacity: withTiming(1, {
+          duration: motion.duration.fadeIn,
+          easing: standardEasing,
+        }),
+        transform: [
+          {
+            scale: withTiming(1, {
+              duration: motion.duration.fadeIn,
+              easing: standardEasing,
+            }),
+          },
+        ],
+      },
+    };
+  };
+}
+
+/**
+ * Keluar sambil mengecil.
+ */
 export function shrinkOut() {
   return ZoomOut.duration(motion.duration.exit).easing(exitEasing);
 }

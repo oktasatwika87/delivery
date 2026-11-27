@@ -15,6 +15,7 @@ import Svg, { LinearGradient, Rect, Stop } from 'react-native-svg';
 import Animated, {
   runOnJS,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
@@ -33,7 +34,7 @@ import { StatusLabel } from '../components/StatusLabel';
 import { TrackRoute } from '../components/TrackRoute';
 import type { LangkahRute } from '../components/TrackRoute';
 import { InitialWindowProvider, useInitialWindow } from '../components/motion/InitialWindow';
-import { exitEasing, fadeIn, fadeOut, geserTinggi } from '../components/motion/presets';
+import { exitEasing, fadeIn, fadeOut, geserTinggi, masukSkala } from '../components/motion/presets';
 import { useGantiIsi } from '../components/motion/useGantiIsi';
 import { formatCurrency } from '../formatCurrency';
 import { formatOrderNumber } from '../formatOrderNumber';
@@ -77,6 +78,10 @@ const GESER_TINGGI = geserTinggi();
 const MASUK_JUDUL = fadeIn();
 /** Isi baris orang pudar masuk. */
 const MASUK_ORANG = fadeIn();
+/** Tombol chat masuk: pudar masuk sambil membesar dari 0.9 ke 1. */
+const MASUK_CHAT = masukSkala();
+/** Tombol chat keluar: pudar keluar. */
+const KELUAR_CHAT = fadeOut();
 /** Baris orang dan garis yang hilang pudar keluar. */
 const KELUAR_PUDAR = fadeOut();
 /** Batas sorotan baris orang dari isi barisnya, di atas dan bawah. */
@@ -363,6 +368,13 @@ interface IsiBarisOrangProps {
   bolehChat: boolean;
   order: Order;
   onOpenChat: (roomId: string) => void;
+  /**
+   * False kalau isi ini bagian dari lapisan lama yang sedang pudar keluar.
+   *
+   * Isi lama tidak boleh menjalankan gerak masuk, karena isinya sudah tampil
+   * dan sedang menghilang.
+   */
+  gerak?: boolean;
 }
 
 function IsiBarisOrang({
@@ -370,9 +382,14 @@ function IsiBarisOrang({
   bolehChat,
   order,
   onOpenChat,
+  gerak = true,
 }: IsiBarisOrangProps): React.JSX.Element {
   const { colors } = useTheme();
+  const dalamJendela = useInitialWindow();
+  const kurangiGerak = useReducedMotion();
   const mencari = jenis === 'mencari';
+  /** Tombol chat hanya bergerak kalau layarnya sudah lama terbuka. */
+  const bolehGerak = gerak && !dalamJendela && !kurangiGerak;
 
   return (
     <>
@@ -394,14 +411,20 @@ function IsiBarisOrang({
         </Text>
       </View>
       {bolehChat ? (
-        <Button
-          title="Chat"
-          icon="chat"
-          size="md"
-          variant="primary"
-          testID="tombol-chat"
-          onPress={() => onOpenChat(order.id)}
-        />
+        <Animated.View
+          testID="bungkus-tombol-chat"
+          entering={bolehGerak ? MASUK_CHAT : undefined}
+          exiting={bolehGerak ? KELUAR_CHAT : undefined}
+        >
+          <Button
+            title="Chat"
+            icon="chat"
+            size="md"
+            variant="primary"
+            testID="tombol-chat"
+            onPress={() => onOpenChat(order.id)}
+          />
+        </Animated.View>
       ) : null}
     </>
   );
@@ -487,6 +510,7 @@ function OrangLama({
         bolehChat={isi.bolehChat}
         order={order}
         onOpenChat={onOpenChat}
+        gerak={false}
       />
     </Animated.View>
   );

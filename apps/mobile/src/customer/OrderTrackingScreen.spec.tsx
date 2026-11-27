@@ -1779,6 +1779,73 @@ describe('layar status order customer', () => {
     expect(screen.queryByText(/perubahan disimpan di HP/)).toBeNull();
   });
 
+  it('tombol chat muncul dengan gerak pudar dan membesar saat driver ditemukan', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    try {
+      await tampilkan({ status: 'ASSIGNED' });
+      await lewatJendelaAwal();
+
+      // Belum ada driver, jadi tombol chat belum ada.
+      expect(screen.queryByTestId('tombol-chat')).toBeNull();
+
+      await act(async () => {
+        triggerAccepted({
+          orderId: ORDER.id,
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 2,
+        });
+      });
+      await flush();
+
+      expect(screen.getByTestId('tombol-chat')).toBeTruthy();
+      const bungkus = screen.getByTestId('bungkus-tombol-chat');
+      expect(bungkus.props.entering).toBeDefined();
+      expect(bungkus.props.exiting).toBeDefined();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('layar yang dibuka dengan driver menampilkan tombol chat tanpa gerak', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    try {
+      await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+
+      expect(screen.getByTestId('tombol-chat')).toBeTruthy();
+      expect(screen.getByTestId('bungkus-tombol-chat').props.entering).toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('dengan kurangi gerakan tombol chat muncul tanpa gerak', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+    try {
+      await tampilkan({ status: 'ASSIGNED' });
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        triggerAccepted({
+          orderId: ORDER.id,
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 2,
+        });
+      });
+      await flush();
+
+      expect(screen.getByTestId('tombol-chat')).toBeTruthy();
+      expect(screen.getByTestId('bungkus-tombol-chat').props.entering).toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('wadah judul dan isi lembar punya gerak tinggi, isinya di bawah ikut bergeser', async () => {
     jest.useFakeTimers();
     jest.restoreAllMocks();
