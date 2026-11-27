@@ -1441,6 +1441,40 @@ describe('layar status order customer', () => {
     };
   }
 
+  /**
+   * Merekam semua panggilan timing, tanpa memanggil callbacknya.
+   *
+   * Dipakai untuk memeriksa nilai akhir dan durasi gerakannya, sambil
+   * menahan lapisan lama supaya tetap bisa dilihat.
+   */
+  function rekamGerak(): {
+    panggilan: Array<{ nilai: unknown; durasi: number | undefined }>;
+    lepaskan: () => void;
+  } {
+    const tertunda: Array<() => void> = [];
+    const panggilan: Array<{ nilai: unknown; durasi: number | undefined }> = [];
+    jest
+      .spyOn(reanimated, 'withTiming')
+      .mockImplementation((nilaiAkhir, konfigurasi, callback) => {
+        if (callback) {
+          tertunda.push(() => callback(true));
+        }
+        panggilan.push({ nilai: nilaiAkhir, durasi: konfigurasi?.duration });
+        return nilaiAkhir;
+      });
+    return {
+      panggilan,
+      lepaskan: () => {
+        tertunda.forEach((panggil) => panggil());
+      },
+    };
+  }
+
+  /** Gaya dari elemen yang digerakkan. */
+  function gayaIkon(elemen: { props: { style: unknown } }): unknown {
+    return elemen.props.style;
+  }
+
   it('judul lama pudar keluar sesudah order:accepted', async () => {
     jest.useFakeTimers();
     jest.restoreAllMocks();
@@ -1841,6 +1875,107 @@ describe('layar status order customer', () => {
 
       expect(screen.getByTestId('tombol-chat')).toBeTruthy();
       expect(screen.getByTestId('bungkus-tombol-chat').props.entering).toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('ikon avatar lama mengecil dan ikon avatar baru membesar', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    const gerak = rekamGerak();
+    try {
+      await tampilkan({ status: 'ASSIGNED' });
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        triggerAccepted({
+          orderId: ORDER.id,
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 2,
+        });
+      });
+      await flush();
+
+      // Ikon yang baru mulai dari kecil dan transparan, ikon yang lama dari
+      // ukuran penuh.
+      expect(gayaIkon(screen.getByTestId('ikon-avatar'))).toEqual({
+        opacity: 0,
+        transform: [{ scale: 0.6 }],
+      });
+      expect(
+        gayaIkon(screen.getByTestId('ikon-avatar-lama', { includeHiddenElements: true })),
+      ).toEqual({
+        opacity: 1,
+        transform: [{ scale: 1 }],
+      });
+
+      // Ikon lama mengecil ke 0,6 selama 120 ms, ikon baru membesar ke 1
+      // selama 180 ms.
+      expect(gerak.panggilan).toContainEqual({ nilai: 0.6, durasi: 120 });
+      expect(gerak.panggilan).toContainEqual({ nilai: 1, durasi: 180 });
+
+      // Setelah gerakan selesai, ikon yang baru tampil utuh.
+      await act(async () => {
+        gerak.lepaskan();
+      });
+      await flush();
+      expect(gayaIkon(screen.getByTestId('ikon-avatar'))).toEqual({
+        opacity: 1,
+        transform: [{ scale: 1 }],
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('ikon avatar yang muncul saat layar dibuka tidak bergerak', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    const gerak = rekamGerak();
+    try {
+      await tampilkan({ status: 'PREPARING', driverId: 'driver-1' });
+      await lewatJendelaAwal();
+
+      expect(gayaIkon(screen.getByTestId('ikon-avatar'))).toEqual({
+        opacity: 1,
+        transform: [{ scale: 1 }],
+      });
+      expect(gerak.panggilan).not.toContainEqual({ nilai: 0.6, durasi: 120 });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('dengan kurangi gerakan ikon avatar berganti tanpa gerak', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    jest.spyOn(reanimated, 'useReducedMotion').mockReturnValue(true);
+    const gerak = rekamGerak();
+    try {
+      await tampilkan({ status: 'ASSIGNED' });
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        triggerAccepted({
+          orderId: ORDER.id,
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 2,
+        });
+      });
+      await flush();
+
+      // Tidak ada lapisan lama, jadi ikon langsung berganti.
+      expect(
+        screen.queryByTestId('ikon-avatar-lama', { includeHiddenElements: true }),
+      ).toBeNull();
+      expect(gayaIkon(screen.getByTestId('ikon-avatar'))).toEqual({
+        opacity: 1,
+        transform: [{ scale: 1 }],
+      });
+      expect(gerak.panggilan).not.toContainEqual({ nilai: 0.6, durasi: 120 });
     } finally {
       jest.useRealTimers();
     }

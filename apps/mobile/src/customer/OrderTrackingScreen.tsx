@@ -34,7 +34,14 @@ import { StatusLabel } from '../components/StatusLabel';
 import { TrackRoute } from '../components/TrackRoute';
 import type { LangkahRute } from '../components/TrackRoute';
 import { InitialWindowProvider, useInitialWindow } from '../components/motion/InitialWindow';
-import { exitEasing, fadeIn, fadeOut, geserTinggi, masukSkala } from '../components/motion/presets';
+import {
+  exitEasing,
+  fadeIn,
+  fadeOut,
+  geserTinggi,
+  masukSkala,
+  standardEasing,
+} from '../components/motion/presets';
 import { useGantiIsi } from '../components/motion/useGantiIsi';
 import { formatCurrency } from '../formatCurrency';
 import { formatOrderNumber } from '../formatOrderNumber';
@@ -84,6 +91,8 @@ const MASUK_CHAT = masukSkala();
 const KELUAR_CHAT = fadeOut();
 /** Baris orang dan garis yang hilang pudar keluar. */
 const KELUAR_PUDAR = fadeOut();
+/** Skala ikon avatar saat ikonnya berubah. */
+const SKALA_IKON_AWAL = 0.6;
 /** Batas sorotan baris orang dari isi barisnya, di atas dan bawah. */
 const SOROTAN_ATAS = -8;
 /** Batas sorotan baris orang dari isi barisnya, di kiri dan kanan. */
@@ -369,12 +378,12 @@ interface IsiBarisOrangProps {
   order: Order;
   onOpenChat: (roomId: string) => void;
   /**
-   * False kalau isi ini bagian dari lapisan lama yang sedang pudar keluar.
+   * True kalau isi ini lapisan lama yang sedang pudar keluar.
    *
-   * Isi lama tidak boleh menjalankan gerak masuk, karena isinya sudah tampil
-   * dan sedang menghilang.
+   * Lapisan lama tidak menjalankan gerak masuk, karena isinya sudah tampil
+   * dan sedang menghilang. Ikon avatarnya justru ikut mengecil.
    */
-  gerak?: boolean;
+  lama?: boolean;
 }
 
 function IsiBarisOrang({
@@ -382,23 +391,67 @@ function IsiBarisOrang({
   bolehChat,
   order,
   onOpenChat,
-  gerak = true,
+  lama = false,
 }: IsiBarisOrangProps): React.JSX.Element {
   const { colors } = useTheme();
   const dalamJendela = useInitialWindow();
   const kurangiGerak = useReducedMotion();
   const mencari = jenis === 'mencari';
-  /** Tombol chat hanya bergerak kalau layarnya sudah lama terbuka. */
-  const bolehGerak = gerak && !dalamJendela && !kurangiGerak;
+  /** Isi baru hanya boleh bergerak kalau layarnya sudah lama terbuka. */
+  const bolehGerak = !lama && !dalamJendela && !kurangiGerak;
+
+  /**
+   * Arah gerak ikon avatar.
+   *
+   * Lapisan lama ikonnya mengecil, isi baru ikonnya membesar. Isi yang tidak
+   * boleh bergerak ikonnya diam saja.
+   */
+  const modeIkon = lama ? 'keluar' : bolehGerak ? 'masuk' : 'diam';
+  /** Arah ikon dikunci sejak lapisan ini dipasang. */
+  const [arahIkon] = useState(modeIkon);
+
+  const skalaIkon = useSharedValue(arahIkon === 'masuk' ? SKALA_IKON_AWAL : 1);
+  const opasitasIkon = useSharedValue(arahIkon === 'masuk' ? 0 : 1);
+
+  useEffect(() => {
+    if (arahIkon === 'diam') return;
+    if (arahIkon === 'masuk') {
+      opasitasIkon.value = withTiming(1, {
+        duration: motion.duration.fadeIn,
+        easing: standardEasing,
+      });
+      skalaIkon.value = withTiming(1, {
+        duration: motion.duration.fadeIn,
+        easing: standardEasing,
+      });
+      return;
+    }
+    // Ikon yang digantikan ikut pudar bersama lapisannya, jadi di sini cuma
+    // skalanya yang dikecilkan.
+    skalaIkon.value = withTiming(SKALA_IKON_AWAL, {
+      duration: motion.duration.fadeOut,
+      easing: exitEasing,
+    });
+  }, [arahIkon, opasitasIkon, skalaIkon]);
+
+  const gayaIkon = useAnimatedStyle(() => ({
+    opacity: opasitasIkon.value,
+    transform: [{ scale: skalaIkon.value }],
+  }));
 
   return (
     <>
       <View style={[styles.avatar, { backgroundColor: colors.fillNeutral }]}>
-        <Icon
-          name={mencari ? 'search' : 'two_wheeler'}
-          size={size.iconMd}
-          color={colors.text}
-        />
+        <Animated.View
+          testID={lama ? 'ikon-avatar-lama' : 'ikon-avatar'}
+          style={gayaIkon}
+        >
+          <Icon
+            name={mencari ? 'search' : 'two_wheeler'}
+            size={size.iconMd}
+            color={colors.text}
+          />
+        </Animated.View>
       </View>
       <View style={styles.kolomTeks}>
         <Text style={[styles.judulOrang, { color: colors.text }]}>
@@ -510,7 +563,7 @@ function OrangLama({
         bolehChat={isi.bolehChat}
         order={order}
         onOpenChat={onOpenChat}
-        gerak={false}
+        lama
       />
     </Animated.View>
   );
