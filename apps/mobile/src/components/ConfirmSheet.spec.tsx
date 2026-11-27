@@ -891,4 +891,48 @@ describe('ConfirmSheet', () => {
     expect(tunda).toHaveBeenCalledWith(180, 300);
     expect(tunda).toHaveBeenCalledWith(360, 0);
   });
+
+  it('ditutup dari luar saat sedang keluar lewat Ya tidak menjalankan jalur Tidak', () => {
+    const timing = jest.spyOn(reanimated, 'withTiming');
+    const tunda = jest.spyOn(reanimated, 'withDelay');
+    const onCancel = jest.fn();
+    const pohon = render(
+      <ConfirmSheet
+        visible
+        title="Cari driver lain?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={jest.fn()}
+        onCancel={onCancel}
+      />,
+    );
+    ukur(pohon);
+
+    fireEvent.press(pohon.getByLabelText('Ya'));
+
+    pohon.rerender(
+      <ConfirmSheet
+        visible={false}
+        title="Cari driver lain?"
+        message="Yakin?"
+        confirmLabel="Ya"
+        onConfirm={jest.fn()}
+        onCancel={onCancel}
+      />,
+    );
+
+    // Motor tidak berbalik dan tidak geser ke kiri, jadi jalur Tidak tidak jalan.
+    expect(timing).not.toHaveBeenCalledWith(-1, expect.anything());
+    expect(timing).not.toHaveBeenCalledWith(-134, expect.anything());
+    expect(tunda).not.toHaveBeenCalledWith(100, expect.anything());
+    expect(tunda).not.toHaveBeenCalledWith(180, expect.anything());
+    expect(tunda).not.toHaveBeenCalledWith(360, expect.anything());
+
+    // Target geser tetap ke kanan.
+    expect(timing).toHaveBeenCalledWith(348, {
+      duration: 260,
+      easing: exitEasing,
+    });
+    expect(onCancel).not.toHaveBeenCalled();
+  });
 });

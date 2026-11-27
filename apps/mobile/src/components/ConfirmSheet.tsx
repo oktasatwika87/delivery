@@ -124,7 +124,6 @@ export function ConfirmSheet({
 
   /** Keluar karena Tidak: motor berbalik lalu jalan ke kiri. */
   const keluarTidak = useCallback(() => {
-    if (sedangKeluar.current) return;
     sedangKeluar.current = true;
 
     if (kurangiGerak) {
@@ -268,6 +267,9 @@ export function ConfirmSheet({
     }
 
     // Ditutup dari luar: keluar seperti memilih Tidak, tanpa memanggil apa pun.
+    // Lembar yang sedang keluar lewat Ya sudah punya geraknya sendiri, jadi
+    // jalur ini tidak boleh jalan lagi.
+    if (sedangKeluar.current) return;
     sudahPilih.current = true;
     keluarTidak();
   }, [visible, keluarTidak, opasitasLembar, bukaLembar]);
