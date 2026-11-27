@@ -404,13 +404,30 @@ function IsiBarisOrang({
 }
 
 /**
+ * Ukuran isi baris orang.
+ *
+ * Dipakai untuk mengunci isi lama, supaya isinya tidak ditata ulang waktu
+ * isi baru dipasang.
+ */
+interface UkuranIsi {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
  * Isi baris orang yang sedang pudar keluar.
  *
  * Lapisan ini digambar absolute di atas isi baru, jadi tidak bisa diketuk dan
- * tidak dibaca pembaca layar.
+ * tidak dibaca pembaca layar. Ukurannya dikunci dari ukuran isi sebelum
+ * perubahan, jadi teksnya tidak membungkus ulang dan tidak turun ke bawah
+ * avatar.
  */
 interface OrangLamaProps {
   isi: { jenis: 'mencari' | 'driver'; bolehChat: boolean };
+  /** Ukuran isi sebelum perubahan, dikunci dari render pertama. */
+  ukuran: UkuranIsi | null;
   order: Order;
   onOpenChat: (roomId: string) => void;
   /** Nomor pergantian yang sedang ditutup. */
@@ -421,12 +438,17 @@ interface OrangLamaProps {
 
 function OrangLama({
   isi,
+  ukuran,
   order,
   onOpenChat,
   nomor,
   selesai,
 }: OrangLamaProps): React.JSX.Element {
   const opasitas = useSharedValue(1);
+
+  // Ukuran dikunci dari render pertama. Isi lama dibuat bareng isi baru,
+  // jadi ukuran yang tersimpan masih ukuran isi yang digantikan.
+  const [beku] = useState(ukuran);
 
   useEffect(() => {
     opasitas.value = withTiming(
@@ -445,7 +467,13 @@ function OrangLama({
   return (
     <Animated.View
       testID="orang-lama"
-      style={[styles.orangLama, gaya]}
+      style={[
+        styles.orangLama,
+        beku !== null
+          ? { left: beku.x, top: beku.y, width: beku.width, height: beku.height }
+          : null,
+        gaya,
+      ]}
       pointerEvents="none"
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
@@ -534,11 +562,26 @@ function BarisOrang({
   onOpenChat,
 }: BarisOrangProps): React.JSX.Element {
   const ganti = useGantiIsi({ jenis, bolehChat }, `${jenis}|${bolehChat}`);
+  /** Ukuran isi baris orang terakhir, dipakai untuk mengunci isi lama. */
+  const [ukuranIsi, setUkuranIsi] = useState<UkuranIsi | null>(null);
   /** Keputusan sorotan, dihitung dari nomor pergantian isinya. */
   const [sorotan, setSorotan] = useState<SorotanBaris>({
     nomorDiputuskan: ganti.nomor,
     aktif: null,
   });
+
+  const ukurIsi = useCallback((peristiwa: LayoutChangeEvent) => {
+    const { x, y, width, height } = peristiwa.nativeEvent.layout;
+    setUkuranIsi((sebelumnya) =>
+      sebelumnya !== null &&
+      sebelumnya.x === x &&
+      sebelumnya.y === y &&
+      sebelumnya.width === width &&
+      sebelumnya.height === height
+        ? sebelumnya
+        : { x, y, width, height },
+    );
+  }, []);
 
   // Keputusannya dihitung saat render, bukan di efek, jadi sorot langsung
   // muncul bersama pergantian isinya. Satu nomor pergantian hanya diputuskan
@@ -570,6 +613,8 @@ function BarisOrang({
       <Animated.View
         key={ganti.nomor}
         entering={ganti.nomor > 0 ? MASUK_ORANG : undefined}
+        onLayout={ukurIsi}
+        testID="isi-baris-orang"
         style={styles.barisOrangIsi}
       >
         <IsiBarisOrang
@@ -583,6 +628,7 @@ function BarisOrang({
         <OrangLama
           key={`lama-${ganti.nomor}`}
           isi={ganti.lama}
+          ukuran={ukuranIsi}
           order={order}
           onOpenChat={onOpenChat}
           nomor={ganti.nomor}
@@ -1055,7 +1101,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     left: 0,
-    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[3],
   },
   sorotanOrang: {
     position: 'absolute',

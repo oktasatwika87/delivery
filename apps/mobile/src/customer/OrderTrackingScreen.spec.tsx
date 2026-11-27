@@ -1523,6 +1523,44 @@ describe('layar status order customer', () => {
     }
   });
 
+  it('isi baris orang lama dikunci di ukuran isinya yang sebelumnya', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    tahanLapisLama();
+    try {
+      await tampilkan({ status: 'ASSIGNED' });
+      await lewatJendelaAwal();
+
+      // Ukuran isi baris orang yang terakhir.
+      await act(async () => {
+        fireEvent(screen.getByTestId('isi-baris-orang'), 'layout', {
+          nativeEvent: { layout: { x: 0, y: 4, width: 300, height: 62.5 } },
+        });
+      });
+
+      await act(async () => {
+        triggerAccepted({
+          orderId: ORDER.id,
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 2,
+        });
+      });
+      await flush();
+
+      // Isi lama tetap di tempat dan ukuran yang sebelumnya.
+      const gaya = StyleSheet.flatten(
+        screen.getByTestId('orang-lama', { includeHiddenElements: true }).props.style,
+      );
+      expect(gaya.width).toBe(300);
+      expect(gaya.height).toBe(62.5);
+      expect(gaya.left).toBe(0);
+      expect(gaya.top).toBe(4);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('dengan kurangi gerakan tidak ada lapisan lama dan tidak ada sorotan', async () => {
     jest.useFakeTimers();
     jest.restoreAllMocks();
