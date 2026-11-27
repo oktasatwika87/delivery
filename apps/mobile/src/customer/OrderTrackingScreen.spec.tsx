@@ -23,6 +23,7 @@ import type {
 } from '@delivery/shared';
 
 import { OrderTrackingScreen } from './OrderTrackingScreen';
+import { BATAS_TAHAN_MS } from './OrderTrackingScreen';
 import { Banner } from '../components/Banner';
 import { orderStatusLabel } from '../orderStatusLabel';
 import { formatOrderTime } from '../formatOrderTime';
@@ -1013,9 +1014,10 @@ describe('layar status order customer', () => {
       // Gerak keluar belum selesai, jadi Modalnya masih ada.
       expect(screen.getByTestId('lembar-konfirmasi')).toBeTruthy();
 
-      // Jawaban server sudah mengubah status order jadi ASSIGNED.
+      // Jawaban server sudah mengubah status order jadi ASSIGNED, tapi isi
+      // layar ditahan selama gerak keluar.
       expect(mockRequestNewDriver).toHaveBeenCalledTimes(1);
-      expect(screen.getByText('Order Anda sudah masuk')).toBeTruthy();
+      expect(screen.getByText('Driver sudah ditemukan untuk order Anda')).toBeTruthy();
 
       // Modalnya tetap ada, jadi lembar tidak dilepas lalu dipasang ulang.
       expect(screen.getByTestId('lembar-konfirmasi')).toBeTruthy();
@@ -1027,6 +1029,115 @@ describe('layar status order customer', () => {
 
       // Modalnya baru dilepas sesudah gerak keluar selesai.
       expect(screen.queryByTestId('lembar-konfirmasi')).toBeNull();
+      expect(screen.getByText('Order Anda sudah masuk')).toBeTruthy();
+    } finally {
+      jest.restoreAllMocks();
+      jest.useRealTimers();
+    }
+  });
+
+  it('selama keluar lewat Ya isi layar ditahan, lalu dipasang lagi setelah lembar lepas', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    const selesaikanGerak = tahanLapisLama();
+    try {
+      await tampilkan(orderTerpisah());
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Cari driver lain'));
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+      });
+      await flush();
+
+      // Server sudah menjawab, tapi isi layar masih yang lama.
+      expect(mockRequestNewDriver).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('lembar-konfirmasi')).toBeTruthy();
+      expect(within(screen.getByTestId('pil-status')).getByText('Driver ditemukan')).toBeTruthy();
+      expect(bannerHpDriver()).toBeTruthy();
+      expect(screen.queryByText('Order Anda sudah masuk')).toBeNull();
+
+      await act(async () => {
+        selesaikanGerak();
+      });
+      await flush();
+
+      // Lembar sudah lepas, jadi isi baru dipasang.
+      expect(screen.queryByTestId('lembar-konfirmasi')).toBeNull();
+      expect(within(screen.getByTestId('pil-status')).getByText('Mencari driver')).toBeTruthy();
+      expect(bannerHpDriver()).toBeUndefined();
+    } finally {
+      jest.restoreAllMocks();
+      jest.useRealTimers();
+    }
+  });
+
+  it('tahanan isi layar lepas sendiri kalau lembar belum lepas setelah batas aman', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    tahanLapisLama();
+    try {
+      await tampilkan(orderTerpisah());
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Cari driver lain'));
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+      });
+      await flush();
+
+      // Tahanannya masih ada, isi lama yang tampil.
+      expect(within(screen.getByTestId('pil-status')).getByText('Driver ditemukan')).toBeTruthy();
+
+      await act(async () => {
+        jest.advanceTimersByTime(BATAS_TAHAN_MS);
+      });
+      await flush();
+
+      // Batas aman terlampaui, jadi isi baru dipasang walau lembar belum lepas.
+      expect(screen.getByTestId('lembar-konfirmasi')).toBeTruthy();
+      expect(within(screen.getByTestId('pil-status')).getByText('Mencari driver')).toBeTruthy();
+    } finally {
+      jest.restoreAllMocks();
+      jest.useRealTimers();
+    }
+  });
+
+  it('banner hasil server menolak muncul setelah lembar lepas', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    const selesaikanGerak = tahanLapisLama();
+    mockRequestNewDriver.mockRejectedValue(
+      new ApiError('ditolak server', 409, 'DRIVER_STILL_REACHABLE'),
+    );
+    try {
+      await tampilkan(orderTerpisah());
+      await lewatJendelaAwal();
+
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Cari driver lain'));
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+      });
+      await flush();
+
+      // Server menolak, tapi banner hasilnya masih ditahan.
+      expect(bannerHasil()).toBeUndefined();
+
+      await act(async () => {
+        selesaikanGerak();
+      });
+      await flush();
+
+      // Banner hasil baru muncul setelah lembar lepas.
+      expect(bannerHasil()?.props.body).toBe(
+        'Driver baru saja tersambung lagi, jadi order tetap dipegang driver.',
+      );
     } finally {
       jest.restoreAllMocks();
       jest.useRealTimers();
@@ -1442,7 +1553,7 @@ describe('layar status order customer', () => {
   it('sesudah Cari driver lain sukses ada baris orang lama tapi tanpa sorotan', async () => {
     jest.useFakeTimers();
     jest.restoreAllMocks();
-    tahanLapisLama();
+    const selesaikanGerak = tahanLapisLama();
     try {
       await tampilkan(orderTerpisah());
       await lewatJendelaAwal();
@@ -1452,6 +1563,14 @@ describe('layar status order customer', () => {
       });
       await act(async () => {
         fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+      });
+      await flush();
+
+      // Isi layar ditahan selama gerak keluar, jadi isinya belum berganti.
+      expect(screen.queryByTestId('orang-lama', { includeHiddenElements: true })).toBeNull();
+
+      await act(async () => {
+        selesaikanGerak();
       });
       await flush();
 
@@ -1465,7 +1584,7 @@ describe('layar status order customer', () => {
   it('cari driver lain dengan socket lebih dulu tidak memasang sorotan', async () => {
     jest.useFakeTimers();
     jest.restoreAllMocks();
-    tahanLapisLama();
+    const selesaikanGerak = tahanLapisLama();
     try {
       await tampilkan(orderTerpisah());
       await lewatJendelaAwal();
@@ -1494,6 +1613,14 @@ describe('layar status order customer', () => {
       await flush();
 
       expect(screen.queryByTestId('sorotan-orang')).toBeNull();
+
+      // Lembar sudah lepas, jadi isi baris yang baru dipasang tanpa sorotan.
+      await act(async () => {
+        selesaikanGerak();
+      });
+      await flush();
+
+      expect(screen.queryByTestId('sorotan-orang')).toBeNull();
     } finally {
       jest.restoreAllMocks();
       jest.useRealTimers();
@@ -1503,7 +1630,7 @@ describe('layar status order customer', () => {
   it('cari driver lain dengan jawaban http lebih dulu tidak memasang sorotan', async () => {
     jest.useFakeTimers();
     jest.restoreAllMocks();
-    tahanLapisLama();
+    const selesaikanGerak = tahanLapisLama();
     try {
       await tampilkan(orderTerpisah());
       await lewatJendelaAwal();
@@ -1529,6 +1656,14 @@ describe('layar status order customer', () => {
       // Socket menyusul, versinya sudah dipakai.
       await act(async () => {
         triggerRejected({ orderId: ORDER.id, status: 'ASSIGNED', version: 2 });
+      });
+      await flush();
+
+      expect(screen.queryByTestId('sorotan-orang')).toBeNull();
+
+      // Lembar sudah lepas, jadi isi baris yang baru dipasang tanpa sorotan.
+      await act(async () => {
+        selesaikanGerak();
       });
       await flush();
 

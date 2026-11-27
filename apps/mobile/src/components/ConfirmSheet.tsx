@@ -76,6 +76,17 @@ export interface ConfirmSheetProps {
    * kembali Android, atau gestur escape.
    */
   onCancel: () => void;
+  /**
+   * Dipanggil saat gerak keluar lewat tombol Ya dimulai.
+   *
+   * Pemanggil bisa memakainya untuk menahan isi layar supaya tidak berubah di
+   * tengah gerak motor.
+   */
+  onMulaiKeluar?: () => void;
+  /**
+   * Dipanggil waktu lembar sudah dilepas, sesudah gerak keluar selesai.
+   */
+  onSelesaiKeluar?: () => void;
 }
 
 /**
@@ -94,6 +105,8 @@ export function ConfirmSheet({
   tone = 'primary',
   onConfirm,
   onCancel,
+  onMulaiKeluar,
+  onSelesaiKeluar,
 }: ConfirmSheetProps): React.JSX.Element | null {
   const { name, colors } = useTheme();
   const inset = useSafeAreaInsets();
@@ -120,7 +133,8 @@ export function ConfirmSheet({
 
   const lepas = useCallback(() => {
     setTerpasang(false);
-  }, []);
+    onSelesaiKeluar?.();
+  }, [onSelesaiKeluar]);
 
   /** Keluar karena Tidak: motor berbalik lalu jalan ke kiri. */
   const keluarTidak = useCallback(() => {
@@ -171,6 +185,10 @@ export function ConfirmSheet({
       return;
     }
 
+    // Pemanggil diberi tahu sebelum motor jalan, supaya isinya bisa ditahan
+    // selama gerak keluar.
+    onMulaiKeluar?.();
+
     geser.value = withTiming(lebarLembar - MARGIN_GAMBAR, {
       duration: motion.duration.exit,
       easing: exitEasing,
@@ -192,7 +210,7 @@ export function ConfirmSheet({
         },
       ),
     );
-  }, [geser, latar, naik, lebarLembar, tinggiLembar, lepas, kurangiGerak]);
+  }, [geser, latar, naik, lebarLembar, tinggiLembar, lepas, kurangiGerak, onMulaiKeluar]);
 
   /**
    * Membuka lembar: latar pudar masuk, lembar naik, motor menghadap kanan lalu

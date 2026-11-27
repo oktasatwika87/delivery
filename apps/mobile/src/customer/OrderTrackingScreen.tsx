@@ -83,6 +83,13 @@ const KELUAR_PUDAR = fadeOut();
 const SOROTAN_ATAS = -8;
 /** Batas sorotan baris orang dari isi barisnya, di kiri dan kanan. */
 const SOROTAN_SAMPING = -12;
+/**
+ * Batas aman tahanan tampilan, dalam milidetik.
+ *
+ * Kalau lembar belum lepas dalam waktu ini, tahanan dilepas juga, supaya
+ * layar tidak tertahan selamanya.
+ */
+export const BATAS_TAHAN_MS = 1000;
 
 /** Empat langkah order, dari order dibuat sampai terkirim. */
 const LABEL_LANGKAH = [
@@ -103,6 +110,20 @@ interface HasilCari {
   teks: string;
   /** Nomor permintaan, jadi banner baru masuk lagi tiap kali. */
   nomor: number;
+}
+
+/**
+ * Tampilan yang ditahan selama lembar keluar lewat Ya.
+ *
+ * Isi layar dibekukan supaya tidak berubah di tengah gerak motor. Order,
+ * banner, asal perubahannya, dan banner hasil ikut dibekukan, karena
+ * semuanya turun dari isi yang sama.
+ */
+interface TahanLayar {
+  order: Order;
+  view: CustomerTrackView;
+  asalPerubahan: AsalPerubahan;
+  hasilCari: HasilCari | null;
 }
 
 /** Gaya huruf tiap keadaan label langkah. */
@@ -802,6 +823,10 @@ export function OrderTrackingScreen({
   const [hasilCari, setHasilCari] = useState<HasilCari | null>(null);
   /** Nomor permintaan, dipakai sebagai kunci banner hasilnya. */
   const hitunganCari = useRef(0);
+  /** Tampilan yang ditahan selama lembar keluar lewat Ya. */
+  const [tahan, setTahan] = useState<TahanLayar | null>(null);
+  /** Pewaktu batas aman tahanan, dibersihkan waktu tahanan lepas. */
+  const batasTahanRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const view = data
     ? customerTrackView({
@@ -812,6 +837,38 @@ export function OrderTrackingScreen({
         sekarangMs: Date.now(),
       })
     : null;
+
+  /**
+   * Menahan tampilan terakhir sampai lembar keluar selesai.
+   *
+   * Nilai yang ditangkap di sini adalah nilai render terakhir, jadi yang
+   * ditahan benar-benar tampilan sebelum tombol Ya ditekan. Perubahan data
+   * yang masuk selama ditahan belum ikut terpasang.
+   */
+  const mulaiTahan = useCallback(() => {
+    if (data === null || view === null) return;
+    setTahan({ order: data.order, view, asalPerubahan, hasilCari });
+    if (batasTahanRef.current !== null) clearTimeout(batasTahanRef.current);
+    batasTahanRef.current = setTimeout(() => {
+      setTahan(null);
+    }, BATAS_TAHAN_MS);
+  }, [data, view, asalPerubahan, hasilCari]);
+
+  /** Melepas tahanan tampilan, dipakai waktu lembar sudah dilepas. */
+  const selesaiTahan = useCallback(() => {
+    if (batasTahanRef.current !== null) {
+      clearTimeout(batasTahanRef.current);
+      batasTahanRef.current = null;
+    }
+    setTahan(null);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (batasTahanRef.current !== null) clearTimeout(batasTahanRef.current);
+    },
+    [],
+  );
 
   const bolehCariDriverLain = view !== null && view.bolehCariDriverLain;
 
@@ -868,6 +925,17 @@ export function OrderTrackingScreen({
     });
   }, [mintaDriverLain]);
 
+  /**
+   * Menahan tampilan terakhir sampai lembar keluar selesai.
+   *
+   * Data yang masuk selama ditahan belum ikut terpasang. Setelah tahanan
+   * lepas, data terbaru langsung terpasang sekali.
+   */
+  const orderTampil = tahan !== null ? tahan.order : data?.order ?? null;
+  const viewTampil = tahan !== null ? tahan.view : view;
+  const asalTampil = tahan !== null ? tahan.asalPerubahan : asalPerubahan;
+  const hasilTampil = tahan !== null ? tahan.hasilCari : hasilCari;
+
   return (
     <ScreenFrame
       header={
@@ -880,14 +948,14 @@ export function OrderTrackingScreen({
       connection={{ status: statusJaringan, pendingCount: 0, failedCount: 0 }}
       peran="customer"
     >
-      {data && view ? (
+      {orderTampil !== null && viewTampil !== null ? (
         <InitialWindowProvider>
           <IsiOrder
-            order={data.order}
-            view={view}
-            asalPerubahan={asalPerubahan}
+            order={orderTampil}
+            view={viewTampil}
+            asalPerubahan={asalTampil}
             onOpenChat={onOpenChat}
-            hasilCari={hasilCari}
+            hasilCari={hasilTampil}
             onTutupHasilCari={tutupHasilCari}
             onBukaCariDriverLain={bukaLembarCari}
             memintaDriverLain={memintaDriverLain}
@@ -905,6 +973,8 @@ export function OrderTrackingScreen({
         confirmLabel="Ya, cari driver lain"
         onConfirm={konfirmasiCariDriverLain}
         onCancel={tutupLembarCari}
+        onMulaiKeluar={mulaiTahan}
+        onSelesaiKeluar={selesaiTahan}
       />
     </ScreenFrame>
   );
