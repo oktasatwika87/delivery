@@ -33,7 +33,7 @@ import { StatusLabel } from '../components/StatusLabel';
 import { TrackRoute } from '../components/TrackRoute';
 import type { LangkahRute } from '../components/TrackRoute';
 import { InitialWindowProvider, useInitialWindow } from '../components/motion/InitialWindow';
-import { exitEasing, fadeIn, fadeOut, shift } from '../components/motion/presets';
+import { exitEasing, fadeIn, fadeOut, geserTinggi } from '../components/motion/presets';
 import { useGantiIsi } from '../components/motion/useGantiIsi';
 import { formatCurrency } from '../formatCurrency';
 import { formatOrderNumber } from '../formatOrderNumber';
@@ -71,8 +71,8 @@ const JARAK_BARIS_ITEM = 12;
 const ATAS_CATATAN = 12;
 /** Jarak antar isi baris catatan. */
 const JARAK_CATATAN = 10;
-/** Geser posisi isi lembar saat banner di atasnya masuk atau keluar. */
-const GESER = shift();
+/** Gerak tinggi wadah judul kepala dan isi lembar saat isinya berubah. */
+const GESER_TINGGI = geserTinggi();
 /** Judul kepala pudar masuk. */
 const MASUK_JUDUL = fadeIn();
 /** Isi baris orang pudar masuk. */
@@ -282,6 +282,7 @@ function IsiKepala({
   view: CustomerTrackView;
 }): React.JSX.Element {
   const { colors } = useTheme();
+  const dalamJendela = useInitialWindow();
   const ganti = useGantiIsi(view.judul, view.judul);
 
   return (
@@ -292,7 +293,11 @@ function IsiKepala({
           label={orderStatusLabel(order.status)}
           peran="customer"
         />
-        <View style={styles.wadahJudul}>
+        <Animated.View
+          testID="wadah-judul"
+          style={styles.wadahJudul}
+          layout={dalamJendela ? undefined : GESER_TINGGI}
+        >
           <Animated.View
             key={ganti.nomor}
             entering={ganti.nomor > 0 ? MASUK_JUDUL : undefined}
@@ -310,46 +315,45 @@ function IsiKepala({
               selesai={ganti.selesai}
             />
           ) : null}
-        </View>
+        </Animated.View>
       </View>
-      <View style={styles.rute}>
+      <Animated.View
+        testID="wadah-rute"
+        style={styles.rute}
+        layout={dalamJendela ? undefined : GESER_TINGGI}
+      >
         <TrackRoute langkah={view.langkah} />
-      </View>
-      <BarisLangkah view={view} />
-    </>
-  );
-}
+      </Animated.View>
+      <Animated.View
+        testID="baris-label-langkah"
+        style={styles.barisLangkah}
+        layout={dalamJendela ? undefined : GESER_TINGGI}
+      >
+        {LABEL_LANGKAH.map((label, urutan) => {
+          const nomor = urutan + 1;
+          const status = statusLangkah(nomor, view.langkah);
+          const warna =
+            status === 'sekarang'
+              ? colors.text
+              : status === 'selesai'
+                ? colors.textMuted
+                : colors.textSubtle;
 
-/** Empat label langkah di bawah rute. */
-function BarisLangkah({ view }: { view: CustomerTrackView }): React.JSX.Element {
-  const { colors } = useTheme();
-
-  return (
-    <View testID="baris-label-langkah" style={styles.barisLangkah}>
-      {LABEL_LANGKAH.map((label, urutan) => {
-        const nomor = urutan + 1;
-        const status = statusLangkah(nomor, view.langkah);
-        const warna =
-          status === 'sekarang'
-            ? colors.text
-            : status === 'selesai'
-              ? colors.textMuted
-              : colors.textSubtle;
-
-        return (
-          <View key={label} style={styles.satuLangkah}>
-            <Text style={[GAYA_LABEL[status], styles.teksLangkah, { color: warna }]}>
-              {label}
-            </Text>
-            {nomor === 1 ? (
-              <Text style={[GAYA_LABEL[status], styles.jamDibuat, { color: warna }]}>
-                {view.jamDibuat}
+          return (
+            <View key={label} style={styles.satuLangkah}>
+              <Text style={[GAYA_LABEL[status], styles.teksLangkah, { color: warna }]}>
+                {label}
               </Text>
-            ) : null}
-          </View>
-        );
-      })}
-    </View>
+              {nomor === 1 ? (
+                <Text style={[GAYA_LABEL[status], styles.jamDibuat, { color: warna }]}>
+                  {view.jamDibuat}
+                </Text>
+              ) : null}
+            </View>
+          );
+        })}
+      </Animated.View>
+    </>
   );
 }
 
@@ -753,8 +757,9 @@ function IsiOrder({
         style={[styles.pantulan, { backgroundColor: colors.header }]}
       />
       <KepalaStatus order={order} view={view} />
-      <View
+      <Animated.View
         testID="lembar-status"
+        layout={dalamJendela ? undefined : GESER_TINGGI}
         style={[
           styles.lembar,
           {
@@ -793,7 +798,7 @@ function IsiOrder({
         {view.barisOrang ? (
           <Animated.View
             testID="anak-lembar"
-            layout={dalamJendela ? undefined : GESER}
+            layout={dalamJendela ? undefined : GESER_TINGGI}
             exiting={dalamJendela ? undefined : KELUAR_PUDAR}
           >
             <BarisOrang
@@ -808,7 +813,7 @@ function IsiOrder({
         {view.barisOrang ? (
           <Animated.View
             testID="anak-lembar"
-            layout={dalamJendela ? undefined : GESER}
+            layout={dalamJendela ? undefined : GESER_TINGGI}
             exiting={dalamJendela ? undefined : KELUAR_PUDAR}
           >
             <View
@@ -819,14 +824,14 @@ function IsiOrder({
         ) : null}
         <Animated.View
           testID="anak-lembar"
-          layout={dalamJendela ? undefined : GESER}
+          layout={dalamJendela ? undefined : GESER_TINGGI}
         >
           <BarisAlamat order={order} />
         </Animated.View>
         {view.kotakTunai ? (
           <Animated.View
             testID="anak-lembar"
-            layout={dalamJendela ? undefined : GESER}
+            layout={dalamJendela ? undefined : GESER_TINGGI}
           >
             <CashBox
               variant={view.kotakTunai}
@@ -837,12 +842,12 @@ function IsiOrder({
         {order.items.length > 0 || order.notes ? (
           <Animated.View
             testID="anak-lembar"
-            layout={dalamJendela ? undefined : GESER}
+            layout={dalamJendela ? undefined : GESER_TINGGI}
           >
             <Rincian order={order} />
           </Animated.View>
         ) : null}
-      </View>
+      </Animated.View>
     </ScrollView>
   );
 }

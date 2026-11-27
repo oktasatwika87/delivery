@@ -73,6 +73,17 @@ export function shift() {
 }
 
 /**
+ * Gerak tinggi: tinggi wadah ikut bergerak saat isinya berubah.
+ *
+ * Dipakai untuk wadah yang isinya bisa berubah tinggi, misalnya wadah judul
+ * kepala dan isi lembar. Isi yang ada di bawahnya ikut bergeser dengan gerak
+ * yang sama, jadi tidak melompat.
+ */
+export function geserTinggi() {
+  return LinearTransition.duration(motion.duration.exit).easing(standardEasing);
+}
+
+/**
  * Keluar ke kanan: kartu hilang ke arah kanan.
  *
  * Kurvanya cepat di awal: kartu langsung menjauh, jadi tidak tertimpa baris

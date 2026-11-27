@@ -1779,6 +1779,34 @@ describe('layar status order customer', () => {
     expect(screen.queryByText(/perubahan disimpan di HP/)).toBeNull();
   });
 
+  it('wadah judul dan isi lembar punya gerak tinggi, isinya di bawah ikut bergeser', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    try {
+      await tampilkan({ status: 'ASSIGNED' });
+
+      // Di dalam jendela awal belum ada gerak, biar layar yang baru dibuka
+      // tidak ramai.
+      expect(screen.getByTestId('wadah-judul').props.layout).toBeUndefined();
+      expect(screen.getByTestId('lembar-status').props.layout).toBeUndefined();
+
+      await lewatJendelaAwal();
+
+      // Wadah yang isinya bisa berubah tinggi ikut bergerak.
+      expect(screen.getByTestId('wadah-judul').props.layout).toBeDefined();
+      expect(screen.getByTestId('lembar-status').props.layout).toBeDefined();
+
+      // Isi di bawahnya ikut bergeser, jadi tidak melompat.
+      expect(screen.getByTestId('wadah-rute').props.layout).toBeDefined();
+      expect(screen.getByTestId('baris-label-langkah').props.layout).toBeDefined();
+      screen.getAllByTestId('anak-lembar').forEach((anak) => {
+        expect(anak.props.layout).toBeDefined();
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('layout anak lembar kosong di dalam jendela awal dan terisi setelahnya', async () => {
     jest.useFakeTimers();
     jest.restoreAllMocks();
