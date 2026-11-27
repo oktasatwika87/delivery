@@ -1090,6 +1090,63 @@ describe('useCustomerOrder', () => {
 
       expect(result.current.asalPerubahan).toBe('sendiri');
     });
+
+    it('sendiri dari perubahan yang melepas driver saat permintaan berjalan', async () => {
+      mockGetOrderById.mockResolvedValueOnce({
+        ...ORDER,
+        status: 'PREPARING',
+        driverId: 'driver-1',
+        version: 2,
+      });
+      const lambat = tertunda<Order>();
+      mockRequestNewDriver.mockReturnValueOnce(lambat.janji);
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        void result.current.mintaDriverLain();
+      });
+
+      act(() => {
+        triggerRejected({
+          orderId: 'order-1',
+          status: 'ASSIGNED',
+          version: 3,
+        });
+      });
+
+      expect(result.current.asalPerubahan).toBe('sendiri');
+    });
+
+    it('status dan asal perubahannya berganti dalam satu pembaruan', async () => {
+      const pasangan: Array<[string, string]> = [];
+
+      renderHook(() => {
+        const nilai = useCustomerOrder('order-1', true);
+        pasangan.push([nilai.data?.order.status ?? 'kosong', nilai.asalPerubahan]);
+        return nilai;
+      });
+      await flush();
+
+      act(() => {
+        triggerAccepted({
+          orderId: 'order-1',
+          driverId: 'driver-1',
+          status: 'PREPARING',
+          version: 2,
+        });
+      });
+
+      for (let i = 1; i < pasangan.length; i += 1) {
+        const [status, asal] = pasangan[i];
+        const [statusSebelum, asalSebelum] = pasangan[i - 1];
+        if (status === 'kosong' || statusSebelum === 'kosong') continue;
+        if (status !== statusSebelum) {
+          expect(asal).not.toBe(asalSebelum);
+        }
+      }
+    });
   });
 
   describe('pelepasan', () => {

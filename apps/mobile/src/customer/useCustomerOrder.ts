@@ -33,6 +33,17 @@ export const TENGGANG_TERPUTUS_MS = 2000;
 /** Dari mana perubahan data terakhir berasal. */
 export type AsalPerubahan = 'awal' | 'pihak_lain' | 'sendiri';
 
+/**
+ * Order yang sedang tampil, beserta asal perubahannya.
+ *
+ * Keduanya satu kesatuan, jadi tidak pernah ada tampilan yang melihat order
+ * baru dengan asal perubahan lama.
+ */
+interface OrderTampil {
+  order: Order;
+  asal: AsalPerubahan;
+}
+
 export interface CustomerOrder {
   data: { order: Order; terakhirDiperbarui: number } | null;
   memuat: boolean;
@@ -46,17 +57,17 @@ export interface CustomerOrder {
 }
 
 export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOrder {
-  const [order, setOrder] = useState<Order | null>(null);
   const [memuat, setMemuat] = useState(true);
   const [gagalMemuat, setGagalMemuat] = useState(false);
   const [terputus, setTerputus] = useState(false);
   /** Socket putus seketika, tanpa tenggang. Dipakai pemicu ambil ulang berkala. */
   const [putusSegera, setPutusSegera] = useState(!ordersSocket.isConnected);
   const [tunaiDiterima, setTunaiDiterima] = useState(false);
-  const [asalPerubahan, setAsalPerubahan] = useState<AsalPerubahan>('awal');
   const [terakhirDiperbarui, setTerakhirDiperbarui] = useState(0);
   const [appAktif, setAppAktif] = useState(AppState.currentState === 'active');
   const [memintaDriverLain, setMemintaDriverLain] = useState(false);
+  /** Order yang tampil dan asal perubahannya, satu kesatuan. */
+  const [tampil, setTampil] = useState<OrderTampil | null>(null);
 
   const orderRef = useRef<Order | null>(null);
   const versiTampilRef = useRef(0);
@@ -75,36 +86,72 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
   orderIdRef.current = orderId;
 
   /**
+   * Asal perubahan yang dipakai layar.
+   *
+   * Selama permintaan minta driver lain milik customer masih berjalan,
+   * perubahan yang melepas driver dari order itu dihitung sendiri, karena
+   * itu akibat permintaan customer sendiri. Perubahan ini bisa datang lewat
+   * socket, jawaban http, atau ambil ulang, mana pun yang tiba duluan.
+   */
+  const asalPerubahanUntuk = useCallback(
+    (sebelum: Order, sesudah: Order, asal: AsalPerubahan): AsalPerubahan => {
+      if (!mintaBerjalanRef.current) return asal;
+      if (!sebelum.driverId) return asal;
+      if (sesudah.driverId) return asal;
+      return 'sendiri';
+    },
+    [],
+  );
+
+  /**
    * Pakai hasil dari server. Hasil yang versinya lebih tua dari yang sudah
    * tampil diabaikan, tapi waktu pembaruan terakhir tetap diisi karena
    * percobaan ke server tetap kabar bahwa data terakhir kita masih berlaku.
    */
-  const pasangDariGet = useCallback((fetched: Order) => {
-    setTerakhirDiperbarui(Date.now());
+  const pasangDariGet = useCallback(
+    (fetched: Order) => {
+      setTerakhirDiperbarui(Date.now());
 
-    const naik = fetched.version > versiTampilRef.current;
-    if (fetched.version < versiTampilRef.current) return;
+      const naik = fetched.version > versiTampilRef.current;
+      if (fetched.version < versiTampilRef.current) return;
 
-    const baruPertama = orderRef.current === null;
-    orderRef.current = fetched;
-    versiTampilRef.current = fetched.version;
-    setOrder(fetched);
+      const sebelumnya = orderRef.current;
+      orderRef.current = fetched;
+      versiTampilRef.current = fetched.version;
 
-    if (baruPertama) {
-      setAsalPerubahan('awal');
-    } else if (naik) {
-      setAsalPerubahan('pihak_lain');
-    }
-  }, []);
+      if (sebelumnya === null) {
+        setTampil({ order: fetched, asal: 'awal' });
+        return;
+      }
+      if (!naik) {
+        setTampil((lama) =>
+          lama === null ? { order: fetched, asal: 'awal' } : { order: fetched, asal: lama.asal },
+        );
+        return;
+      }
+      setTampil({
+        order: fetched,
+        asal: asalPerubahanUntuk(sebelumnya, fetched, 'pihak_lain'),
+      });
+    },
+    [asalPerubahanUntuk],
+  );
 
   /** Pakai hasil perubahan dari socket. */
-  const pasangDariSocket = useCallback((berikutnya: Order, asal: AsalPerubahan) => {
-    orderRef.current = berikutnya;
-    versiTampilRef.current = berikutnya.version;
-    setOrder(berikutnya);
-    setTerakhirDiperbarui(Date.now());
-    setAsalPerubahan(asal);
-  }, []);
+  const pasangDariSocket = useCallback(
+    (berikutnya: Order, asal: AsalPerubahan) => {
+      const sebelumnya = orderRef.current;
+      orderRef.current = berikutnya;
+      versiTampilRef.current = berikutnya.version;
+      setTerakhirDiperbarui(Date.now());
+      setTampil({
+        order: berikutnya,
+        asal:
+          sebelumnya === null ? asal : asalPerubahanUntuk(sebelumnya, berikutnya, asal),
+      });
+    },
+    [asalPerubahanUntuk],
+  );
 
   /**
    * Ambil ulang order. Tidak mengubah status memuat, dan gagalnya diam
@@ -204,8 +251,7 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
       if (berikut.version >= versiTampilRef.current) {
         orderRef.current = berikut;
         versiTampilRef.current = berikut.version;
-        setOrder(berikut);
-        setAsalPerubahan('sendiri');
+        setTampil({ order: berikut, asal: 'sendiri' });
       }
       return 'berhasil';
     } catch (err) {
@@ -242,11 +288,10 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
     orderRef.current = null;
     versiTampilRef.current = 0;
     perluAmbilUlangRef.current = false;
-    setOrder(null);
+    setTampil(null);
     setMemuat(true);
     setGagalMemuat(false);
     setTunaiDiterima(false);
-    setAsalPerubahan('awal');
     setTerakhirDiperbarui(0);
     setMemintaDriverLain(false);
 
@@ -372,7 +417,7 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
     };
   }, [orderId, muatAwal, pasangDariSocket, pemicuAmbilUlang]);
 
-  const statusOrder = order?.status;
+  const statusOrder = tampil?.order.status;
 
   /**
    * Status terputus baru muncul setelah socket putus terus selama tenggang.
@@ -411,13 +456,13 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
   }, [terlihat, appAktif, statusOrder, putusSegera, ambilUlang]);
 
   return {
-    data: order ? { order, terakhirDiperbarui } : null,
+    data: tampil ? { order: tampil.order, terakhirDiperbarui } : null,
     memuat,
     gagalMemuat,
     cobaLagi,
     terputus,
     tunaiDiterima,
-    asalPerubahan,
+    asalPerubahan: tampil?.asal ?? 'awal',
     memintaDriverLain,
     mintaDriverLain,
   };

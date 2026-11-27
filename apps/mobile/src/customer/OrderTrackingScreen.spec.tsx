@@ -233,6 +233,14 @@ function triggerCancelled(payload: OrderCancelledPayload): void {
   mockCancelledSubscribers.forEach((cb) => cb(payload));
 }
 
+function triggerRejected(payload: {
+  orderId: string;
+  status: 'ASSIGNED';
+  version: number;
+}): void {
+  mockRejectedSubscribers.forEach((cb) => cb(payload));
+}
+
 function triggerCodCollected(payload: OrderCodCollectedPayload): void {
   mockCodSubscribers.forEach((cb) => cb(payload));
 }
@@ -1450,6 +1458,83 @@ describe('layar status order customer', () => {
       expect(screen.getByTestId('orang-lama', { includeHiddenElements: true })).toBeTruthy();
       expect(screen.queryByTestId('sorotan-orang')).toBeNull();
     } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('cari driver lain dengan socket lebih dulu tidak memasang sorotan', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    tahanLapisLama();
+    try {
+      await tampilkan(orderTerpisah());
+      await lewatJendelaAwal();
+
+      const selesai = pasangPermintaanTertunda();
+
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Cari driver lain'));
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+      });
+      await flush();
+
+      // Socket lebih dulu daripada jawaban http.
+      await act(async () => {
+        triggerRejected({ orderId: ORDER.id, status: 'ASSIGNED', version: 2 });
+      });
+      await flush();
+
+      expect(screen.queryByTestId('sorotan-orang')).toBeNull();
+
+      await act(async () => {
+        selesai(orderDengan({ status: 'ASSIGNED', cancelReason: 'driver_unreachable', version: 2 }));
+      });
+      await flush();
+
+      expect(screen.queryByTestId('sorotan-orang')).toBeNull();
+    } finally {
+      jest.restoreAllMocks();
+      jest.useRealTimers();
+    }
+  });
+
+  it('cari driver lain dengan jawaban http lebih dulu tidak memasang sorotan', async () => {
+    jest.useFakeTimers();
+    jest.restoreAllMocks();
+    tahanLapisLama();
+    try {
+      await tampilkan(orderTerpisah());
+      await lewatJendelaAwal();
+
+      const selesai = pasangPermintaanTertunda();
+
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Cari driver lain'));
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByLabelText('Ya, cari driver lain'));
+      });
+      await flush();
+
+      // Jawaban http lebih dulu.
+      await act(async () => {
+        selesai(orderDengan({ status: 'ASSIGNED', cancelReason: 'driver_unreachable', version: 2 }));
+      });
+      await flush();
+
+      expect(screen.queryByTestId('sorotan-orang')).toBeNull();
+
+      // Socket menyusul, versinya sudah dipakai.
+      await act(async () => {
+        triggerRejected({ orderId: ORDER.id, status: 'ASSIGNED', version: 2 });
+      });
+      await flush();
+
+      expect(screen.queryByTestId('sorotan-orang')).toBeNull();
+    } finally {
+      jest.restoreAllMocks();
       jest.useRealTimers();
     }
   });
