@@ -25,6 +25,7 @@ import type {
 import { OrderTrackingScreen } from './OrderTrackingScreen';
 import { BATAS_TAHAN_MS } from './OrderTrackingScreen';
 import { Banner } from '../components/Banner';
+import { DrawnStroke } from '../components/motion/DrawnPath';
 import { orderStatusLabel } from '../orderStatusLabel';
 import { formatOrderTime } from '../formatOrderTime';
 import { syncEvents } from '../sync/syncEvents';
@@ -616,6 +617,69 @@ describe('layar status order customer', () => {
     expect(screen.getByTestId('kotak-tunai').props.accessibilityLabel).toContain(
       'Pembayaran tunai diterima',
     );
+  });
+
+  it('kotak tunai langsung diterima kalau server sudah mencatat pembayaran', async () => {
+    await tampilkan({
+      status: 'OUT_FOR_DELIVERY',
+      driverId: 'driver-1',
+      payment: { method: 'CASH', status: 'CAPTURED' },
+    });
+
+    expect(screen.getByTestId('kotak-tunai').props.accessibilityLabel).toContain(
+      'Pembayaran tunai diterima',
+    );
+    // Masih di dalam jendela awal, jadi isi kotak tidak berganti dengan gerak.
+    expect(screen.queryByTestId('isi-kotak-lama')).toBeNull();
+    const centang = screen.UNSAFE_getAllByType(DrawnStroke);
+    expect(centang).toHaveLength(1);
+    expect(centang[0].props.animate).toBe(false);
+  });
+
+  it('kotak tunai belum diterima kalau server belum mencatat pembayaran', async () => {
+    await tampilkan({
+      status: 'OUT_FOR_DELIVERY',
+      driverId: 'driver-1',
+      payment: null,
+    });
+
+    expect(screen.getByTestId('kotak-tunai').props.accessibilityLabel).toContain(
+      'Siapkan uang tunai',
+    );
+  });
+
+  it('sesudah jendela awal, kotak tunai ke diterima memakai gerak ganti isi', async () => {
+    jest.useFakeTimers();
+    try {
+      await tampilkan({ status: 'OUT_FOR_DELIVERY', driverId: 'driver-1' });
+      expect(screen.getByTestId('kotak-tunai').props.accessibilityLabel).toContain(
+        'Siapkan uang tunai',
+      );
+
+      // Jendela awal sudah lewat, jadi pergantian isinya pakai gerak.
+      await act(async () => {
+        jest.advanceTimersByTime(600);
+      });
+
+      await act(async () => {
+        triggerCodCollected({
+          orderId: ORDER.id,
+          amountCents: 23000,
+          currency: 'IDR',
+          collectedAt: '2026-08-30T01:00:00.000Z',
+        });
+      });
+      await flush();
+
+      expect(screen.getByTestId('kotak-tunai').props.accessibilityLabel).toContain(
+        'Pembayaran tunai diterima',
+      );
+      const centang = screen.UNSAFE_getAllByType(DrawnStroke);
+      expect(centang).toHaveLength(1);
+      expect(centang[0].props.animate).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('rincian: barang, tanda kali, harga baris, dan catatan, tanpa total', async () => {

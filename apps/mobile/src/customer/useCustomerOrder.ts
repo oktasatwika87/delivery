@@ -44,13 +44,27 @@ interface OrderTampil {
   asal: AsalPerubahan;
 }
 
+/**
+ * Gabung pembayaran yang sudah diketahui ke order yang baru datang.
+ *
+ * Tunai diterima yang sudah diketahui tidak boleh hilang karena jawaban
+ * server yang telat dan tidak membawanya.
+ */
+function gabungPayment(sebelumnya: Order, berikutnya: Order): Order {
+  const lama = sebelumnya.payment;
+  const baru = berikutnya.payment;
+  const lamaTunai = lama?.method === 'CASH' && lama.status === 'CAPTURED';
+  const baruTunai = baru?.method === 'CASH' && baru.status === 'CAPTURED';
+  if (!lamaTunai || baruTunai) return berikutnya;
+  return { ...berikutnya, payment: lama };
+}
+
 export interface CustomerOrder {
   data: { order: Order; terakhirDiperbarui: number } | null;
   memuat: boolean;
   gagalMemuat: boolean;
   cobaLagi: () => void;
   terputus: boolean;
-  tunaiDiterima: boolean;
   asalPerubahan: AsalPerubahan;
   memintaDriverLain: boolean;
   mintaDriverLain: () => Promise<HasilCariDriverLain | null>;
@@ -62,7 +76,6 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
   const [terputus, setTerputus] = useState(false);
   /** Socket putus seketika, tanpa tenggang. Dipakai pemicu ambil ulang berkala. */
   const [putusSegera, setPutusSegera] = useState(!ordersSocket.isConnected);
-  const [tunaiDiterima, setTunaiDiterima] = useState(false);
   const [terakhirDiperbarui, setTerakhirDiperbarui] = useState(0);
   const [appAktif, setAppAktif] = useState(AppState.currentState === 'active');
   const [memintaDriverLain, setMemintaDriverLain] = useState(false);
@@ -116,22 +129,25 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
       if (fetched.version < versiTampilRef.current) return;
 
       const sebelumnya = orderRef.current;
-      orderRef.current = fetched;
+      // Jawaban yang telat boleh bawa pembayaran lama, jadi pembayaran yang
+      // sudah diketahui ikut dipertahankan.
+      const gabungan = sebelumnya === null ? fetched : gabungPayment(sebelumnya, fetched);
+      orderRef.current = gabungan;
       versiTampilRef.current = fetched.version;
 
       if (sebelumnya === null) {
-        setTampil({ order: fetched, asal: 'awal' });
+        setTampil({ order: gabungan, asal: 'awal' });
         return;
       }
       if (!naik) {
         setTampil((lama) =>
-          lama === null ? { order: fetched, asal: 'awal' } : { order: fetched, asal: lama.asal },
+          lama === null ? { order: gabungan, asal: 'awal' } : { order: gabungan, asal: lama.asal },
         );
         return;
       }
       setTampil({
-        order: fetched,
-        asal: asalPerubahanUntuk(sebelumnya, fetched, 'pihak_lain'),
+        order: gabungan,
+        asal: asalPerubahanUntuk(sebelumnya, gabungan, 'pihak_lain'),
       });
     },
     [asalPerubahanUntuk],
@@ -249,9 +265,11 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
       // Aturan version sama seperti hasil GET: yang lebih tua diabaikan,
       // yang sama tetap dipakai.
       if (berikut.version >= versiTampilRef.current) {
-        orderRef.current = berikut;
+        const terpasang = orderRef.current ?? berikut;
+        const gabungan = gabungPayment(terpasang, berikut);
+        orderRef.current = gabungan;
         versiTampilRef.current = berikut.version;
-        setTampil({ order: berikut, asal: 'sendiri' });
+        setTampil({ order: gabungan, asal: 'sendiri' });
       }
       return 'berhasil';
     } catch (err) {
@@ -291,7 +309,6 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
     setTampil(null);
     setMemuat(true);
     setGagalMemuat(false);
-    setTunaiDiterima(false);
     setTerakhirDiperbarui(0);
     setMemintaDriverLain(false);
 
@@ -373,12 +390,22 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
       if (payload.orderId !== orderId) return;
       if (genRef.current !== myGen) return;
 
-      setTunaiDiterima(true);
       setTerakhirDiperbarui(Date.now());
 
-      if (orderRef.current === null) {
+      const sekarang = orderRef.current;
+      if (!sekarang) {
+        // Order belum tampil, jadi pembayaran diambil ulang setelah order
+        // pertama berhasil dimuat.
         perluAmbilUlangRef.current = true;
+        return;
       }
+
+      const berikut: Order = {
+        ...sekarang,
+        payment: { method: 'CASH', status: 'CAPTURED' },
+      };
+      orderRef.current = berikut;
+      setTampil({ order: berikut, asal: 'pihak_lain' });
     });
 
     const unsubConnect = ordersSocket.on('connect', () => {
@@ -461,7 +488,6 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
     gagalMemuat,
     cobaLagi,
     terputus,
-    tunaiDiterima,
     asalPerubahan: tampil?.asal ?? 'awal',
     memintaDriverLain,
     mintaDriverLain,

@@ -42,7 +42,6 @@ export interface TeksBanner {
 
 export interface CustomerTrackInput {
   order: Order;
-  tunaiDiterima: boolean;
   terputus: boolean;
   terakhirDiperbarui: number;
   sekarangMs: number;
@@ -148,10 +147,20 @@ function teksBannerLepas(order: Order): string | null {
 }
 
 /**
+ * Tunai sudah diterima kalau payment terakhir order ini sudah tertangkap
+ * dan caranya tunai, atau ordernya sudah sampai di alamat customer.
+ */
+function tunaiDiterima(order: Order): boolean {
+  const payment = order.payment;
+  const tunaiTertangkap = payment?.method === 'CASH' && payment.status === 'CAPTURED';
+  return tunaiTertangkap || order.status === 'DELIVERED';
+}
+
+/**
  * Bentuk tampilan layar status order untuk customer.
  */
 export function customerTrackView(input: CustomerTrackInput): CustomerTrackView {
-  const { order, tunaiDiterima, terputus, terakhirDiperbarui, sekarangMs } = input;
+  const { order, terputus, terakhirDiperbarui, sekarangMs } = input;
 
   const statusTampil = statusTampilDari(order.status);
   const langkah = LANGKAH[statusTampil];
@@ -162,11 +171,7 @@ export function customerTrackView(input: CustomerTrackInput): CustomerTrackView 
   const bolehChat = Boolean(order.driverId) && order.status !== 'CANCELLED';
 
   const kotakTunai: 'siapkan' | 'diterima' | null =
-    order.status === 'CANCELLED'
-      ? null
-      : tunaiDiterima || order.status === 'DELIVERED'
-        ? 'diterima'
-        : 'siapkan';
+    order.status === 'CANCELLED' ? null : tunaiDiterima(order) ? 'diterima' : 'siapkan';
 
   const bolehCariDriverLain =
     order.status === 'PREPARING' && Boolean(order.driverUnreachableSince);

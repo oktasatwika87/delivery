@@ -390,7 +390,7 @@ describe('useCustomerOrder', () => {
       expect(result.current.data?.order.updatedAt).toBe('2026-09-25T12:00:00.000Z');
     });
 
-    it('order:cod_collected menandai tunai diterima tanpa mengubah order', async () => {
+    it('order:cod_collected mengisi payment tunai ke order yang tampil', async () => {
       const { result } = renderHook(() => useCustomerOrder('order-1', true));
       await flush();
 
@@ -403,8 +403,96 @@ describe('useCustomerOrder', () => {
         });
       });
 
-      expect(result.current.tunaiDiterima).toBe(true);
-      expect(result.current.data?.order).toEqual(ORDER);
+      expect(result.current.data?.order.payment).toEqual({
+        method: 'CASH',
+        status: 'CAPTURED',
+      });
+    });
+
+    it('order:cod_collected untuk order lain tidak berpengaruh', async () => {
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        triggerCodCollected({
+          orderId: 'order-LAIN',
+          amountCents: 25000,
+          currency: 'IDR',
+          collectedAt: '2026-09-02T08:00:00.000Z',
+        });
+      });
+
+      expect(result.current.data?.order.payment).toBeUndefined();
+    });
+
+    it('tunai diterima tidak dihapus get telat dengan versi sama tanpa payment', async () => {
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        triggerCodCollected({
+          orderId: 'order-1',
+          amountCents: 25000,
+          currency: 'IDR',
+          collectedAt: '2026-09-02T08:00:00.000Z',
+        });
+      });
+      expect(result.current.data?.order.payment).toEqual({
+        method: 'CASH',
+        status: 'CAPTURED',
+      });
+
+      // Get yang telat dan tidak membawa payment.
+      mockGetOrderById.mockResolvedValueOnce({ ...ORDER });
+      act(() => {
+        triggerConnect();
+      });
+      await flush();
+
+      expect(result.current.data?.order.payment).toEqual({
+        method: 'CASH',
+        status: 'CAPTURED',
+      });
+    });
+
+    it('tunai diterima dari get tidak dihapus get berikutnya tanpa payment', async () => {
+      mockGetOrderById.mockResolvedValueOnce({
+        ...ORDER,
+        payment: { method: 'CASH', status: 'CAPTURED' },
+      });
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+      expect(result.current.data?.order.payment).toEqual({
+        method: 'CASH',
+        status: 'CAPTURED',
+      });
+
+      mockGetOrderById.mockResolvedValueOnce({ ...ORDER });
+      act(() => {
+        triggerConnect();
+      });
+      await flush();
+
+      expect(result.current.data?.order.payment).toEqual({
+        method: 'CASH',
+        status: 'CAPTURED',
+      });
+    });
+
+    it('payment dari get dipakai untuk order yang tampil', async () => {
+      mockGetOrderById.mockResolvedValueOnce({
+        ...ORDER,
+        payment: { method: 'CASH', status: 'CAPTURED' },
+      });
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      expect(result.current.data?.order.payment).toEqual({
+        method: 'CASH',
+        status: 'CAPTURED',
+      });
     });
 
     it('kejadian untuk order lain diabaikan', async () => {

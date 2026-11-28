@@ -940,7 +940,6 @@ export function OrderTrackingScreen({
     gagalMemuat,
     cobaLagi,
     terputus,
-    tunaiDiterima,
     asalPerubahan,
     memintaDriverLain,
     mintaDriverLain,
@@ -959,7 +958,6 @@ export function OrderTrackingScreen({
   const view = data
     ? customerTrackView({
         order: data.order,
-        tunaiDiterima,
         terputus,
         terakhirDiperbarui: data.terakhirDiperbarui,
         sekarangMs: Date.now(),

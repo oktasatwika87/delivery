@@ -45,7 +45,6 @@ function buatOrder(ubah: Partial<Order> = {}): Order {
 function buatInput(ubah: Partial<CustomerTrackInput> = {}): CustomerTrackInput {
   return {
     order: buatOrder(),
-    tunaiDiterima: false,
     terputus: false,
     terakhirDiperbarui: SEKARANG_MS,
     sekarangMs: SEKARANG_MS,
@@ -149,18 +148,64 @@ describe('status dan langkah', () => {
 describe('kotak tunai', () => {
   it('order dibatalkan tidak punya kotak tunai', () => {
     const hasil = customerTrackView(
-      buatInput({ order: buatOrder({ status: 'CANCELLED' }), tunaiDiterima: true }),
+      buatInput({
+        order: buatOrder({
+          status: 'CANCELLED',
+          payment: { method: 'CASH', status: 'CAPTURED' },
+        }),
+      }),
     );
 
     expect(hasil.kotakTunai).toBeNull();
   });
 
-  it('tunai sudah diterima berarti kotak diterima', () => {
+  it('payment CASH CAPTURED berarti kotak diterima', () => {
     const hasil = customerTrackView(
-      buatInput({ order: buatOrder({ status: 'OUT_FOR_DELIVERY' }), tunaiDiterima: true }),
+      buatInput({
+        order: buatOrder({
+          status: 'OUT_FOR_DELIVERY',
+          payment: { method: 'CASH', status: 'CAPTURED' },
+        }),
+      }),
     );
 
     expect(hasil.kotakTunai).toBe('diterima');
+  });
+
+  it('payment null berarti kotak bukan diterima', () => {
+    const hasil = customerTrackView(
+      buatInput({
+        order: buatOrder({ status: 'OUT_FOR_DELIVERY', payment: null }),
+      }),
+    );
+
+    expect(hasil.kotakTunai).toBe('siapkan');
+  });
+
+  it('payment tunai yang belum tertangkap berarti kotak bukan diterima', () => {
+    const hasil = customerTrackView(
+      buatInput({
+        order: buatOrder({
+          status: 'OUT_FOR_DELIVERY',
+          payment: { method: 'CASH', status: 'PENDING' },
+        }),
+      }),
+    );
+
+    expect(hasil.kotakTunai).toBe('siapkan');
+  });
+
+  it('payment nontunai yang tertangkap berarti kotak bukan diterima', () => {
+    const hasil = customerTrackView(
+      buatInput({
+        order: buatOrder({
+          status: 'OUT_FOR_DELIVERY',
+          payment: { method: 'CARD', status: 'CAPTURED' },
+        }),
+      }),
+    );
+
+    expect(hasil.kotakTunai).toBe('siapkan');
   });
 
   it('order terkirim berarti kotak diterima walau tunai belum dilaporkan', () => {
