@@ -6,6 +6,8 @@
  *           -or- ke CANCELLED (bisa dari status manapun sebelum DELIVERED)
  */
 
+import type { PaymentMethod, PaymentStatus } from './payment.js';
+
 export const OrderStatus = {
   PENDING: 'PENDING',
   ASSIGNED: 'ASSIGNED',
@@ -76,6 +78,12 @@ export interface Order {
    * lain, selain itu null.
    */
   driverUnreachableSince?: string | null;
+
+  /**
+   * Ringkasan pembayaran order ini, hanya diisi di GET /orders/:id untuk
+   * customer order itu. Null kalau belum ada pembayaran yang tercatat.
+   */
+  payment?: { method: PaymentMethod; status: PaymentStatus } | null;
 }
 
 /** Request body untuk create order dari mobile. */
