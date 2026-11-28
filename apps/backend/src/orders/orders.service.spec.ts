@@ -2124,6 +2124,104 @@ describe('OrdersService', () => {
       expect('driverUnreachableSince' in result).toBe(false);
       expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
     });
+
+    describe('payment customer', () => {
+      test('tanpa baris payment, payment null', async () => {
+        mockPrisma.order.findUnique.mockResolvedValue(
+          makeOrderWith(OrderStatusDb.OUT_FOR_DELIVERY, driverId, menitLalu(10)),
+        );
+        mockPrisma.payment.findFirst.mockResolvedValue(null);
+
+        const result = await service.findById(orderId, customerId);
+
+        expect(result.payment).toBeNull();
+      });
+
+      test('baris payment CASH CAPTURED, bawa method dan status', async () => {
+        mockPrisma.order.findUnique.mockResolvedValue(
+          makeOrderWith(OrderStatusDb.OUT_FOR_DELIVERY, driverId, menitLalu(10)),
+        );
+        mockPrisma.payment.findFirst.mockResolvedValue({
+          method: 'CASH',
+          status: 'CAPTURED',
+        });
+
+        const result = await service.findById(orderId, customerId);
+
+        expect(result.payment).toEqual({ method: 'CASH', status: 'CAPTURED' });
+      });
+
+      test('baris payment lain selain PAYMENT diabaikan', async () => {
+        mockPrisma.order.findUnique.mockResolvedValue(
+          makeOrderWith(OrderStatusDb.OUT_FOR_DELIVERY, driverId, menitLalu(10)),
+        );
+        mockPrisma.payment.findFirst.mockResolvedValue(null);
+
+        const result = await service.findById(orderId, customerId);
+
+        expect(mockPrisma.payment.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({ where: expect.objectContaining({ kind: 'PAYMENT' }) }),
+        );
+        expect(result.payment).toBeNull();
+      });
+
+      test('baris payment yatim diabaikan', async () => {
+        mockPrisma.order.findUnique.mockResolvedValue(
+          makeOrderWith(OrderStatusDb.OUT_FOR_DELIVERY, driverId, menitLalu(10)),
+        );
+        mockPrisma.payment.findFirst.mockResolvedValue(null);
+
+        const result = await service.findById(orderId, customerId);
+
+        expect(mockPrisma.payment.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({ where: expect.objectContaining({ orphanedAt: null }) }),
+        );
+        expect(result.payment).toBeNull();
+      });
+
+      test('baris payment terhapus diabaikan', async () => {
+        mockPrisma.order.findUnique.mockResolvedValue(
+          makeOrderWith(OrderStatusDb.OUT_FOR_DELIVERY, driverId, menitLalu(10)),
+        );
+        mockPrisma.payment.findFirst.mockResolvedValue(null);
+
+        const result = await service.findById(orderId, customerId);
+
+        expect(mockPrisma.payment.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({ where: expect.objectContaining({ deletedAt: null }) }),
+        );
+        expect(result.payment).toBeNull();
+      });
+
+      test('dua baris payment, yang paling baru dipakai', async () => {
+        mockPrisma.order.findUnique.mockResolvedValue(
+          makeOrderWith(OrderStatusDb.OUT_FOR_DELIVERY, driverId, menitLalu(10)),
+        );
+        mockPrisma.payment.findFirst.mockResolvedValue({
+          method: 'CASH',
+          status: 'CAPTURED',
+        });
+
+        const result = await service.findById(orderId, customerId);
+
+        expect(mockPrisma.payment.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({ orderBy: expect.objectContaining({ createdAt: 'desc' }) }),
+        );
+        expect(result.payment).toEqual({ method: 'CASH', status: 'CAPTURED' });
+      });
+
+      test('driver: jawaban tidak membawa payment', async () => {
+        mockPrisma.order.findUnique.mockResolvedValue(
+          makeOrderWith(OrderStatusDb.OUT_FOR_DELIVERY, driverId, menitLalu(10)),
+        );
+
+        const result = await service.findById(orderId, driverId);
+
+        expect(result.payment).toBeUndefined();
+        expect('payment' in result).toBe(false);
+        expect(mockPrisma.payment.findFirst).not.toHaveBeenCalled();
+      });
+    });
   });
 
   // ===== findAvailable tests =====

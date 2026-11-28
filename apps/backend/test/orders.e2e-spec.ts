@@ -2097,4 +2097,154 @@ describe('Orders (e2e) - accept/reject', () => {
       }
     });
   });
+
+  describe('GET /orders/:id payment customer', () => {
+    async function buatPayment(
+      orderId: string,
+      kunci: string,
+      ubah: {
+        method?: 'CASH' | 'CARD';
+        status?: 'CAPTURED' | 'PENDING';
+        kind?: string;
+        createdAt?: Date;
+        orphanedAt?: Date | null;
+        deletedAt?: Date | null;
+      } = {},
+    ) {
+      return prisma.payment.create({
+        data: {
+          orderId,
+          idempotencyKey: `e2e:${kunci}`,
+          method: ubah.method ?? 'CASH',
+          status: ubah.status ?? 'CAPTURED',
+          amountCents: 50000,
+          currency: 'IDR',
+          kind: ubah.kind ?? 'PAYMENT',
+          createdAt: ubah.createdAt ?? new Date(),
+          orphanedAt: ubah.orphanedAt ?? null,
+          deletedAt: ubah.deletedAt ?? null,
+        },
+      });
+    }
+
+    test('200: tanpa baris payment, payment null', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000c01';
+      await createAssignedOrder(orderId, customerUserId, driverUserId);
+      try {
+        const resp = await request(app.getHttpServer())
+          .get(`/orders/${orderId}`)
+          .set('Authorization', `Bearer ${customerToken}`)
+          .expect(200);
+
+        expect(resp.body.payment).toBeNull();
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('200: baris CASH CAPTURED, bawa method dan status', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000c02';
+      await createAssignedOrder(orderId, customerUserId, driverUserId);
+      await buatPayment(orderId, 'c02');
+      try {
+        const resp = await request(app.getHttpServer())
+          .get(`/orders/${orderId}`)
+          .set('Authorization', `Bearer ${customerToken}`)
+          .expect(200);
+
+        expect(resp.body.payment).toEqual({ method: 'CASH', status: 'CAPTURED' });
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('200: dua baris PAYMENT, yang paling baru dipakai', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000c03';
+      await createAssignedOrder(orderId, customerUserId, driverUserId);
+      await buatPayment(orderId, 'c03-lama', {
+        method: 'CARD',
+        status: 'PENDING',
+        createdAt: new Date(Date.now() - 60_000),
+      });
+      await buatPayment(orderId, 'c03-baru', {
+        method: 'CASH',
+        status: 'CAPTURED',
+        createdAt: new Date(),
+      });
+      try {
+        const resp = await request(app.getHttpServer())
+          .get(`/orders/${orderId}`)
+          .set('Authorization', `Bearer ${customerToken}`)
+          .expect(200);
+
+        expect(resp.body.payment).toEqual({ method: 'CASH', status: 'CAPTURED' });
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('200: baris kind TIP diabaikan', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000c04';
+      await createAssignedOrder(orderId, customerUserId, driverUserId);
+      await buatPayment(orderId, 'c04', { kind: 'TIP' });
+      try {
+        const resp = await request(app.getHttpServer())
+          .get(`/orders/${orderId}`)
+          .set('Authorization', `Bearer ${customerToken}`)
+          .expect(200);
+
+        expect(resp.body.payment).toBeNull();
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('200: baris yatim diabaikan', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000c05';
+      await createAssignedOrder(orderId, customerUserId, driverUserId);
+      await buatPayment(orderId, 'c05', { orphanedAt: new Date() });
+      try {
+        const resp = await request(app.getHttpServer())
+          .get(`/orders/${orderId}`)
+          .set('Authorization', `Bearer ${customerToken}`)
+          .expect(200);
+
+        expect(resp.body.payment).toBeNull();
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('200: baris terhapus diabaikan', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000c06';
+      await createAssignedOrder(orderId, customerUserId, driverUserId);
+      await buatPayment(orderId, 'c06', { deletedAt: new Date() });
+      try {
+        const resp = await request(app.getHttpServer())
+          .get(`/orders/${orderId}`)
+          .set('Authorization', `Bearer ${customerToken}`)
+          .expect(200);
+
+        expect(resp.body.payment).toBeNull();
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+
+    test('200: driver tidak dapat payment', async () => {
+      const orderId = 'e2e00000-0000-0000-0000-000000000c07';
+      await createAssignedOrder(orderId, customerUserId, driverUserId);
+      await buatPayment(orderId, 'c07');
+      try {
+        const resp = await request(app.getHttpServer())
+          .get(`/orders/${orderId}`)
+          .set('Authorization', `Bearer ${driverToken}`)
+          .expect(200);
+
+        expect(resp.body.payment).toBeUndefined();
+      } finally {
+        await cleanupOrder(orderId);
+      }
+    });
+  });
 });

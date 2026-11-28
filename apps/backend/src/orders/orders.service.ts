@@ -58,11 +58,13 @@ export class OrdersService {
     // dia sudah boleh minta driver lain. Driver tidak butuh info itu.
     if (row.customerId === userId) {
       const unreachableSince = await this.unreachableSince(row);
+      const payment = await this.ringkasanPayment(row.id);
       return {
         ...this.toDomain(row),
         driverUnreachableSince: unreachableSince
           ? unreachableSince.toISOString()
           : null,
+        payment,
       };
     }
     return this.toDomain(row);
@@ -601,6 +603,27 @@ export class OrdersService {
       order.updatedAt,
       new Date(),
     );
+  }
+
+  /**
+   * Ringkasan pembayaran order: method dan status dari baris payments yang
+   * paling baru. Baris yang sudah dihapus atau ditandai yatim diabaikan,
+   * jadi pembayaran driver lama yang order-nya sudah dilepas tidak terhitung.
+   */
+  private async ringkasanPayment(orderId: string): Promise<Order['payment']> {
+    const row = await this.prisma.payment.findFirst({
+      where: {
+        orderId,
+        kind: 'PAYMENT',
+        deletedAt: null,
+        orphanedAt: null,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { method: true, status: true },
+    });
+
+    if (!row) return null;
+    return { method: row.method, status: row.status };
   }
 
   /**
