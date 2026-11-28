@@ -455,6 +455,47 @@ describe('useCustomerOrder', () => {
       });
     });
 
+    it('tunai diterima tidak dihapus kejadian order dari socket', async () => {
+      mockGetOrderById.mockResolvedValueOnce({
+        ...ORDER,
+        status: 'OUT_FOR_DELIVERY',
+        version: 1,
+      });
+
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      act(() => {
+        triggerCodCollected({
+          orderId: 'order-1',
+          amountCents: 25000,
+          currency: 'IDR',
+          collectedAt: '2026-09-02T08:00:00.000Z',
+        });
+      });
+      expect(result.current.data?.order.payment).toEqual({
+        method: 'CASH',
+        status: 'CAPTURED',
+      });
+
+      // Kejadian order dari socket tidak membawa payment.
+      act(() => {
+        triggerStatusUpdated({
+          orderId: 'order-1',
+          status: 'OUT_FOR_DELIVERY',
+          version: 2,
+          updatedAt: '2026-09-25T12:00:00.000Z',
+        });
+      });
+
+      expect(result.current.data?.order.status).toBe('OUT_FOR_DELIVERY');
+      expect(result.current.data?.order.version).toBe(2);
+      expect(result.current.data?.order.payment).toEqual({
+        method: 'CASH',
+        status: 'CAPTURED',
+      });
+    });
+
     it('tunai diterima dari get tidak dihapus get berikutnya tanpa payment', async () => {
       mockGetOrderById.mockResolvedValueOnce({
         ...ORDER,
@@ -1148,6 +1189,29 @@ describe('useCustomerOrder', () => {
 
       expect(result.current.asalPerubahan).toBe('pihak_lain');
       expect(result.current.data?.order.version).toBe(3);
+    });
+
+    it('tidak berubah setelah cod_collected', async () => {
+      const { result } = renderHook(() => useCustomerOrder('order-1', true));
+      await flush();
+
+      const asalSebelum = result.current.asalPerubahan;
+      expect(asalSebelum).toBe('awal');
+
+      act(() => {
+        triggerCodCollected({
+          orderId: 'order-1',
+          amountCents: 25000,
+          currency: 'IDR',
+          collectedAt: '2026-09-02T08:00:00.000Z',
+        });
+      });
+
+      expect(result.current.asalPerubahan).toBe(asalSebelum);
+      expect(result.current.data?.order.payment).toEqual({
+        method: 'CASH',
+        status: 'CAPTURED',
+      });
     });
 
     it('sendiri dari order cancelled yang datang sebelum jawaban http', async () => {

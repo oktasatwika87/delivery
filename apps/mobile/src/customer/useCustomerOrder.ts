@@ -157,13 +157,16 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
   const pasangDariSocket = useCallback(
     (berikutnya: Order, asal: AsalPerubahan) => {
       const sebelumnya = orderRef.current;
-      orderRef.current = berikutnya;
-      versiTampilRef.current = berikutnya.version;
+      // Data dari socket tidak membawa pembayaran, jadi pembayaran tunai
+      // yang sudah diketahui ikut dipertahankan.
+      const gabungan = sebelumnya === null ? berikutnya : gabungPayment(sebelumnya, berikutnya);
+      orderRef.current = gabungan;
+      versiTampilRef.current = gabungan.version;
       setTerakhirDiperbarui(Date.now());
       setTampil({
-        order: berikutnya,
+        order: gabungan,
         asal:
-          sebelumnya === null ? asal : asalPerubahanUntuk(sebelumnya, berikutnya, asal),
+          sebelumnya === null ? asal : asalPerubahanUntuk(sebelumnya, gabungan, asal),
       });
     },
     [asalPerubahanUntuk],
@@ -405,7 +408,13 @@ export function useCustomerOrder(orderId: string, terlihat: boolean): CustomerOr
         payment: { method: 'CASH', status: 'CAPTURED' },
       };
       orderRef.current = berikut;
-      setTampil({ order: berikut, asal: 'pihak_lain' });
+      // Penerimaan tunai bukan perubahan status order, jadi asal perubahannya
+      // tetap yang sebelumnya.
+      setTampil((lama) =>
+        lama === null
+          ? { order: berikut, asal: 'awal' }
+          : { order: berikut, asal: lama.asal },
+      );
     });
 
     const unsubConnect = ordersSocket.on('connect', () => {
